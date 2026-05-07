@@ -1,0 +1,8 @@
+{
+  "title": "API Gateway Metrics",
+  "metrics": [
+    "http_requests_total",
+    "gateway_rate_limit_redis_errors_total",
+    "gateway_downstream_timeout_total"
+  ]
+}
