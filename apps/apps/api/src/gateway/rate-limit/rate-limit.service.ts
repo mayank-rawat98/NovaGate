@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import type Redis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
 import type { GatewayConfig } from '../../config/configuration';
-import { REDIS_CLIENT } from './rate-limit.tokens';
+import { REDIS_CLIENT } from '../shared/redis.tokens';
 
 export interface RateLimitResult {
   allowed: boolean;

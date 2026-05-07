@@ -5,7 +5,7 @@ import { ExecutionContext } from '@nestjs/common';
 import { RateLimitGuard } from './rate-limit.guard';
 import { RateLimitService } from './rate-limit.service';
 import { MetricsService } from '../metrics/metrics.service';
-import { REDIS_CLIENT } from './rate-limit.tokens';
+import { REDIS_CLIENT } from '../shared/redis.tokens';
 import { GatewayError } from '../shared/gateway-error';
 import type { GatewayConfig } from '../../config/configuration';
 
@@ -16,6 +16,8 @@ const createContext = (ip = '127.0.0.1') => {
   };
   const res = {
     setHeader: jest.fn(),
+    once: jest.fn(),
+    locals: {},
   };
   return {
     req,
@@ -42,6 +44,7 @@ describe('RateLimitGuard', () => {
 
   it('allows requests under the limit', async () => {
     const redis = new Redis();
+    await redis.flushall();
     const module = await Test.createTestingModule({
       providers: [
         RateLimitGuard,
@@ -65,6 +68,7 @@ describe('RateLimitGuard', () => {
 
   it('blocks requests over the limit', async () => {
     const redis = new Redis();
+    await redis.flushall();
     const module = await Test.createTestingModule({
       providers: [
         RateLimitGuard,

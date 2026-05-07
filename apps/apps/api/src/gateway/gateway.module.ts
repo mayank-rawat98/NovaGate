@@ -13,7 +13,7 @@ import { ProxyMiddleware } from './proxy/proxy.middleware';
 import { ProxyService } from './proxy/proxy.service';
 import { RateLimitGuard } from './rate-limit/rate-limit.guard';
 import { RateLimitService } from './rate-limit/rate-limit.service';
-import { REDIS_CLIENT } from './rate-limit/rate-limit.tokens';
+import { REDIS_CLIENT } from './shared/redis.tokens';
 import { GatewayExceptionFilter } from './shared/gateway-exception.filter';
 
 @Module({

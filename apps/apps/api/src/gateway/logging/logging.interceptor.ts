@@ -50,8 +50,9 @@ export class LoggingInterceptor implements NestInterceptor {
           logEntry.userId = request.user.id;
         }
 
-        if (request.ip) {
-          logEntry.clientIp = request.ip;
+        const clientIp = this.getClientIp(request);
+        if (clientIp) {
+          logEntry.clientIp = clientIp;
         }
 
         if (response.locals.downstreamService) {
@@ -71,5 +72,16 @@ export class LoggingInterceptor implements NestInterceptor {
     const rawPath = request.originalUrl ?? request.url ?? 'unknown';
     const [path] = rawPath.split('?');
     return path || 'unknown';
+  }
+
+  private getClientIp(request: RequestWithUser): string | undefined {
+    const forwarded = request.headers['x-forwarded-for'];
+    if (typeof forwarded === 'string' && forwarded.length > 0) {
+      return forwarded.split(',')[0].trim();
+    }
+    if (Array.isArray(forwarded) && forwarded.length > 0) {
+      return forwarded[0];
+    }
+    return request.ip ?? undefined;
   }
 }
