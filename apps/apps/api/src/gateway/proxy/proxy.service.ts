@@ -93,15 +93,19 @@ export class ProxyService {
       timeout: this.timeoutMs,
       selfHandleResponse: true,
       pathRewrite: (path) => this.stripPrefix(path, service.pathPrefix),
-      onProxyReq: (proxyReq, req) => {
-        const requestIdHeader = req.headers['x-request-id'];
-        const requestId = Array.isArray(requestIdHeader)
-          ? requestIdHeader[0]
-          : requestIdHeader;
-        if (requestId) {
-          proxyReq.setHeader('X-Request-ID', requestId);
-        }
-      },
+       onProxyReq: (proxyReq, req) => {
+         const requestIdHeader = req.headers['x-request-id'];
+         const requestId = Array.isArray(requestIdHeader)
+           ? requestIdHeader[0]
+           : requestIdHeader;
+         if (requestId) {
+           proxyReq.setHeader('X-Request-ID', requestId);
+         }
+         const forwardedFor = this.getForwardedFor(req);
+         if (forwardedFor) {
+           proxyReq.setHeader('X-Forwarded-For', forwardedFor);
+         }
+       },
       onProxyRes: (proxyRes, req, res) => {
         const statusCode = proxyRes.statusCode ?? 502;
         const requestIdHeader = req.headers['x-request-id'];
@@ -209,5 +213,16 @@ export class ProxyService {
 
   private isTimeoutError(error: NodeJS.ErrnoException): boolean {
     return error.code === 'ETIMEDOUT' || error.code === 'ESOCKETTIMEDOUT';
+  }
+
+  private getForwardedFor(request: Request): string | undefined {
+    const forwarded = request.headers['x-forwarded-for'];
+    if (typeof forwarded === 'string' && forwarded.length > 0) {
+      return forwarded;
+    }
+    if (Array.isArray(forwarded) && forwarded.length > 0) {
+      return forwarded.join(', ');
+    }
+    return request.ip ?? undefined;
   }
 }

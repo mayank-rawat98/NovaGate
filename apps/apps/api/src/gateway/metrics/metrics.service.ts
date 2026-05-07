@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Counter, Registry } from 'prom-client';
+import { Counter, Gauge, Histogram, Registry } from 'prom-client';
 
 @Injectable()
 export class MetricsService {
@@ -8,6 +8,24 @@ export class MetricsService {
     name: 'http_requests_total',
     help: 'Total number of HTTP requests',
     labelNames: ['method', 'path', 'statusCode'],
+    registers: [this.registry],
+  });
+  private readonly httpRequestDurationMs = new Histogram({
+    name: 'http_request_duration_ms',
+    help: 'HTTP request duration in milliseconds',
+    labelNames: ['method', 'path'],
+    buckets: [5, 10, 25, 50, 100, 250, 500],
+    registers: [this.registry],
+  });
+  private readonly rateLimitHitsTotal = new Counter({
+    name: 'rate_limit_hits_total',
+    help: 'Total rate limit hits',
+    labelNames: ['clientIp', 'tier'],
+    registers: [this.registry],
+  });
+  private readonly activeConnections = new Gauge({
+    name: 'active_connections',
+    help: 'Active HTTP connections',
     registers: [this.registry],
   });
   private readonly rateLimitRedisErrorsTotal = new Counter({
@@ -24,6 +42,22 @@ export class MetricsService {
 
   incrementHttpRequests(method: string, path: string, statusCode: number): void {
     this.httpRequestsTotal.labels(method, path, String(statusCode)).inc();
+  }
+
+  observeRequestDuration(method: string, path: string, durationMs: number): void {
+    this.httpRequestDurationMs.labels(method, path).observe(durationMs);
+  }
+
+  incrementRateLimitHit(clientIp: string, tier: 'authenticated' | 'unauthenticated'): void {
+    this.rateLimitHitsTotal.labels(clientIp, tier).inc();
+  }
+
+  incrementActiveConnections(): void {
+    this.activeConnections.inc();
+  }
+
+  decrementActiveConnections(): void {
+    this.activeConnections.dec();
   }
 
   incrementRateLimitRedisError(): void {

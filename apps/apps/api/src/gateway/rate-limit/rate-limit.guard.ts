@@ -27,6 +27,7 @@ export class RateLimitGuard implements CanActivate {
     const response = context.switchToHttp().getResponse<ResponseWithLocals>();
     const clientIp = this.getClientIp(request);
     const userId = request.user?.id;
+    const tier = userId ? 'authenticated' : 'unauthenticated';
     const rateLimitConfig = this.configService.get('rateLimit', { infer: true });
     const limit = userId ? rateLimitConfig.authMax : rateLimitConfig.unauthMax;
     const clientKey = userId ? `${userId}:${clientIp}` : clientIp;
@@ -34,16 +35,39 @@ export class RateLimitGuard implements CanActivate {
     try {
       const result = await this.rateLimitService.check(clientKey, limit);
       if (!result.allowed) {
+        const retryAfterSeconds =
+          result.retryAfterMs !== null
+            ? Math.max(1, Math.ceil(result.retryAfterMs / 1000))
+            : null;
         if (result.retryAfterMs !== null) {
-          response.setHeader(
-            'Retry-After',
-            Math.max(1, Math.ceil(result.retryAfterMs / 1000)),
-          );
+          response.setHeader('Retry-After', retryAfterSeconds);
         }
+        const start = response.locals?.requestStart ?? Date.now();
+        const pathLabel = this.getPathLabel(request);
+        this.metricsService.incrementRateLimitHit(clientIp, tier);
+        this.metricsService.incrementHttpRequests(request.method, pathLabel, 429);
+        this.metricsService.observeRequestDuration(
+          request.method,
+          pathLabel,
+          Date.now() - start,
+        );
+        this.metricsService.incrementActiveConnections();
+        let completed = false;
+        const onComplete = () => {
+          if (completed) {
+            return;
+          }
+          completed = true;
+          this.metricsService.decrementActiveConnections();
+        };
+        response.once('finish', onComplete);
+        response.once('close', onComplete);
         this.logRequest(request, response, clientIp, userId, 429);
         throw new GatewayError(
           'RATE_LIMIT_EXCEEDED',
-          'Too Many Requests',
+          retryAfterSeconds
+            ? `Too Many Requests. Retry after ${retryAfterSeconds}s.`
+            : 'Too Many Requests',
           429,
         );
       }
@@ -71,7 +95,13 @@ export class RateLimitGuard implements CanActivate {
     if (Array.isArray(forwarded) && forwarded.length > 0) {
       return forwarded[0];
     }
-    return request.ip;
+    return request.ip ?? 'unknown';
+  }
+
+  private getPathLabel(request: Request): string {
+    const rawPath = request.originalUrl ?? request.url ?? 'unknown';
+    const [path] = rawPath.split('?');
+    return path || 'unknown';
   }
 
   private logRequest(

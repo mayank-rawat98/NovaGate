@@ -20,19 +20,22 @@ export class LoggingInterceptor implements NestInterceptor {
     const request = context.switchToHttp().getRequest<RequestWithUser>();
     const response = context.switchToHttp().getResponse<ResponseWithLocals>();
     const start = response.locals.requestStart ?? Date.now();
+    this.metricsService.incrementActiveConnections();
 
     return next.handle().pipe(
       finalize(() => {
         const responseTimeMs = Date.now() - start;
         const statusCode = response.statusCode;
         const method = request.method;
-        const routePath = request.route?.path ?? 'unmatched';
+        const routePath = this.getPathLabel(request);
         const requestIdHeader = request.headers['x-request-id'];
         const requestId =
           (Array.isArray(requestIdHeader) ? requestIdHeader[0] : requestIdHeader) ??
           response.locals.requestId;
 
         this.metricsService.incrementHttpRequests(method, routePath, statusCode);
+        this.metricsService.observeRequestDuration(method, routePath, responseTimeMs);
+        this.metricsService.decrementActiveConnections();
 
         const logEntry: Record<string, string | number | undefined> = {
           timestamp: new Date().toISOString(),
@@ -62,5 +65,11 @@ export class LoggingInterceptor implements NestInterceptor {
         this.logger.log(JSON.stringify(logEntry));
       }),
     );
+  }
+
+  private getPathLabel(request: RequestWithUser): string {
+    const rawPath = request.originalUrl ?? request.url ?? 'unknown';
+    const [path] = rawPath.split('?');
+    return path || 'unknown';
   }
 }
