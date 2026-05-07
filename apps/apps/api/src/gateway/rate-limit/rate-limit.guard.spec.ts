@@ -89,6 +89,8 @@ describe('RateLimitGuard', () => {
       guard.canActivate(context as unknown as ExecutionContext),
     ).rejects.toBeInstanceOf(GatewayError);
     expect(res.setHeader).toHaveBeenCalledWith('Retry-After', expect.any(Number));
+    expect(res.once).toHaveBeenCalledWith('finish', expect.any(Function));
+    expect(res.once).toHaveBeenCalledWith('close', expect.any(Function));
   });
 
   it('fails open on Redis errors', async () => {
