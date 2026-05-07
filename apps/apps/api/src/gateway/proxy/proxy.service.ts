@@ -216,12 +216,8 @@ export class ProxyService {
   }
 
   private getForwardedFor(request: Request): string | undefined {
-    const forwarded = request.headers['x-forwarded-for'];
-    if (typeof forwarded === 'string' && forwarded.length > 0) {
-      return forwarded;
-    }
-    if (Array.isArray(forwarded) && forwarded.length > 0) {
-      return forwarded.join(', ');
+    if (Array.isArray(request.ips) && request.ips.length > 0) {
+      return request.ips.join(', ');
     }
     return request.ip ?? undefined;
   }

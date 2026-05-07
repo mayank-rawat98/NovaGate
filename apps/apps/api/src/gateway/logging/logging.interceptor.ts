@@ -75,12 +75,8 @@ export class LoggingInterceptor implements NestInterceptor {
   }
 
   private getClientIp(request: RequestWithUser): string | undefined {
-    const forwarded = request.headers['x-forwarded-for'];
-    if (typeof forwarded === 'string' && forwarded.length > 0) {
-      return forwarded.split(',')[0].trim();
-    }
-    if (Array.isArray(forwarded) && forwarded.length > 0) {
-      return forwarded[0];
+    if (Array.isArray(request.ips) && request.ips.length > 0) {
+      return request.ips[0];
     }
     return request.ip ?? undefined;
   }
