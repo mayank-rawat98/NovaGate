@@ -1,0 +1,38 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+
+  downstream:
+    image: node:lts-alpine
+    working_dir: /data
+    command: >
+      sh -c "npx -y json-server@0.17.4 --watch /data/db.json --host 0.0.0.0 --port 3001"
+    volumes:
+      - ./db.json:/data/db.json:ro
+    ports:
+      - '3001:3001'
+
+  gateway:
+    image: node:lts-alpine
+    working_dir: /app
+    command: >
+      sh -c "npm ci && npm exec nx build @api-gateway/api && node apps/apps/api/dist/main.js"
+    volumes:
+      - ./:/app
+    ports:
+      - '3000:3000'
+    environment:
+      PORT: 3000
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: replace-with-32-char-secret-key-value
+      PROXY_TIMEOUT_MS: 10000
+      PROXY_SERVICES: >-
+        [{"name":"users","targetUrl":"http://downstream:3001","pathPrefix":"/users"},{"name":"products","targetUrl":"http://downstream:3001","pathPrefix":"/products"}]
+      RATE_LIMIT_WINDOW_MS: 60000
+      RATE_LIMIT_UNAUTH_MAX: 100
+      RATE_LIMIT_AUTH_MAX: 500
+    depends_on:
+      - redis
+      - downstream

@@ -30,6 +30,21 @@ These targets are either [inferred automatically](https://nx.dev/concepts/inferr
 
 [More about running tasks in the docs &raquo;](https://nx.dev/features/run-tasks?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
 
+## Environment variables
+
+Create a `.env` file based on `.env.example` with the following variables:
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `PORT` | Gateway port | `3000` |
+| `REDIS_URL` | Redis connection URL | _required_ |
+| `JWT_SECRET` | JWT verification secret (min 32 chars) | _required_ |
+| `PROXY_TIMEOUT_MS` | Downstream timeout in ms | `10000` |
+| `PROXY_SERVICES` | JSON array of `{ name, targetUrl, pathPrefix }` | `[]` |
+| `RATE_LIMIT_WINDOW_MS` | Sliding window size in ms | `60000` |
+| `RATE_LIMIT_UNAUTH_MAX` | Max requests per window (unauth) | `100` |
+| `RATE_LIMIT_AUTH_MAX` | Max requests per window (auth) | `500` |
+
 ## Add new projects
 
 While you could add new projects to your workspace manually, you might want to leverage [Nx plugins](https://nx.dev/concepts/nx-plugins?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects) and their [code generation](https://nx.dev/features/generate-code?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects) feature.
