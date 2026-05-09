@@ -136,6 +136,10 @@ export function getTenant(id: string): Promise<TenantEntity> {
   return request(`/tenants/${id}`);
 }
 
+export function rotateGatewayKey(tenantId: string): Promise<{ apiKey: string }> {
+  return request(`/tenants/${tenantId}/rotate-key`, { method: 'POST' });
+}
+
 export function getGatewayStatus(tenantId: string): Promise<GatewayStatus> {
   return request(`/tenants/${tenantId}/gateway-status`);
 }

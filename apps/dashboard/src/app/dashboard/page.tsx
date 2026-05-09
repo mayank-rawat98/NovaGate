@@ -38,7 +38,7 @@ export default function DashboardPage() {
     SWR_OPTS,
   );
 
-  const { data: metrics1h } = useSWR(
+  const { data: metrics1h, isLoading: metricsLoading } = useSWR(
     tenantId ? `metrics-1h-${tenantId}` : null,
     () => getMetrics(tenantId, '1h'),
     SWR_OPTS,
@@ -118,8 +118,10 @@ export default function DashboardPage() {
 
         {/* RPS sparkline */}
         <StatCard label="Requests / Second">
-          {snapshots.length === 0 ? (
+          {metricsLoading ? (
             <Skeleton className="h-16 w-full mt-2" />
+          ) : snapshots.length === 0 ? (
+            <p className="mt-3 text-sm text-gray-400">No data yet</p>
           ) : (
             <div>
               <p className="mb-1 text-2xl font-bold text-gray-900">
@@ -149,8 +151,10 @@ export default function DashboardPage() {
 
         {/* Error Rate */}
         <StatCard label="Error Rate">
-          {latestMetric === undefined ? (
+          {metricsLoading ? (
             <Skeleton className="h-8 w-20 mt-2" />
+          ) : !latestMetric ? (
+            <p className="mt-3 text-sm text-gray-400">No data yet</p>
           ) : (
             <div className="mt-2">
               <p
