@@ -21,10 +21,11 @@ export default function RegisterPage() {
     setError(null);
     setLoading(true);
     try {
-      const { token, tenantId } = await register(name, email, password);
+      const { token, tenantId, gatewayApiKey } = await register(name, email, password);
       setToken(token);
       setTenantId(tenantId);
-      router.replace('/dashboard');
+      localStorage.setItem('gw_setup_api_key', gatewayApiKey);
+      router.replace('/setup');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Registration failed');
     } finally {

@@ -109,7 +109,7 @@ export function login(email: string, password: string): Promise<{ token: string;
   });
 }
 
-export function register(name: string, email: string, password: string): Promise<{ token: string; tenantId: string }> {
+export function register(name: string, email: string, password: string): Promise<{ token: string; tenantId: string; gatewayApiKey: string }> {
   return request('/auth/register', {
     method: 'POST',
     body: JSON.stringify({ name, email, password }),

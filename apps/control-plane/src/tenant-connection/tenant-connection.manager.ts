@@ -102,6 +102,7 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
           authenticated = true;
           clearTimeout(authTimeout);
           this.connections.set(tenantId, ws);
+          await this.redisPub.set(`gw:online:${tenantId}`, '1', 'EX', 90);
 
           // Get config and pending updates
           const config = await this.getTenantConfig(tenantId);
@@ -141,12 +142,13 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
       if (tenantId) {
         this.connections.delete(tenantId);
         this.tenantRepo.update(tenantId, { lastSeen: new Date() });
+        this.redisPub.del(`gw:online:${tenantId}`);
         this.logger.log(`Tenant ${tenantId} disconnected`);
       }
     });
 
     ws.on('pong', () => {
-      // Logic for zombie detection could go here if needed
+      if (tenantId) this.redisPub.set(`gw:online:${tenantId}`, '1', 'EX', 90);
     });
   }
 
