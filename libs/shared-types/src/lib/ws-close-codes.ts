@@ -1,0 +1,6 @@
+export enum GatewayCloseCode {
+  INVALID_API_KEY = 4001,
+  AUTH_TIMEOUT = 4002,
+  KEY_ROTATED = 4003,
+  TENANT_SUSPENDED = 4004,
+}

@@ -16,6 +16,10 @@
     "skipLibCheck": true,
     "strict": true,
     "target": "es2022",
-    "customConditions": ["@api-gateway/source"]
+    "customConditions": ["@api-gateway/source"],
+    "baseUrl": ".",
+    "paths": {
+      "@api-gateway/shared-types": ["libs/shared-types/src/index.ts"]
+    }
   }
 }

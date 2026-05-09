@@ -57,7 +57,7 @@ try {
 } catch (err) {
   if (err instanceof TooManyRequestsException) throw err;
   // Redis is down — fail open, increment error counter
-  this.metricsService.increment('rate_limit_redis_errors_total');
+  this.metricsService.increment('gateway_rate_limit_redis_errors_total');
   this.logger.warn({ msg: 'Redis unavailable, failing open', error: err.message });
   // Allow request to continue
 }

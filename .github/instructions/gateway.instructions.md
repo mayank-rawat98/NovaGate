@@ -22,6 +22,7 @@ apps/api/src/
     proxy/
       proxy.middleware.ts
       proxy.middleware.spec.ts
+      proxy.controller.ts
       proxy.service.ts
       proxy.service.spec.ts
     logging/

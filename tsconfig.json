@@ -4,10 +4,16 @@
   "files": [],
   "references": [
     {
-      "path": "./apps/apps/api-e2e"
+      "path": "./apps/control-plane"
     },
     {
-      "path": "./apps/apps/api"
+      "path": "./apps/admin-api"
+    },
+    {
+      "path": "./apps/dashboard"
+    },
+    {
+      "path": "./apps/api"
     }
   ]
 }
