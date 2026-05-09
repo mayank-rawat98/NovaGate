@@ -22,9 +22,7 @@
       "@/*": ["./src/*"]
     },
     "types": ["jest", "node"],
-    "outDir": "dist",
-    "rootDir": "src",
-    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
+    "tsBuildInfoFile": ".next/tsconfig.tsbuildinfo"
   },
   "include": [
     "src/**/*.ts",
@@ -32,7 +30,6 @@
     "src/**/*.js",
     "src/**/*.jsx",
     "../../apps/dashboard/.next/types/**/*.ts",
-    "../../dist/apps/dashboard/.next/types/**/*.ts",
     "next-env.d.ts"
   ],
   "exclude": [
