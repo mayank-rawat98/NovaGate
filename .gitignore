@@ -11,6 +11,7 @@ node_modules
 .env.development
 .env.local
 .env.production
+.env.example
 # IDEs and editors
 /.idea
 .project
@@ -49,3 +50,7 @@ Thumbs.db
 test-output
 
 .nx/polygraph
+
+# Next.js
+.next
+out
