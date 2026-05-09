@@ -1,0 +1,62 @@
+{
+  "name": "@api-gateway/dashboard",
+  "version": "0.0.1",
+  "private": true,
+  "nx": {
+    "name": "dashboard",
+    "targets": {
+      "build": {
+        "executor": "@nx/next:build",
+        "outputs": ["{options.outputPath}"],
+        "defaultConfiguration": "production",
+        "options": {
+          "outputPath": "dist/apps/dashboard"
+        },
+        "configurations": {
+          "development": {
+            "outputPath": "dist/apps/dashboard"
+          },
+          "production": {
+            "outputPath": "dist/apps/dashboard"
+          }
+        }
+      },
+      "serve": {
+        "executor": "@nx/next:server",
+        "defaultConfiguration": "development",
+        "continuous": true,
+        "options": {
+          "buildTarget": "dashboard:build",
+          "dev": true
+        },
+        "configurations": {
+          "development": {
+            "buildTarget": "dashboard:build:development",
+            "dev": true,
+            "port": 3003
+          },
+          "production": {
+            "buildTarget": "dashboard:build:production",
+            "dev": false,
+            "port": 3003
+          }
+        }
+      },
+      "lint": {
+        "executor": "@nx/eslint:lint"
+      },
+      "test": {
+        "executor": "@nx/jest:jest",
+        "options": {
+          "jestConfig": "apps/dashboard/jest.config.cts",
+          "passWithNoTests": true
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "next": "~16.1.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}

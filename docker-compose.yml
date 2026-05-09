@@ -1,38 +1,125 @@
+name: api-gateway
+
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gateway-net
+
   redis:
     image: redis:7-alpine
-    ports:
-      - '6379:6379'
-
-  downstream:
-    image: node:lts-alpine
-    working_dir: /data
-    command: >
-      sh -c "npx -y json-server@0.17.4 --watch /data/db.json --host 0.0.0.0 --port 3001"
+    command: redis-server --appendonly yes
     volumes:
-      - ./db.json:/data/db.json:ro
-    ports:
-      - '3001:3001'
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gateway-net
 
-  gateway:
-    image: node:lts-alpine
-    working_dir: /app
-    command: >
-      sh -c "npm ci && npm exec nx build @api-gateway/api && node apps/apps/api/dist/main.js"
-    volumes:
-      - ./:/app
-    ports:
-      - '3000:3000'
+  control-plane:
+    image: ghcr.io/rawatshahab/control-plane:latest
     environment:
-      PORT: 3000
-      REDIS_URL: redis://redis:6379
-      JWT_SECRET: replace-with-32-char-secret-key-value
-      PROXY_TIMEOUT_MS: 10000
-      PROXY_SERVICES: >-
-        [{"name":"users","targetUrl":"http://downstream:3001","pathPrefix":"/users"},{"name":"products","targetUrl":"http://downstream:3001","pathPrefix":"/products"}]
-      RATE_LIMIT_WINDOW_MS: 60000
-      RATE_LIMIT_UNAUTH_MAX: 100
-      RATE_LIMIT_AUTH_MAX: 500
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      WS_PORT: ${WS_PORT:-8080}
     depends_on:
-      - redis
-      - downstream
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - gateway-net
+
+  admin-api:
+    image: ghcr.io/rawatshahab/admin-api:latest
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      CONTROL_PLANE_INTERNAL_URL: http://control-plane:${WS_PORT:-8080}
+      PLATFORM_JWT_SECRET: ${PLATFORM_JWT_SECRET}
+      DASHBOARD_URL: ${DASHBOARD_URL}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+      PORT: 3001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      control-plane:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - gateway-net
+
+  dashboard:
+    image: ghcr.io/rawatshahab/dashboard:latest
+    environment:
+      NEXT_PUBLIC_ADMIN_API_URL: ${NEXT_PUBLIC_ADMIN_API_URL}
+      PORT: 3003
+      HOSTNAME: "0.0.0.0"
+    depends_on:
+      admin-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3003/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - gateway-net
+
+  nginx:
+    image: nginx:alpine
+    profiles: [production]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt/live/coderegiment.com/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
+      - /etc/letsencrypt/live/coderegiment.com/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
+    depends_on:
+      - dashboard
+      - admin-api
+    command: '/bin/sh -c ''while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g "daemon off;"'''
+    networks:
+      - gateway-net
+
+networks:
+  gateway-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:

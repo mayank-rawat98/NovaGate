@@ -1,0 +1,9 @@
+node_modules
+dist
+.nx
+.git
+*.log
+.env
+.vscode
+apps/*/node_modules
+libs/*/node_modules
