@@ -1,6 +1,19 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { MarketingNav } from '../../components/marketing-nav';
 import { MarketingFooter } from '../../components/marketing-footer';
+
+export const metadata: Metadata = {
+  title: 'Documentation',
+  description: 'NovaGate getting-started guide. Register, deploy the gateway container, add services and routes, and have live request logs running in under 10 minutes.',
+  keywords: ['api gateway documentation', 'novagate docs', 'api gateway setup', 'gateway getting started', 'api routing guide'],
+  openGraph: {
+    title: 'NovaGate Documentation — Getting Started Guide',
+    description: 'From zero to a live API gateway in under 10 minutes. Register, deploy the container, add a service, add a route, and start routing traffic.',
+    url: 'https://novagate.dev/docs',
+  },
+  alternates: { canonical: 'https://novagate.dev/docs' },
+};
 
 export default function DocsPage() {
   return (

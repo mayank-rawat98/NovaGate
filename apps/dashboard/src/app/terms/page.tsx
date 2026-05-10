@@ -1,5 +1,17 @@
+import type { Metadata } from 'next';
 import { MarketingNav } from '../../components/marketing-nav';
 import { MarketingFooter } from '../../components/marketing-footer';
+
+export const metadata: Metadata = {
+  title: 'Terms of Service',
+  description: 'NovaGate Terms of Service. Acceptable use policy, data ownership, availability during public beta, and liability limitations.',
+  openGraph: {
+    title: 'NovaGate Terms of Service',
+    description: 'Acceptable use, data ownership, availability, and liability terms for the NovaGate API gateway platform.',
+    url: 'https://novagate.dev/terms',
+  },
+  alternates: { canonical: 'https://novagate.dev/terms' },
+};
 
 const SECTIONS = [
   {

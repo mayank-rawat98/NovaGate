@@ -1,6 +1,19 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { MarketingNav } from '../../components/marketing-nav';
 import { MarketingFooter } from '../../components/marketing-footer';
+
+export const metadata: Metadata = {
+  title: 'Docker Deploy',
+  description: 'Deploy the NovaGate API gateway in under 5 minutes with a single Docker container. No database required on your server. Step-by-step setup guide with all environment variables.',
+  keywords: ['docker api gateway', 'self-hosted api gateway', 'deploy api gateway', 'api gateway docker run', 'gateway setup'],
+  openGraph: {
+    title: 'Deploy NovaGate in 5 Minutes — Single Docker Container',
+    description: 'Pull the image, set four environment variables, run the container. Your API gateway is live in under 5 minutes.',
+    url: 'https://novagate.dev/docker',
+  },
+  alternates: { canonical: 'https://novagate.dev/docker' },
+};
 
 const ENV_VARS = [
   { name: 'PORT', required: false, default: '3000', desc: 'Port the gateway listens on.' },

@@ -1,5 +1,17 @@
+import type { Metadata } from 'next';
 import { MarketingNav } from '../../components/marketing-nav';
 import { MarketingFooter } from '../../components/marketing-footer';
+
+export const metadata: Metadata = {
+  title: 'System Status',
+  description: 'Real-time status for all NovaGate infrastructure components: control plane WebSocket, admin API, dashboard, config push pipeline, log ingestion, PostgreSQL, and Redis.',
+  openGraph: {
+    title: 'NovaGate System Status',
+    description: 'Live uptime and latency for all NovaGate infrastructure components.',
+    url: 'https://novagate.dev/status',
+  },
+  alternates: { canonical: 'https://novagate.dev/status' },
+};
 
 const SERVICES = [
   { name: 'Control Plane (WebSocket)', status: 'operational', latency: '18ms', uptime: '99.98%' },

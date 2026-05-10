@@ -1,5 +1,18 @@
+import type { Metadata } from 'next';
 import { MarketingNav } from '../../components/marketing-nav';
 import { MarketingFooter } from '../../components/marketing-footer';
+
+export const metadata: Metadata = {
+  title: 'Support',
+  description: 'NovaGate support: email, GitHub issues, and enterprise plans. FAQ covering traffic routing, Redis setup, config propagation speed, gateway key rotation, and offline resilience.',
+  keywords: ['api gateway support', 'novagate help', 'api gateway faq', 'gateway troubleshooting'],
+  openGraph: {
+    title: 'NovaGate Support & FAQ',
+    description: 'Get help with NovaGate. Email support, GitHub issues, and a detailed FAQ covering the most common setup and operations questions.',
+    url: 'https://novagate.dev/support',
+  },
+  alternates: { canonical: 'https://novagate.dev/support' },
+};
 
 const FAQ = [
   {

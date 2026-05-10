@@ -1,6 +1,19 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { MarketingNav } from '../../components/marketing-nav';
 import { MarketingFooter } from '../../components/marketing-footer';
+
+export const metadata: Metadata = {
+  title: 'About',
+  description: 'The story behind NovaGate — built because running Kong is a full-time job. Self-hosted gateway, hosted control plane. Your traffic never touches our servers.',
+  keywords: ['about novagate', 'api gateway company', 'kong alternative', 'self-hosted gateway story'],
+  openGraph: {
+    title: 'About NovaGate — Built Because Running Kong Is a Full-Time Job',
+    description: 'Self-hosted gateway, hosted control plane. The best of both models — without the infrastructure burden.',
+    url: 'https://novagate.dev/about',
+  },
+  alternates: { canonical: 'https://novagate.dev/about' },
+};
 
 const VALUES = [
   {

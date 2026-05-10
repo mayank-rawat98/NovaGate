@@ -1,5 +1,18 @@
+import type { Metadata } from 'next';
 import { MarketingNav } from '../../components/marketing-nav';
 import { MarketingFooter } from '../../components/marketing-footer';
+
+export const metadata: Metadata = {
+  title: 'Security',
+  description: 'How NovaGate keeps your data safe: schema-per-tenant isolation, bcrypt password hashing, TLS 1.2+, zero PII in logs, and a responsible disclosure program.',
+  keywords: ['api gateway security', 'tenant isolation', 'api key security', 'tls api gateway', 'responsible disclosure'],
+  openGraph: {
+    title: 'NovaGate Security — Tenant Isolation, TLS, Zero-PII Logs',
+    description: 'Schema-per-tenant isolation, bcrypt hashing, TLS 1.2+, and zero PII in logs or metrics. See how NovaGate protects your data.',
+    url: 'https://novagate.dev/security',
+  },
+  alternates: { canonical: 'https://novagate.dev/security' },
+};
 
 const SECTIONS = [
   {

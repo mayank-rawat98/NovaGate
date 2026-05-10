@@ -1,6 +1,19 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { MarketingNav } from '../../components/marketing-nav';
 import { MarketingFooter } from '../../components/marketing-footer';
+
+export const metadata: Metadata = {
+  title: 'Features',
+  description: 'NovaGate features: dynamic routing, JWT authentication, sliding-window rate limiting, real-time request logs, error tracking, and multi-tenant observability — all in a single Docker container.',
+  keywords: ['api gateway features', 'jwt gateway', 'rate limiting', 'api proxy', 'request logging', 'api observability'],
+  openGraph: {
+    title: 'NovaGate Features — JWT Auth, Rate Limiting, Observability',
+    description: 'Dynamic routing, JWT auth, sliding-window rate limiting, real-time request logs, and multi-tenant observability. Deploy in minutes.',
+    url: 'https://novagate.dev/features',
+  },
+  alternates: { canonical: 'https://novagate.dev/features' },
+};
 
 const CATEGORIES = [
   {

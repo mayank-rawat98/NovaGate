@@ -1,5 +1,17 @@
+import type { Metadata } from 'next';
 import { MarketingNav } from '../../components/marketing-nav';
 import { MarketingFooter } from '../../components/marketing-footer';
+
+export const metadata: Metadata = {
+  title: 'Privacy Policy',
+  description: 'NovaGate Privacy Policy. We never see your API request or response payloads. Learn exactly what we collect, how we use it, and your data rights.',
+  openGraph: {
+    title: 'NovaGate Privacy Policy',
+    description: 'We never see your API payloads. Learn what telemetry we collect and how your data is protected.',
+    url: 'https://novagate.dev/privacy',
+  },
+  alternates: { canonical: 'https://novagate.dev/privacy' },
+};
 
 const SECTIONS = [
   {

@@ -1,6 +1,19 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { MarketingNav } from '../../components/marketing-nav';
 import { MarketingFooter } from '../../components/marketing-footer';
+
+export const metadata: Metadata = {
+  title: 'API Reference',
+  description: 'NovaGate REST API reference. Authentication, routes, services, consumers, and analytics endpoints with full request and response examples.',
+  keywords: ['api gateway api reference', 'rest api docs', 'novagate api', 'routes api', 'services api', 'gateway management api'],
+  openGraph: {
+    title: 'NovaGate API Reference',
+    description: 'Full REST API reference for managing routes, services, consumers, and analytics. Includes request/response examples for every endpoint.',
+    url: 'https://novagate.dev/api-reference',
+  },
+  alternates: { canonical: 'https://novagate.dev/api-reference' },
+};
 
 const ENDPOINTS = [
   {
