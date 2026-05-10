@@ -14,6 +14,7 @@ import { getTenantId } from '../../../lib/auth';
 import type { Route, Service, CreateRouteDto } from '../../../lib/api-client';
 
 const METHOD_COLORS: Record<string, string> = {
+  ANY: 'bg-gray-800 text-white',
   GET: 'bg-blue-100 text-blue-700',
   POST: 'bg-green-100 text-green-700',
   PUT: 'bg-amber-100 text-amber-700',
@@ -21,7 +22,7 @@ const METHOD_COLORS: Record<string, string> = {
   DELETE: 'bg-red-100 text-red-700',
 };
 
-const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
+const METHODS = ['ANY', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
 
 interface FormState {
   method: string;
@@ -32,7 +33,7 @@ interface FormState {
 }
 
 const EMPTY_FORM: FormState = {
-  method: 'GET',
+  method: 'ANY',
   pathPattern: '',
   serviceId: '',
   authRequired: false,

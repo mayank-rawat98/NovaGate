@@ -15,7 +15,7 @@ function maskKey(key: string): string {
 function buildDockerCompose(apiKey: string, cpUrl: string): string {
   return `services:
   gateway:
-    image: ghcr.io/<org>/api-gateway:latest
+    image: ghcr.io/rawatshahab/novagate/api:latest
     environment:
       GATEWAY_API_KEY: ${apiKey}
       CONTROL_PLANE_URL: ${cpUrl}

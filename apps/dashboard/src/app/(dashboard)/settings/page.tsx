@@ -4,8 +4,8 @@ import { useState, useEffect } from 'react';
 import { getTenantId } from '../../../lib/auth';
 import { rotateGatewayKey } from '../../../lib/api-client';
 
-const CONTROL_PLANE_WS_URL = 'wss://ws.squadup.in/gateway-ws';
-const GATEWAY_IMAGE = 'ghcr.io/rawatshahab/api-gateway:latest';
+const CONTROL_PLANE_WS_URL = 'wss://ws.novagate.dev/gateway-ws';
+const GATEWAY_IMAGE = 'ghcr.io/rawatshahab/novagate/api:latest';
 
 export default function SettingsPage() {
   const [apiKey, setApiKey] = useState<string | null>(null);
