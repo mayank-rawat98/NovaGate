@@ -84,7 +84,7 @@ services:
   dashboard:
     image: ghcr.io/rawatshahab/dashboard:latest
     environment:
-      NEXT_PUBLIC_ADMIN_API_URL: ${NEXT_PUBLIC_ADMIN_API_URL}
+      ADMIN_API_URL: http://admin-api:3001
       PORT: 3003
       HOSTNAME: "0.0.0.0"
     depends_on:

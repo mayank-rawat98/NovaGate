@@ -67,8 +67,7 @@ export type CreateServiceDto = Pick<ServiceEntity, 'name' | 'targetUrl'> & {
 export type CreateConsumerDto = { name: string; rateLimitTier?: string };
 export type CreateConsumerResult = ConsumerEntity & { apiKey: string };
 
-const BASE = process.env.NEXT_PUBLIC_ADMIN_API_URL || '';
-
+const BASE = '';
 function toQuery(params: Record<string, string | number | boolean | undefined>): string {
   const entries = Object.entries(params).filter(([, v]) => v !== undefined);
   if (!entries.length) return '';

@@ -3,6 +3,7 @@
 import { useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { toast } from 'sonner';
 import { register } from '../../lib/api-client';
 import { setToken, setTenantId } from '../../lib/auth';
 import { AuthCard } from '../../components/auth-card';
@@ -16,21 +17,20 @@ export default function RegisterPage() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    setError(null);
     setLoading(true);
     try {
       const { token, tenantId, gatewayApiKey } = await register(name, email, password);
       setToken(token);
       setTenantId(tenantId);
       localStorage.setItem('gw_setup_api_key', gatewayApiKey);
+      toast.success('Account created — deploying your gateway…');
       router.replace('/setup');
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Registration failed');
+      toast.error(err instanceof Error ? err.message : 'Registration failed');
     } finally {
       setLoading(false);
     }
@@ -79,14 +79,6 @@ export default function RegisterPage() {
           onChange={setPassword}
           placeholder="At least 8 characters"
         />
-        {error && (
-          <div className="flex items-start gap-2 rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2.5">
-            <svg className="mt-0.5 h-4 w-4 shrink-0 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <p className="text-sm text-red-400">{error}</p>
-          </div>
-        )}
         <button
           type="submit"
           disabled={loading}

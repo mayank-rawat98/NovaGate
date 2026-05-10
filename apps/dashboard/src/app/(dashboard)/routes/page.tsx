@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import useSWR from 'swr';
+import { toast } from 'sonner';
 import { Pencil, Trash2, Plus, X } from 'lucide-react';
 import {
   getRoutes,
@@ -92,11 +93,15 @@ export default function RoutesPage() {
       };
       if (editId) {
         await updateRoute(tenantId, editId, dto);
+        toast.success('Route updated');
       } else {
         await createRoute(tenantId, dto);
+        toast.success('Route created');
       }
       setPanelOpen(false);
       await mutate();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save route');
     } finally {
       setSaving(false);
     }
@@ -109,6 +114,9 @@ export default function RoutesPage() {
       await deleteRoute(tenantId, deleteTarget);
       setDeleteTarget(null);
       await mutate();
+      toast.success('Route deleted');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete route');
     } finally {
       setDeleting(false);
     }

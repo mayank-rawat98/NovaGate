@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { Toaster } from 'sonner';
 import './global.css';
 import { SidebarShell } from '../components/sidebar-shell';
 
@@ -46,6 +47,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <SidebarShell>{children}</SidebarShell>
+        <Toaster
+          position="bottom-right"
+          toastOptions={{
+            style: { background: '#18181b', border: '1px solid rgba(255,255,255,0.08)', color: '#fff' },
+          }}
+          richColors
+        />
       </body>
     </html>
   );

@@ -6,11 +6,19 @@ const { composePlugins, withNx } = require('@nx/next');
 /**
  * @type {import('@nx/next/plugins/with-nx').WithNxOptions}
  **/
+const ADMIN_API_URL = process.env.ADMIN_API_URL || 'http://localhost:3001';
+
 const nextConfig = {
   output: 'standalone',
-  // Use this to set Nx-specific options
-  // See: https://nx.dev/recipes/next/next-config-setup
   nx: {},
+  async rewrites() {
+    return [
+      {
+        source: '/api/:path*',
+        destination: `${ADMIN_API_URL}/api/:path*`,
+      },
+    ];
+  },
 };
 
 const plugins = [

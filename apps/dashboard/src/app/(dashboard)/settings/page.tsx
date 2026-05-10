@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import { getTenantId } from '../../../lib/auth';
 import { rotateGatewayKey } from '../../../lib/api-client';
 
@@ -10,8 +11,6 @@ const GATEWAY_IMAGE = 'ghcr.io/rawatshahab/novagate/api:latest';
 export default function SettingsPage() {
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [rotating, setRotating] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [rotateError, setRotateError] = useState<string | null>(null);
 
   useEffect(() => {
     const stored = localStorage.getItem('gw_setup_api_key');
@@ -22,13 +21,13 @@ export default function SettingsPage() {
     const tenantId = getTenantId();
     if (!tenantId) return;
     setRotating(true);
-    setRotateError(null);
     try {
       const { apiKey: newKey } = await rotateGatewayKey(tenantId);
       setApiKey(newKey);
       localStorage.setItem('gw_setup_api_key', newKey);
+      toast.success('Gateway key rotated — update your container before the old key expires.');
     } catch (err) {
-      setRotateError(err instanceof Error ? err.message : 'Rotation failed');
+      toast.error(err instanceof Error ? err.message : 'Key rotation failed');
     } finally {
       setRotating(false);
     }
@@ -37,8 +36,7 @@ export default function SettingsPage() {
   function handleCopy() {
     if (!apiKey) return;
     navigator.clipboard.writeText(apiKey);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    toast.success('API key copied to clipboard');
   }
 
   const dockerCompose = `services:
@@ -80,7 +78,7 @@ export default function SettingsPage() {
               onClick={handleCopy}
               className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
             >
-              {copied ? 'Copied!' : 'Copy'}
+              Copy
             </button>
           </div>
         ) : (
@@ -104,10 +102,6 @@ export default function SettingsPage() {
             Rotating immediately invalidates the current key — update your gateway before rotating.
           </p>
         </div>
-
-        {rotateError && (
-          <p className="mt-2 text-sm text-red-600">{rotateError}</p>
-        )}
       </div>
 
       {/* Docker Compose */}
