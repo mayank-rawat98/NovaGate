@@ -2,9 +2,11 @@ import { Injectable, Logger, NestMiddleware } from '@nestjs/common';
 import type { NextFunction, Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import jwt, { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
+import { createHash } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import type { GatewayConfig } from '../../config/configuration';
 import type { RequestWithUser, ResponseWithLocals } from '../shared/request-context';
+import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 
 interface JwtPayload {
   sub?: string;
@@ -18,6 +20,7 @@ export class JwtMiddleware implements NestMiddleware {
 
   constructor(
     private readonly configService: ConfigService<GatewayConfig, true>,
+    private readonly configManager: GatewayConfigManagerService,
   ) {}
 
   use(req: RequestWithUser, res: ResponseWithLocals, next: NextFunction): void {
@@ -60,6 +63,13 @@ export class JwtMiddleware implements NestMiddleware {
         return;
       }
       if (error instanceof JsonWebTokenError) {
+        const hash = createHash('sha256').update(token).digest('hex');
+        const consumer = this.configManager.getConfig()?.consumers.find(c => c.keyHash === hash);
+        if (consumer) {
+          req.user = { id: consumer.id };
+          next();
+          return;
+        }
         this.respondUnauthorized(
           req,
           res,

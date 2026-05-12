@@ -36,9 +36,9 @@ export class AuthService {
       gatewayConfigVersion: 1,
     });
 
-    await this.provisioningService.provisionTenant(tenant.id);
+    const gatewayApiKey = await this.provisioningService.provisionTenant(tenant.id);
 
-    return { token: this.sign(tenant.id), tenantId: tenant.id };
+    return { token: this.sign(tenant.id), tenantId: tenant.id, gatewayApiKey };
   }
 
   async login(email: string, password: string) {

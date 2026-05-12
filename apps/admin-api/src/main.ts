@@ -12,7 +12,7 @@ async function bootstrap() {
   const globalPrefix = 'api';
   app.setGlobalPrefix(globalPrefix);
   app.enableCors({
-    origin: ['http://localhost:3003', 'http://localhost:3001'],
+    origin: ['http://localhost:3003', 'http://localhost:3001','https://novagate.dev', 'https://app.novagate.dev'],
     methods: ['GET', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS', 'HEAD'],
     allowedHeaders: [
       'x-device-id',

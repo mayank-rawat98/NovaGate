@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import useSWR from 'swr';
+import { toast } from 'sonner';
 import { Pencil, Trash2, Plus, X, ChevronDown, ChevronRight } from 'lucide-react';
 import {
   getRoutes,
@@ -19,7 +20,7 @@ const METHOD_COLORS: Record<string, string> = {
   PUT: 'bg-amber-100 text-amber-700',
   PATCH: 'bg-purple-100 text-purple-700',
   DELETE: 'bg-red-100 text-red-700',
-  ANY: 'bg-gray-100 text-gray-700',
+  ANY: 'bg-gray-800 text-white',
 };
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'ANY'] as const;
@@ -58,7 +59,7 @@ interface FormState {
 }
 
 const EMPTY_FORM: FormState = {
-  method: 'GET',
+  method: 'ANY',
   pathPattern: '',
   serviceId: '',
   authRequired: false,
@@ -209,11 +210,15 @@ export default function RoutesPage() {
       const dto = formToDto(form);
       if (editId) {
         await updateRoute(tenantId, editId, dto);
+        toast.success('Route updated');
       } else {
         await createRoute(tenantId, dto);
+        toast.success('Route created');
       }
       setPanelOpen(false);
       await mutate();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save route');
     } finally {
       setSaving(false);
     }
@@ -226,6 +231,9 @@ export default function RoutesPage() {
       await deleteRoute(tenantId, deleteTarget);
       setDeleteTarget(null);
       await mutate();
+      toast.success('Route deleted');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete route');
     } finally {
       setDeleting(false);
     }

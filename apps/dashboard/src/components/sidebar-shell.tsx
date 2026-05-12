@@ -28,12 +28,13 @@ const NAV_ITEMS = [
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
-const PUBLIC_PATHS = ['/login', '/register', '/setup', '/forgot-password', '/reset-password'];
+// Paths that require authentication — everything else is public
+const PROTECTED_PATHS = ['/dashboard', '/routes', '/services', '/logs', '/errors', '/consumers', '/settings'];
 
 export function SidebarShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
+  const isPublic = !PROTECTED_PATHS.some((p) => pathname === p || pathname.startsWith(p + '/'));
 
   useEffect(() => {
     if (!isPublic && !isAuthenticated()) {

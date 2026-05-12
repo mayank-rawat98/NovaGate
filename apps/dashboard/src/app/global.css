@@ -2,6 +2,25 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Scroll reveal animations ───────────────────────────────────────────── */
+[data-reveal] {
+  opacity: 0;
+  transition:
+    opacity 0.65s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    transform 0.65s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  transition-delay: var(--reveal-delay, 0ms);
+}
+[data-reveal='up']    { transform: translateY(28px); }
+[data-reveal='left']  { transform: translateX(-28px); }
+[data-reveal='right'] { transform: translateX(28px); }
+[data-reveal='down']  { transform: translateY(-28px); }
+[data-reveal].revealed { opacity: 1; transform: none; }
+
+.reveal-d1 { --reveal-delay: 80ms; }
+.reveal-d2 { --reveal-delay: 160ms; }
+.reveal-d3 { --reveal-delay: 240ms; }
+.reveal-d4 { --reveal-delay: 320ms; }
+
 html {
   -webkit-text-size-adjust: 100%;
   font-family:

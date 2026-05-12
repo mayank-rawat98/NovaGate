@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class TenantProvisioningService {
@@ -7,7 +8,7 @@ export class TenantProvisioningService {
 
   constructor(private readonly dataSource: DataSource) {}
 
-  async provisionTenant(tenantId: string) {
+  async provisionTenant(tenantId: string): Promise<string> {
     const schemaName = `tenant_${tenantId.replace(/-/g, '_')}`;
     this.logger.log(`Provisioning schema ${schemaName}`);
 
@@ -111,5 +112,16 @@ export class TenantProvisioningService {
         )
       `);
     });
+
+    const rawKey = 'gw_' + crypto.randomBytes(32).toString('hex');
+    const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+    await this.dataSource.query(
+      `INSERT INTO public.api_keys (id, "tenantId", "keyHash", label, "createdAt")
+       VALUES (gen_random_uuid(), $1, $2, 'default', NOW())`,
+      [tenantId, keyHash],
+    );
+    this.logger.log(`Gateway API key provisioned for tenant ${tenantId}`);
+
+    return rawKey;
   }
 }

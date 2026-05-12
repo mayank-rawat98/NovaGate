@@ -13,23 +13,16 @@ interface PasswordInputProps {
   placeholder?: string;
 }
 
-export function PasswordInput({
-  id,
-  label,
-  value,
-  onChange,
-  autoComplete,
-  required,
-  minLength,
-  placeholder,
-}: PasswordInputProps) {
+export function PasswordInput({ id, label, value, onChange, autoComplete, required, minLength, placeholder }: PasswordInputProps) {
   const [visible, setVisible] = useState(false);
 
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-sm font-medium text-gray-700">
-        {label}
-      </label>
+      {label && (
+        <label htmlFor={id} className="text-sm font-medium text-white/70">
+          {label}
+        </label>
+      )}
       <div className="relative">
         <input
           id={id}
@@ -40,12 +33,12 @@ export function PasswordInput({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
-          className="w-full rounded-lg border border-gray-300 px-3 py-2.5 pr-10 text-sm text-gray-900 placeholder-gray-400 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+          className="w-full rounded-lg border border-white/10 bg-white/[0.05] px-3 py-2.5 pr-10 text-sm text-white placeholder-white/25 outline-none transition focus:border-violet-500/60 focus:ring-2 focus:ring-violet-500/20"
         />
         <button
           type="button"
           onClick={() => setVisible((v) => !v)}
-          className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-400 hover:text-gray-600"
+          className="absolute inset-y-0 right-0 flex items-center px-3 text-white/30 hover:text-white/60 transition-colors"
           tabIndex={-1}
           aria-label={visible ? 'Hide password' : 'Show password'}
         >

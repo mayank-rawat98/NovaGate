@@ -1,17 +1,18 @@
 FROM node:22-alpine AS builder
 WORKDIR /app
-ARG NEXT_PUBLIC_ADMIN_API_URL
-ENV NEXT_PUBLIC_ADMIN_API_URL=$NEXT_PUBLIC_ADMIN_API_URL
+ENV NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json ./
 COPY libs/shared-types/package.json ./libs/shared-types/package.json
+COPY apps/dashboard/package.json ./apps/dashboard/package.json
 RUN npm install
 COPY . .
 RUN npx nx sync
-RUN npx nx build dashboard
+RUN cd apps/dashboard && npx next build
 
 FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=builder /app/apps/dashboard/.next/standalone/apps/dashboard ./apps/dashboard
 COPY --from=builder /app/apps/dashboard/.next/standalone/node_modules ./apps/dashboard/node_modules
 COPY --from=builder /app/apps/dashboard/.next/static ./apps/dashboard/.next/static

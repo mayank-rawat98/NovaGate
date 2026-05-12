@@ -72,8 +72,7 @@ export type UpdateServiceDto = Partial<CreateServiceDto>;
 export type CreateConsumerDto = { name: string; rateLimitTier?: string };
 export type CreateConsumerResult = ConsumerEntity & { apiKey: string };
 
-const BASE = process.env.NEXT_PUBLIC_ADMIN_API_URL || '';
-
+const BASE = 'https://api.novagate.dev';
 function toQuery(params: Record<string, string | number | boolean | undefined>): string {
   const entries = Object.entries(params).filter(([, v]) => v !== undefined);
   if (!entries.length) return '';
@@ -114,7 +113,7 @@ export function login(email: string, password: string): Promise<{ token: string;
   });
 }
 
-export function register(name: string, email: string, password: string): Promise<{ token: string; tenantId: string }> {
+export function register(name: string, email: string, password: string): Promise<{ token: string; tenantId: string; gatewayApiKey: string }> {
   return request('/auth/register', {
     method: 'POST',
     body: JSON.stringify({ name, email, password }),
@@ -139,6 +138,10 @@ export function resetPassword(token: string, password: string): Promise<{ messag
 
 export function getTenant(id: string): Promise<TenantEntity> {
   return request(`/tenants/${id}`);
+}
+
+export function rotateGatewayKey(tenantId: string): Promise<{ apiKey: string }> {
+  return request(`/tenants/${tenantId}/rotate-key`, { method: 'POST' });
 }
 
 export function getGatewayStatus(tenantId: string): Promise<GatewayStatus> {
