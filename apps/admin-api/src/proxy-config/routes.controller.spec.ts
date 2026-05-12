@@ -49,7 +49,7 @@ describe('RoutesController', () => {
       expect(result).toEqual({ id: 'new-route' });
       expect(ds.query).toHaveBeenCalledWith(
         expect.stringContaining('INSERT'),
-        ['GET', '/api/users', 'svc-1', true, null, true],
+        ['GET', '/api/users', 'svc-1', true, null, true, null, null, null, null],
       );
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });

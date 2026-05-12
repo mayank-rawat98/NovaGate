@@ -108,12 +108,34 @@ export interface RouteConfig {
   authRequired: boolean;
   rateLimitOverride?: number;
   enabled: boolean;
+  retry?: {
+    attempts: number;
+    on: number[];
+    methods: string[];
+  };
+  maxBodyBytes?: number;
+  cors?: {
+    origins: string[];
+    methods?: string[];
+    headers?: string[];
+    credentials?: boolean;
+    maxAge?: number;
+  };
+  ipRestriction?: {
+    allow?: string[];
+    deny?: string[];
+  };
+}
+
+export interface ServiceTarget {
+  url: string;
+  weight: number;
 }
 
 export interface ServiceConfig {
   id: string;
   name: string;
-  targetUrl: string;
+  targets: ServiceTarget[];
   healthCheckPath: string;
   timeoutMs: number;
 }

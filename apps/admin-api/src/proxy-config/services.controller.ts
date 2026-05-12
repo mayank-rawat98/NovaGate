@@ -26,9 +26,14 @@ export class ServicesController {
   async create(@Param('tenantId') tenantId: string, @Body() body: any) {
     const schema = tenantSchema(tenantId);
     const rows = await this.dataSource.query(
-      `INSERT INTO ${schema}.services (name, "targetUrl", "healthCheckPath", "timeoutMs")
+      `INSERT INTO ${schema}.services (name, targets, "healthCheckPath", "timeoutMs")
        VALUES ($1, $2, $3, $4) RETURNING *`,
-      [body.name, body.targetUrl, body.healthCheckPath ?? null, body.timeoutMs ?? 10000],
+      [
+        body.name,
+        JSON.stringify(body.targets),
+        body.healthCheckPath ?? '/health',
+        body.timeoutMs ?? 10000,
+      ],
     );
     await this.configPush.triggerUpdate(tenantId);
     return rows[0];
@@ -44,14 +49,14 @@ export class ServicesController {
     const rows = await this.dataSource.query(
       `UPDATE ${schema}.services
        SET name = COALESCE($2, name),
-           "targetUrl" = COALESCE($3, "targetUrl"),
+           targets = COALESCE($3::jsonb, targets),
            "healthCheckPath" = COALESCE($4, "healthCheckPath"),
            "timeoutMs" = COALESCE($5, "timeoutMs")
        WHERE id = $1 AND "deletedAt" IS NULL RETURNING *`,
       [
         id,
         body.name ?? null,
-        body.targetUrl ?? null,
+        body.targets ? JSON.stringify(body.targets) : null,
         body.healthCheckPath ?? null,
         body.timeoutMs ?? null,
       ],
