@@ -1,7 +1,9 @@
 import { Injectable, NestMiddleware } from '@nestjs/common';
 import type { Request, Response, NextFunction } from 'express';
+import { v4 as uuidv4 } from 'uuid';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 import { matchRoute } from '../shared/route-matcher';
+import type { ResponseWithLocals } from '../shared/request-context';
 
 @Injectable()
 export class RequestSizeLimitMiddleware implements NestMiddleware {
@@ -24,30 +26,30 @@ export class RequestSizeLimitMiddleware implements NestMiddleware {
     const contentLength = parseInt(req.headers['content-length'] ?? '', 10);
 
     if (!isNaN(contentLength) && contentLength > limit) {
+      const requestId = this.getRequestId(req, res);
       res.status(413).json({
         error: 'REQUEST_TOO_LARGE',
         message: 'Request body exceeds the configured size limit',
+        requestId,
       });
       return;
     }
 
-    // Stream counting for requests without Content-Length
-    let received = 0;
-    let aborted = false;
-    req.on('data', (chunk: Buffer) => {
-      received += chunk.length;
-      if (!aborted && received > limit) {
-        aborted = true;
-        req.destroy();
-        if (!res.headersSent) {
-          res.status(413).json({
-            error: 'REQUEST_TOO_LARGE',
-            message: 'Request body exceeds the configured size limit',
-          });
-        }
-      }
-    });
-
     next();
+  }
+
+  private getRequestId(req: Request, res: Response): string {
+    const headerValue = req.headers['x-request-id'];
+    const existing = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+    const locals = (res as ResponseWithLocals).locals;
+    const requestId = existing ?? locals?.requestId ?? uuidv4();
+    if (!existing) {
+      req.headers['x-request-id'] = requestId;
+    }
+    res.setHeader('X-Request-ID', requestId);
+    if (locals) {
+      locals.requestId = requestId;
+    }
+    return requestId;
   }
 }

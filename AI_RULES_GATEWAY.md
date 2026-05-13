@@ -254,21 +254,24 @@ signal and lets retry logic kick in.
 
 ---
 
-## Rule 12 — Retry Must Never Fire on Non-Idempotent Methods by Default
+## Rule 12 — Retry Must Never Fire on Body-Bearing Methods
 
-`ProxyService` retry is only allowed on `GET`, `HEAD`, and `OPTIONS` unless
-the route config explicitly opts in via `retry.methods`.
+`ProxyService` retry is only allowed on `GET`, `HEAD`, and `OPTIONS`. Even if
+`retry.methods` includes `POST`, `PUT`, `PATCH`, or `DELETE`, the gateway must
+not retry because the request body cannot be safely replayed.
 
 ```typescript
 // DEFAULT — safe methods only
 const retryMethods = retryConfig?.methods ?? ['GET', 'HEAD', 'OPTIONS'];
-const canRetry = maxAttempts > 1 && retryMethods.includes(request.method.toUpperCase());
+const requestMethod = request.method.toUpperCase();
+const canRetry = maxAttempts > 1
+  && ['GET', 'HEAD', 'OPTIONS'].includes(requestMethod)
+  && retryMethods.includes(requestMethod);
 ```
 
-Why: Retrying POST/PUT/DELETE can cause double-writes (duplicate payments,
-double inserts). Never enable this by default even if the retry codes match.
-If a developer opts in via `retry.methods: ['POST']`, the downstream must be
-idempotent — that is their responsibility.
+Why: Retrying POST/PUT/PATCH/DELETE can cause double-writes (duplicate payments,
+double inserts) and the request body cannot be replayed without buffering. Until
+we implement explicit body buffering, retries must be limited to safe methods.
 
 ---
 

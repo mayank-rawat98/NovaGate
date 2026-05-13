@@ -10,6 +10,9 @@ export class LoadBalancerService {
     targets: ServiceTarget[],
     healthyUrls: Set<string>,
   ): string {
+    if (targets.length === 0) {
+      throw new Error('No targets configured for service');
+    }
     // Use healthy targets when available; fall back to all targets if all are unhealthy
     const candidates =
       healthyUrls.size > 0
@@ -26,7 +29,9 @@ export class LoadBalancerService {
       }
     }
 
-    if (expanded.length === 0) return targets[0]?.url ?? '';
+    if (expanded.length === 0) {
+      throw new Error('No targets available for load balancing');
+    }
 
     const count = this.counters.get(serviceId) ?? 0;
     const selected = expanded[count % expanded.length];

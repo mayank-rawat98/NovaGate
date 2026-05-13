@@ -45,7 +45,12 @@ function formToDto(form: FormState): CreateServiceDto {
     name: form.name,
     targets: form.targets
       .filter((t) => t.url.trim())
-      .map((t) => ({ url: t.url.trim(), weight: Math.max(1, parseInt(t.weight, 10) || 1) })),
+      .map((t) => {
+        const parsed = parseInt(t.weight, 10);
+        const weight = Number.isFinite(parsed) ? parsed : 1;
+        const clamped = Math.min(100, Math.max(1, weight));
+        return { url: t.url.trim(), weight: clamped };
+      }),
     healthCheckPath: form.healthCheckPath || '/health',
     timeoutMs: form.timeoutMs ? Number(form.timeoutMs) : undefined,
   };
@@ -68,6 +73,7 @@ export default function ServicesPage() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -75,6 +81,7 @@ export default function ServicesPage() {
   function openCreate() {
     setEditId(null);
     setForm(EMPTY_FORM);
+    setFormError(null);
     setPanelOpen(true);
   }
 
@@ -86,15 +93,18 @@ export default function ServicesPage() {
       healthCheckPath: service.healthCheckPath,
       timeoutMs: String(service.timeoutMs),
     });
+    setFormError(null);
     setPanelOpen(true);
   }
 
   function addTarget() {
     setForm((f) => ({ ...f, targets: [...f.targets, { ...EMPTY_TARGET }] }));
+    setFormError(null);
   }
 
   function removeTarget(i: number) {
     setForm((f) => ({ ...f, targets: f.targets.filter((_, idx) => idx !== i) }));
+    setFormError(null);
   }
 
   function updateTarget(i: number, field: keyof TargetRow, value: string) {
@@ -103,6 +113,7 @@ export default function ServicesPage() {
       next[i] = { ...next[i], [field]: value };
       return { ...f, targets: next };
     });
+    setFormError(null);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -110,7 +121,12 @@ export default function ServicesPage() {
     if (!tenantId) return;
     setSaving(true);
     try {
+      setFormError(null);
       const dto = formToDto(form);
+      if (dto.targets.length === 0) {
+        setFormError('Add at least one target URL before saving.');
+        return;
+      }
       if (editId) {
         await updateService(tenantId, editId, dto as UpdateServiceDto);
       } else {
@@ -353,6 +369,10 @@ export default function ServicesPage() {
                   <Plus className="h-3.5 w-3.5" />
                   Add target
                 </button>
+
+                {formError && (
+                  <p className="text-xs text-red-500">{formError}</p>
+                )}
 
                 {form.targets.length > 1 && (
                   <p className="text-xs text-gray-400">

@@ -15,8 +15,9 @@ export class CorsMiddleware implements NestMiddleware {
       return;
     }
 
-    // For OPTIONS preflight, try matching against ANY method so the route is found
-    const method = req.method === 'OPTIONS' ? 'ANY' : req.method;
+    const preflightHeader = req.headers['access-control-request-method'];
+    const preflightMethod = Array.isArray(preflightHeader) ? preflightHeader[0] : preflightHeader;
+    const method = req.method === 'OPTIONS' ? (preflightMethod ?? 'ANY') : req.method;
     const route = matchRoute(method, req.path, config.routes) ??
       matchRoute(req.method, req.path, config.routes);
 
@@ -37,14 +38,14 @@ export class CorsMiddleware implements NestMiddleware {
 
   private applyCorsHeaders(req: Request, res: Response, route: RouteConfig): void {
     const cors = route.cors!;
-    const origin = req.headers['origin'] as string | undefined;
+    const originHeader = req.headers['origin'];
+    const origin = Array.isArray(originHeader) ? originHeader[0] : originHeader;
 
-    if (origin) {
-      if (cors.origins.includes('*')) {
-        res.setHeader('Access-Control-Allow-Origin', '*');
-      } else if (cors.origins.includes(origin)) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Vary', 'Origin');
+    const allowOrigin = this.resolveOrigin(cors.origins, origin, cors.credentials);
+    if (allowOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', allowOrigin);
+      if (allowOrigin !== '*') {
+        this.appendVary(res, 'Origin');
       }
     }
 
@@ -64,6 +65,35 @@ export class CorsMiddleware implements NestMiddleware {
       res.setHeader('Access-Control-Allow-Methods', methods.join(', '));
       res.setHeader('Access-Control-Allow-Headers', allowedHeaders.join(', '));
       res.setHeader('Access-Control-Max-Age', String(cors.maxAge ?? 86400));
+    }
+  }
+
+  private resolveOrigin(
+    allowedOrigins: string[],
+    origin: string | undefined,
+    credentials?: boolean,
+  ): string | undefined {
+    if (!origin) return allowedOrigins.includes('*') && !credentials ? '*' : undefined;
+    if (allowedOrigins.includes('*')) {
+      return credentials ? origin : '*';
+    }
+    if (allowedOrigins.includes(origin)) {
+      return origin;
+    }
+    return undefined;
+  }
+
+  private appendVary(res: Response, value: string): void {
+    const existing = res.getHeader('Vary');
+    if (!existing) {
+      res.setHeader('Vary', value);
+      return;
+    }
+    const current = Array.isArray(existing) ? existing.join(',') : String(existing);
+    const values = current.split(',').map((v) => v.trim()).filter(Boolean);
+    if (!values.includes(value)) {
+      values.push(value);
+      res.setHeader('Vary', values.join(', '));
     }
   }
 }

@@ -1,13 +1,15 @@
 import { Injectable, NestMiddleware } from '@nestjs/common';
-import type { Request, Response, NextFunction } from 'express';
+import type { Request, NextFunction } from 'express';
+import { v4 as uuidv4 } from 'uuid';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 import { matchRoute } from '../shared/route-matcher';
+import type { ResponseWithLocals } from '../shared/request-context';
 
 @Injectable()
 export class IpRestrictionMiddleware implements NestMiddleware {
   constructor(private readonly configManager: GatewayConfigManagerService) {}
 
-  use(req: Request, res: Response, next: NextFunction): void {
+  use(req: Request, res: ResponseWithLocals, next: NextFunction): void {
     const config = this.configManager.getConfig();
     if (!config) {
       next();
@@ -20,21 +22,27 @@ export class IpRestrictionMiddleware implements NestMiddleware {
       return;
     }
 
+    const requestId = this.ensureRequestId(req, res);
     const { allow, deny } = route.ipRestriction;
     const ip = this.extractIp(req);
     if (!ip) {
       next();
       return;
     }
-
-    // Deny takes precedence over allow
-    if (deny?.some((cidr) => this.matchesCidr(ip, cidr))) {
-      res.status(403).json({ error: 'IP_RESTRICTED', message: 'Access denied from this IP address' });
+    const normalizedIp = this.normalizeIp(ip);
+    if (!normalizedIp) {
+      this.respondForbidden(res, requestId);
       return;
     }
 
-    if (allow && allow.length > 0 && !allow.some((cidr) => this.matchesCidr(ip, cidr))) {
-      res.status(403).json({ error: 'IP_RESTRICTED', message: 'Access denied from this IP address' });
+    // Deny takes precedence over allow
+    if (deny?.some((cidr) => this.matchesCidr(normalizedIp, cidr))) {
+      this.respondForbidden(res, requestId);
+      return;
+    }
+
+    if (allow && allow.length > 0 && !allow.some((cidr) => this.matchesCidr(normalizedIp, cidr))) {
+      this.respondForbidden(res, requestId);
       return;
     }
 
@@ -48,6 +56,17 @@ export class IpRestrictionMiddleware implements NestMiddleware {
       return first.split(',')[0].trim();
     }
     return req.ip ?? null;
+  }
+
+  private normalizeIp(ip: string): string | null {
+    if (ip.startsWith('::ffff:')) {
+      const ipv4 = ip.slice(7);
+      return this.toInt(ipv4) === null ? null : ipv4;
+    }
+    if (ip.includes(':')) {
+      return null;
+    }
+    return this.toInt(ip) === null ? null : ip;
   }
 
   private matchesCidr(ip: string, cidr: string): boolean {
@@ -70,5 +89,19 @@ export class IpRestrictionMiddleware implements NestMiddleware {
     const parts = ip.split('.').map(Number);
     if (parts.length !== 4 || parts.some((p) => isNaN(p) || p < 0 || p > 255)) return null;
     return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+  }
+
+  private ensureRequestId(req: Request, res: ResponseWithLocals): string {
+    const headerValue = req.headers['x-request-id'];
+    const existing = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+    const requestId = existing ?? uuidv4();
+    req.headers['x-request-id'] = requestId;
+    res.setHeader('X-Request-ID', requestId);
+    res.locals.requestId = requestId;
+    return requestId;
+  }
+
+  private respondForbidden(res: ResponseWithLocals, requestId: string): void {
+    res.status(403).json({ error: 'IP_RESTRICTED', message: 'Access denied from this IP address', requestId });
   }
 }

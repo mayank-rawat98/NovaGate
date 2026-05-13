@@ -47,17 +47,27 @@ export class UpstreamHealthService implements OnModuleInit, OnModuleDestroy {
   }
 
   getSnapshots(services: ServiceConfig[]): HealthSnapshot[] {
-    return services.flatMap((svc) =>
-      svc.targets.map((t) => {
-        const h = this.health.get(t.url);
-        return {
-          serviceId: svc.id,
-          status: h ? (h.healthy ? 'healthy' : 'unhealthy') : 'unknown',
-          checkedAt: h ? h.lastChecked.toISOString() : new Date().toISOString(),
-          errorMessage: h?.errorMessage,
-        } as HealthSnapshot;
-      }),
-    );
+    return services.map((svc) => {
+      const targetStates = svc.targets.map((t) => this.health.get(t.url)).filter(Boolean) as TargetHealth[];
+      const anyUnhealthy = targetStates.some((h) => !h.healthy);
+      const anyHealthy = targetStates.some((h) => h.healthy);
+      const status: HealthSnapshot['status'] = anyUnhealthy
+        ? 'unhealthy'
+        : anyHealthy
+          ? 'healthy'
+          : 'unknown';
+      const lastChecked = targetStates.reduce<Date | null>(
+        (latest, h) => (!latest || h.lastChecked > latest ? h.lastChecked : latest),
+        null,
+      );
+      const errorMessage = anyUnhealthy ? targetStates.find((h) => !h.healthy)?.errorMessage : undefined;
+      return {
+        serviceId: svc.id,
+        status,
+        checkedAt: lastChecked ? lastChecked.toISOString() : new Date().toISOString(),
+        errorMessage,
+      } as HealthSnapshot;
+    });
   }
 
   private async checkAll(): Promise<void> {

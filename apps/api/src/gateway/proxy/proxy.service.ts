@@ -66,6 +66,9 @@ export class ProxyService {
     if (!service) {
       throw new GatewayError('SERVICE_NOT_FOUND', 'No downstream service matches the path', 404);
     }
+    if (!service.targets || service.targets.length === 0) {
+      throw new GatewayError('SERVICE_NOT_FOUND', 'No downstream targets configured for service', 404);
+    }
 
     response.locals.downstreamService = service.name;
     const start = Date.now();
@@ -77,8 +80,12 @@ export class ProxyService {
     const retryConfig = route.retry;
     const maxAttempts = retryConfig ? retryConfig.attempts + 1 : 1;
     const retryOn = retryConfig?.on ?? [502, 503, 504];
-    const retryMethods = retryConfig?.methods ?? ['GET', 'HEAD', 'OPTIONS'];
-    const canRetry = maxAttempts > 1 && retryMethods.includes(request.method.toUpperCase());
+    const retryMethods = (retryConfig?.methods ?? ['GET', 'HEAD', 'OPTIONS']).map((m) => m.toUpperCase());
+    const requestMethod = request.method.toUpperCase();
+    const safeRetryMethods = ['GET', 'HEAD', 'OPTIONS'];
+    const canRetry = maxAttempts > 1 &&
+      safeRetryMethods.includes(requestMethod) &&
+      retryMethods.includes(requestMethod);
 
     const healthyUrls = this.upstreamHealth.getHealthyUrls(service.targets);
 
@@ -121,9 +128,11 @@ export class ProxyService {
   ): Promise<number> {
     return new Promise<number>((resolve) => {
       let settled = false;
+      let cleanup = () => {};
       const resolveOnce = (code: number) => {
         if (!settled) {
           settled = true;
+          cleanup();
           delete (request as any).__gw_retry;
           resolve(code);
         }
@@ -140,13 +149,18 @@ export class ProxyService {
 
       // Fallback: if the handler calls next() without a proxyRes/error event
       const onFinish = () => resolveOnce(response.statusCode ?? 200);
+      const onClose = () => resolveOnce(response.statusCode ?? 200);
+      cleanup = () => {
+        response.off('finish', onFinish);
+        response.off('close', onClose);
+      };
       response.once('finish', onFinish);
+      response.once('close', onClose);
 
       handler(
         request as unknown as http.IncomingMessage,
         response as unknown as http.ServerResponse,
         (err?: unknown) => {
-          response.off('finish', onFinish);
           if (err && !response.headersSent) {
             resolveOnce(502);
           } else {
@@ -210,7 +224,6 @@ export class ProxyService {
               res.setHeader('Content-Type', 'application/json');
               res.end(JSON.stringify({ error: 'DOWNSTREAM_ERROR', message: 'Downstream service error', requestId }));
             }
-            ctx?.resolve(statusCode);
             return;
           }
 
@@ -219,7 +232,6 @@ export class ProxyService {
           });
           res.statusCode = statusCode;
           proxyRes.pipe(res);
-          ctx?.resolve(statusCode);
         },
 
         error: (error: Error, req: http.IncomingMessage, res: http.ServerResponse | net.Socket) => {
@@ -258,10 +270,9 @@ export class ProxyService {
               const errMsg = isTimeout ? 'Downstream request timed out' : 'Downstream service error';
               httpRes.end(JSON.stringify({ error: errCode, message: errMsg, requestId }));
             }
+          } else {
+            ctx?.resolve(statusCode);
           }
-
-          // Always resolve — the response.finish handler may not fire for Socket targets
-          ctx?.resolve(statusCode);
         },
       },
     };
