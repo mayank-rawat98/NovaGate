@@ -31,6 +31,7 @@ return count <= this.limit;
 ```
 
 WRONG — do not use this pattern:
+
 ```typescript
 // Fixed window — resets hard on the minute boundary, gameable
 const count = await this.redis.incr(key);
@@ -69,6 +70,7 @@ worse than allowing excess traffic temporarily. The error counter
 alerts on-call to the Redis issue.
 
 NEVER do this:
+
 ```typescript
 } catch (err) {
   throw new ServiceUnavailableException(); // blocks all traffic
@@ -163,6 +165,7 @@ const stripped = req.path.replace(prefix, '');
 
 The prefix must also include a trailing slash check to prevent
 partial segment matches:
+
 - prefix `/user` must NOT match `/users/123`
 - prefix `/users` must match `/users/123` → `/123`
 
@@ -171,6 +174,7 @@ partial segment matches:
 ## Rule 7 — No PII in Logs or Metrics
 
 The following must never appear in log fields or metric label values:
+
 - Email addresses
 - JWT token strings (full or partial)
 - Passwords or secrets
@@ -212,6 +216,7 @@ Every proxy call to a downstream service must respect the configured
 timeout. The default is 10 000ms. Never await indefinitely.
 
 If a downstream times out:
+
 - Return 504 with `{ error: "DOWNSTREAM_TIMEOUT" }`
 - Log at `error` level with `downstreamService`, `downstreamLatencyMs`, `requestId`
 - Increment `gateway_downstream_timeout_total` counter with `service` label
@@ -224,3 +229,104 @@ If a new correctness constraint is discovered during implementation
 (a new footgun, a new contract requirement), add it to this file in
 the same PR that introduces the code change. Do not leave institutional
 knowledge only in the PR description.
+
+---
+
+## Rule 11 — Load Balancer Must Never Drop to Zero Targets
+
+`LoadBalancerService.selectTarget()` must never return an empty string or
+throw when all upstream targets are marked unhealthy. Fall back to the full
+target list so requests continue (with degraded success rate) rather than
+failing immediately with a 503.
+
+```typescript
+// CORRECT — fallback to all targets when all are unhealthy
+const pool = candidates.length > 0 ? candidates : targets;
+
+// WRONG — silently returns '' when all unhealthy
+const pool = candidates; // could be empty
+```
+
+Why: An all-unhealthy state usually means the health check is misconfigured
+or the upstream is in a rolling restart. Returning real 5xx to clients is
+better than a gateway-generated 503, since it preserves the actual error
+signal and lets retry logic kick in.
+
+---
+
+## Rule 12 — Retry Must Never Fire on Body-Bearing Methods
+
+`ProxyService` retry is only allowed on `GET`, `HEAD`, and `OPTIONS`. Even if
+`retry.methods` includes `POST`, `PUT`, `PATCH`, or `DELETE`, the gateway must
+not retry because the request body cannot be safely replayed.
+
+```typescript
+// DEFAULT — safe methods only
+const retryMethods = retryConfig?.methods ?? ['GET', 'HEAD', 'OPTIONS'];
+const requestMethod = request.method.toUpperCase();
+const canRetry = maxAttempts > 1
+  && ['GET', 'HEAD', 'OPTIONS'].includes(requestMethod)
+  && retryMethods.includes(requestMethod);
+```
+
+Why: Retrying POST/PUT/PATCH/DELETE can cause double-writes (duplicate payments,
+double inserts) and the request body cannot be replayed without buffering. Until
+we implement explicit body buffering, retries must be limited to safe methods.
+
+---
+
+## Rule 13 — Health Check Unknown State Means Healthy
+
+When `UpstreamHealthService` has no recorded result for a target URL (e.g.
+between startup and the first check cycle), treat the target as healthy.
+
+```typescript
+getHealthyUrls(targets) {
+  for (const t of targets) {
+    const h = this.health.get(t.url);
+    if (!h || h.healthy) healthy.add(t.url); // unknown = healthy ✓
+  }
+}
+```
+
+Why: Starting a gateway with zero healthy targets (because checks haven't
+run yet) would drop all traffic in the first 10 seconds. Unknown targets
+should be tried; the health check will evict them if they fail.
+
+---
+
+## Rule 14 — CORS Preflight Must Not Reach Downstream
+
+`CorsMiddleware` must respond to `OPTIONS` requests with `204` and return —
+it must never call `next()` for preflight requests.
+
+```typescript
+if (req.method === 'OPTIONS') {
+  res.status(204).end(); // ← return here
+  return;               // never falls through to proxy
+}
+next();
+```
+
+Why: If a preflight reaches the downstream, CORS headers are set by both
+the gateway and the downstream. Double headers cause browser rejections.
+Some downstreams also don't handle OPTIONS and return 405.
+
+---
+
+## Rule 15 — IP Restriction Reads X-Forwarded-For First
+
+`IpRestrictionMiddleware` must prefer `X-Forwarded-For` over `req.ip`
+because the gateway sits behind a load balancer or reverse proxy.
+
+```typescript
+const fwd = req.headers['x-forwarded-for'];
+if (fwd) {
+  return (Array.isArray(fwd) ? fwd[0] : fwd).split(',')[0].trim();
+}
+return req.ip ?? null;
+```
+
+Why: `req.ip` is the IP of the last hop (the load balancer), not the
+client. Using it would block the load balancer or allow all clients.
+Only use `req.ip` as a fallback for local/direct deployments.

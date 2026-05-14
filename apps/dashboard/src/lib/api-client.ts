@@ -57,12 +57,17 @@ export type Period = '1h' | '24h' | '7d';
 export type CreateRouteDto = Pick<RouteEntity, 'method' | 'pathPattern' | 'serviceId' | 'authRequired'> & {
   rateLimitOverride?: number;
   enabled?: boolean;
+  retry?: RouteEntity['retry'];
+  maxBodyBytes?: number;
+  cors?: RouteEntity['cors'];
+  ipRestriction?: RouteEntity['ipRestriction'];
 };
 export type UpdateRouteDto = Partial<CreateRouteDto>;
-export type CreateServiceDto = Pick<ServiceEntity, 'name' | 'targetUrl'> & {
+export type CreateServiceDto = Pick<ServiceEntity, 'name' | 'targets'> & {
   healthCheckPath?: string;
   timeoutMs?: number;
 };
+export type UpdateServiceDto = Partial<CreateServiceDto>;
 
 export type CreateConsumerDto = { name: string; rateLimitTier?: string };
 export type CreateConsumerResult = ConsumerEntity & { apiKey: string };
@@ -176,6 +181,13 @@ export function getServices(tenantId: string): Promise<ServiceEntity[]> {
 export function createService(tenantId: string, dto: CreateServiceDto): Promise<ServiceEntity> {
   return request(`/tenants/${tenantId}/services`, {
     method: 'POST',
+    body: JSON.stringify(dto),
+  });
+}
+
+export function updateService(tenantId: string, id: string, dto: UpdateServiceDto): Promise<ServiceEntity> {
+  return request(`/tenants/${tenantId}/services/${id}`, {
+    method: 'PUT',
     body: JSON.stringify(dto),
   });
 }

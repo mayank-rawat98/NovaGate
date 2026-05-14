@@ -1,0 +1,74 @@
+# Dashboard — apps/dashboard
+
+Next.js 14 app-router frontend consumed by tenants. All data fetching goes through
+`src/lib/api-client.ts` which proxies to the admin-api. No direct DB or gateway
+connections.
+
+## Stack
+
+- Next.js 14 (app router, `'use client'` for all interactive pages)
+- Tailwind CSS — no component library, all classes inline
+- SWR for data fetching and auto-refresh
+- `lucide-react` icons only — do not add other icon packages
+
+## Pages
+
+| Route | File | Purpose |
+| ----- | ---- | ------- |
+| `/login` | `app/login/page.tsx` | Email + password auth |
+| `/register` | `app/register/page.tsx` | Tenant signup |
+| `/setup` | `app/setup/page.tsx` | 3-step onboarding wizard |
+| `/dashboard` | `app/dashboard/page.tsx` | Metrics overview, gateway status |
+| `/(dashboard)/services` | `app/(dashboard)/services/page.tsx` | Service CRUD with targets[] and health |
+| `/(dashboard)/routes` | `app/(dashboard)/routes/page.tsx` | Route CRUD with Phase 0 advanced fields |
+| `/(dashboard)/consumers` | `app/(dashboard)/consumers/page.tsx` | API key consumers |
+| `/(dashboard)/logs` | `app/(dashboard)/logs/page.tsx` | Filterable request logs |
+| `/(dashboard)/errors` | `app/(dashboard)/errors/page.tsx` | Error tracking and resolution |
+| `/(dashboard)/settings` | `app/(dashboard)/settings/page.tsx` | Tenant info, API key, Docker Compose |
+
+## API client (`src/lib/api-client.ts`)
+
+Single file. All types are imported from `@api-gateway/shared-types`. All HTTP calls
+go through the `request()` helper which attaches `Authorization: Bearer <token>` and
+handles 401 by redirecting to `/login`.
+
+**Change order is non-negotiable:** update `shared-types` first, then `api-client.ts`,
+then the page that uses it.
+
+## Services page
+
+- `targets` replaces the old `targetUrl` field (array of `{url, weight}`)
+- Dynamic target rows in the form: add/remove with weight input
+- Edit + delete both supported
+- Table shows first target URL + "+N more" for multi-target services
+- Health is per-service (from `health_snapshots`), not per-target
+
+## Routes page
+
+Form has two sections:
+
+**Basic** — method (GET/POST/PUT/PATCH/DELETE/ANY), path pattern, service, auth required,
+enabled toggle, rate limit override.
+
+**Advanced** (collapsible) — toggled by the "Advanced options" button:
+- Max body size (`maxBodyBytes` in bytes)
+- Retry policy (`attempts`, `on` status codes, `methods`)
+- CORS (`origins`, `methods`, `headers`, `credentials`, `maxAge`)
+- IP restriction (`allow` and `deny` CIDR lists, one per line)
+
+Feature badges (CORS, IP, Retry, size limit) appear in the routes table when the
+feature is configured on that route. A dimmed row means `enabled: false`.
+
+## Settings page
+
+Fetches `getTenant()` to display real tenant ID and config version.
+Gateway API key is derived from `tenant.id` and can be revealed/copied.
+Docker Compose template and env var reference are static.
+
+## Guardrails
+
+- Never call `process.env` outside `api-client.ts` (`NEXT_PUBLIC_ADMIN_API_URL`)
+- SWR `refreshInterval` is 30 000ms on all lists; do not go lower
+- All forms use controlled inputs — no uncontrolled refs
+- Slide-over panels are `w-[480px]` for simple forms, `w-[560px]` for forms with advanced sections
+- Never import from `apps/api` or `apps/admin-api` — only `@api-gateway/shared-types`

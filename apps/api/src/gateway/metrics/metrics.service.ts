@@ -39,6 +39,12 @@ export class MetricsService {
     labelNames: ['service'],
     registers: [this.registry],
   });
+  private readonly proxyRetriesTotal = new Counter({
+    name: 'gateway_proxy_retries_total',
+    help: 'Total proxy retry attempts',
+    labelNames: ['route', 'attempt'],
+    registers: [this.registry],
+  });
 
   incrementHttpRequests(method: string, path: string, statusCode: number): void {
     this.httpRequestsTotal.labels(method, path, String(statusCode)).inc();
@@ -66,6 +72,10 @@ export class MetricsService {
 
   incrementDownstreamTimeout(service: string): void {
     this.downstreamTimeoutTotal.labels(service).inc();
+  }
+
+  incrementProxyRetry(route: string, attempt: number): void {
+    this.proxyRetriesTotal.labels(route, String(attempt)).inc();
   }
 
   async getMetrics(): Promise<string> {

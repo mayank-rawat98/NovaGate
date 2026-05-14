@@ -31,15 +31,16 @@ describe('ServicesController', () => {
   });
 
   describe('POST create', () => {
-    it('inserts service and triggers config push', async () => {
+    it('inserts service with targets and triggers config push', async () => {
       const ds = mockDataSource();
       const cp = mockConfigPush();
       ds.query.mockResolvedValue([{ id: 'svc-new' }]);
       const { controller } = await build(ds, cp);
 
+      const targets = [{ url: 'http://users:8080', weight: 100 }];
       const result = await controller.create(TENANT, {
         name: 'user-service',
-        targetUrl: 'http://users:8080',
+        targets,
         healthCheckPath: '/health',
         timeoutMs: 5000,
       });
@@ -47,7 +48,30 @@ describe('ServicesController', () => {
       expect(result).toEqual({ id: 'svc-new' });
       expect(ds.query).toHaveBeenCalledWith(
         expect.stringContaining('INSERT'),
-        ['user-service', 'http://users:8080', '/health', 5000],
+        ['user-service', JSON.stringify(targets), '/health', 5000],
+      );
+      expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
+    });
+
+    it('inserts multi-target service for load balancing', async () => {
+      const ds = mockDataSource();
+      const cp = mockConfigPush();
+      ds.query.mockResolvedValue([{ id: 'svc-lb' }]);
+      const { controller } = await build(ds, cp);
+
+      const targets = [
+        { url: 'http://users-1:8080', weight: 50 },
+        { url: 'http://users-2:8080', weight: 50 },
+      ];
+      const result = await controller.create(TENANT, {
+        name: 'user-service',
+        targets,
+      });
+
+      expect(result).toEqual({ id: 'svc-lb' });
+      expect(ds.query).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT'),
+        ['user-service', JSON.stringify(targets), '/health', 10000],
       );
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });

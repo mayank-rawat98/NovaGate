@@ -23,8 +23,11 @@ apps/api/src/
       proxy.middleware.ts
       proxy.middleware.spec.ts
       proxy.controller.ts
-      proxy.service.ts
-      proxy.service.spec.ts
+      proxy.service.ts              -- forwards requests; retry loop; LB integration
+      load-balancer.service.ts      -- weighted round-robin target selection
+      cors.middleware.ts            -- per-route CORS headers + preflight
+      ip-restriction.middleware.ts  -- CIDR allow/deny per route
+      request-size-limit.middleware.ts -- Content-Length / stream byte cap
     logging/
       logging.interceptor.ts
       logging.interceptor.spec.ts
@@ -36,6 +39,20 @@ apps/api/src/
     health/
       health.controller.ts
       health.controller.spec.ts
+      upstream-health.service.ts    -- active health probing for service targets
+    config-manager/
+      gateway-config-manager.service.ts
+    connector/
+      control-plane-connector.service.ts
+    telemetry/
+      gateway-telemetry.service.ts
+    shared/
+      gateway-error.ts
+      gateway-exception.filter.ts
+      redis.tokens.ts
+      request-context.ts
+      route-matcher.ts              -- shared path+method matching used by middleware
+    services/                       -- legacy local service registry (unused by main flow)
     gateway.module.ts
   config/
     configuration.ts
@@ -67,22 +84,26 @@ do not dump files in the `gateway/` root.
 
 ## Middleware Pipeline Order
 
-The pipeline order in `main.ts` or `app.module.ts` must always be:
+The pipeline order in `GatewayModule.configure()` and global providers must always be:
 
 ```
-1. JwtMiddleware        (attaches req.user, never blocks)
-2. RateLimitGuard       (reads req.user to determine tier)
-3. LoggingInterceptor   (wraps full request lifecycle)
-4. ProxyMiddleware      (forwards to downstream)
+1. CorsMiddleware           (handles OPTIONS preflights before auth touches the request)
+2. IpRestrictionMiddleware  (blocks denied IPs early, before rate-limit work)
+3. JwtMiddleware            (attaches req.user, never blocks)
+4. RequestSizeLimitMiddleware (rejects oversized bodies before proxy reads the stream)
+5. RateLimitGuard           (reads req.user for tier — must run after JWT)
+6. LoggingInterceptor       (wraps full request lifecycle including downstream latency)
+7. ProxyMiddleware          (forwards to downstream via ProxyService)
 ```
 
 This order is load-bearing:
+- CORS must be first so `OPTIONS` preflights return 204 without auth or rate-limit processing
+- IP restriction before JWT avoids wasting JWT verification on blocked IPs
+- RequestSizeLimitMiddleware before proxy prevents reading oversized streams
 - RateLimitGuard must run after JwtMiddleware so it can read `req.user`
-  for authenticated tier assignment
-- LoggingInterceptor must wrap ProxyMiddleware so downstream latency
-  is captured in the log entry
-- Never insert a new middleware/guard/interceptor without specifying
-  its position relative to this pipeline in the PR description
+- LoggingInterceptor must wrap ProxyMiddleware so downstream latency is captured
+- Never insert a new middleware/guard/interceptor without specifying its position
+  relative to this pipeline in the PR description
 
 ---
 
@@ -165,6 +186,8 @@ Defined error codes:
 | `DOWNSTREAM_TIMEOUT`    | 504         | Proxy upstream did not respond within limit  |
 | `DOWNSTREAM_ERROR`      | 502         | Proxy upstream returned 5xx                  |
 | `SERVICE_NOT_FOUND`     | 404         | No downstream service matches the path       |
+| `IP_RESTRICTED`         | 403         | Request IP is in the route's deny list, or not in allow list |
+| `REQUEST_TOO_LARGE`     | 413         | Body exceeds route's `maxBodyBytes` limit    |
 
 Never return a raw NestJS `HttpException` message to clients — always
 map to the above shape via an exception filter.
