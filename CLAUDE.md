@@ -86,13 +86,13 @@ CUSTOMER'S VPS                         SAAS SERVERS
 
 ### Apps
 
-| App | Role |
-| --- | ---- |
-| `apps/api` | Gateway Docker image — deployed on customer VPS, no DB, talks only to control plane via outbound WebSocket |
+| App                  | Role                                                                                                                           |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `apps/api`           | Gateway Docker image — deployed on customer VPS, no DB, talks only to control plane via outbound WebSocket                     |
 | `apps/control-plane` | WebSocket server — accepts connections from all gateway instances, delivers config updates, ingests logs/health/errors/metrics |
-| `apps/admin-api` | REST API consumed only by the dashboard — CRUD for routes/services/consumers/tenants, analytics |
-| `apps/dashboard` | Next.js 14 tenant-facing UI — route management, observability, setup flow |
-| `libs/shared-types` | Single source of truth for TypeScript interfaces: WS message types, DB entities, `TenantConfig` |
+| `apps/admin-api`     | REST API consumed only by the dashboard — CRUD for routes/services/consumers/tenants, analytics                                |
+| `apps/dashboard`     | Next.js 14 tenant-facing UI — route management, observability, setup flow                                                      |
+| `libs/shared-types`  | Single source of truth for TypeScript interfaces: WS message types, DB entities, `TenantConfig`                                |
 
 **shared-types change order is non-negotiable:** update `shared-types` first, then the sender, then the receiver.
 
@@ -126,19 +126,22 @@ Types are in `libs/shared-types/src/lib/ws-messages.ts`. Key rules:
 ```text
 auth/           JwtMiddleware — attaches req.user, never blocks
 rate-limit/     RateLimitGuard + RateLimitService (Redis sliding window)
-proxy/          ProxyMiddleware + ProxyService + ProxyController
+proxy/          ProxyMiddleware + ProxyService + LoadBalancerService + ProxyController
 logging/        LoggingInterceptor
 metrics/        MetricsService (prom-client) + MetricsController (/metrics)
-health/         HealthController (/health)
+health/         HealthController (/health) + UpstreamHealthService (polls targets every 10s)
 config-manager/ GatewayConfigManagerService — in-memory config + Redis warm-start
 connector/      ControlPlaneConnectorService — WS lifecycle, reconnect, message buffer
 telemetry/      GatewayTelemetryService — batches telemetry to send upstream
 services/       ServicesModule — TypeORM entity + repository for service config
-shared/         GatewayExceptionFilter, GatewayError, redis.tokens, request-context
+plugins/        PluginRegistryService + PluginRunnerService + 7 built-in plugins
+shared/         GatewayExceptionFilter, GatewayError, redis.tokens, request-context, route-matcher
 ```
 
 **Middleware pipeline (order is load-bearing — do not reorder):**
-`JwtMiddleware` → `RateLimitGuard` → `LoggingInterceptor` → `ProxyMiddleware`
+`JwtMiddleware` → `RateLimitGuard` → `LoggingInterceptor` → `ProxyMiddleware` → `PluginRunner.onRequest` → downstream → `PluginRunner.onResponse`
+
+**Plugin system:** CORS, IP restriction, rate limiting, body size limits, header transforms, and basic-auth are all handled as **plugins** registered on `route.plugins[]`. The 7 built-in plugins are: `cors`, `ip-restriction`, `rate-limit`, `request-size-limit`, `request-transform`, `response-transform`, `basic-auth`. Plugins run in listed order; returning a `PluginShortCircuit` stops the chain.
 
 **Import rules:** `proxy`, `rate-limit`, `logging` may import from `metrics`. Nothing else imports from `proxy`, `logging`, or `auth` except `gateway.module.ts`. Shared state between subfolders belongs in `shared/`.
 
@@ -149,7 +152,20 @@ shared/         GatewayExceptionFilter, GatewayError, redis.tokens, request-cont
 - [`.github/instructions/gateway.instructions.md`](.github/instructions/gateway.instructions.md) — module conventions, naming rules, error response shape, allowed dependencies
 - [`AI_RULES_GATEWAY.md`](AI_RULES_GATEWAY.md) — correctness constraints (rate limiter, Redis fail-open, Prometheus cardinality, JWT error codes, request ID propagation)
 - [`REDIS_KEY_DESIGN.md`](REDIS_KEY_DESIGN.md) — Redis key schema (`cfg:default`, `rl:<clientKey>`)
-- [`apps/api/CLAUDE.md`](apps/api/CLAUDE.md) — gateway boot sequence and per-app guardrails
+- [`apps/api/CLAUDE.md`](apps/api/CLAUDE.md) — gateway boot sequence, plugin system, and per-app guardrails
+
+---
+
+## Code Quality Tooling
+
+**Commitlint** (`commitlint.config.js`) — enforces Conventional Commits on every commit message via the `commit-msg` Husky hook. Format: `type(scope): subject` (e.g. `feat(api): add rate-limit plugin`).
+
+**Husky pre-commit hook** (`.husky/pre-commit`) — runs on every commit:
+
+1. `npx prettier --write .` — formats all files in place
+2. `npm run check` — runs `nx run-many -t lint build typecheck --all`
+
+**CI** (`.github/workflows/ci.yml`) — triggers on push to `dev` (i.e. when a PR is merged). Runs `lint → typecheck → test → build` for all projects via `npx nx run-many`.
 
 ---
 
@@ -168,14 +184,14 @@ shared/         GatewayExceptionFilter, GatewayError, redis.tokens, request-cont
 
 ## Environment Variables (Gateway)
 
-| Variable | Default | Notes |
-| -------- | ------- | ----- |
-| `PORT` | `3000` | |
-| `REDIS_URL` | required | |
-| `JWT_SECRET` | required | min 32 chars |
-| `CONTROL_PLANE_URL` | required | `wss://…` |
-| `GATEWAY_API_KEY` | required | API key for WS auth |
-| `PROXY_TIMEOUT_MS` | `10000` | |
-| `RATE_LIMIT_WINDOW_MS` | `60000` | |
-| `RATE_LIMIT_UNAUTH_MAX` | `100` | |
-| `RATE_LIMIT_AUTH_MAX` | `500` | |
+| Variable                | Default  | Notes               |
+| ----------------------- | -------- | ------------------- |
+| `PORT`                  | `3000`   |                     |
+| `REDIS_URL`             | required |                     |
+| `JWT_SECRET`            | required | min 32 chars        |
+| `CONTROL_PLANE_URL`     | required | `wss://…`           |
+| `GATEWAY_API_KEY`       | required | API key for WS auth |
+| `PROXY_TIMEOUT_MS`      | `10000`  |                     |
+| `RATE_LIMIT_WINDOW_MS`  | `60000`  |                     |
+| `RATE_LIMIT_UNAUTH_MAX` | `100`    |                     |
+| `RATE_LIMIT_AUTH_MAX`   | `500`    |                     |

@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
 import { ServicesRepository } from './services.repository';
 import { ServiceEntity } from './entities/service.entity';
 
@@ -22,17 +26,24 @@ export class ServicesService {
     if (data.name) {
       const existing = await this.repository.findByName(data.name);
       if (existing) {
-        throw new ConflictException(`Service with name ${data.name} already exists`);
+        throw new ConflictException(
+          `Service with name ${data.name} already exists`,
+        );
       }
     }
     return this.repository.create(data);
   }
 
-  async updateService(id: string, data: Partial<ServiceEntity>): Promise<ServiceEntity> {
+  async updateService(
+    id: string,
+    data: Partial<ServiceEntity>,
+  ): Promise<ServiceEntity> {
     const service = await this.getService(id);
     const updated = await this.repository.update(id, { ...service, ...data });
     if (!updated) {
-      throw new NotFoundException(`Service with ID ${id} not found after update`);
+      throw new NotFoundException(
+        `Service with ID ${id} not found after update`,
+      );
     }
     return updated;
   }

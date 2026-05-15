@@ -2,8 +2,12 @@ import { Test } from '@nestjs/testing';
 import jwt from 'jsonwebtoken';
 import { ConfigService } from '@nestjs/config';
 import { JwtMiddleware } from './jwt.middleware';
+import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 import type { GatewayConfig } from '../../config/configuration';
-import type { RequestWithUser, ResponseWithLocals } from '../shared/request-context';
+import type {
+  RequestWithUser,
+  ResponseWithLocals,
+} from '../shared/request-context';
 
 const secret = 'test-secret-with-min-length-32-chars';
 
@@ -38,6 +42,10 @@ describe('JwtMiddleware', () => {
           provide: ConfigService,
           useValue: createConfigService(),
         },
+        {
+          provide: GatewayConfigManagerService,
+          useValue: { getConfig: jest.fn().mockReturnValue(null) },
+        },
       ],
     }).compile();
 
@@ -53,7 +61,10 @@ describe('JwtMiddleware', () => {
 
     expect(next).toHaveBeenCalled();
     expect(res.status).not.toHaveBeenCalled();
-    expect(res.setHeader).toHaveBeenCalledWith('X-Request-ID', expect.any(String));
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'X-Request-ID',
+      expect.any(String),
+    );
   });
 
   it('sets user for valid token', () => {

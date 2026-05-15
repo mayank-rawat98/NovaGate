@@ -33,22 +33,38 @@ export default function ForgotPasswordPage() {
       {sent ? (
         <div className="flex flex-col items-center gap-4 py-2">
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-green-100">
-            <svg className="h-6 w-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            <svg
+              className="h-6 w-6 text-green-600"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M5 13l4 4L19 7"
+              />
             </svg>
           </div>
           <p className="text-center text-sm text-gray-600">
-            If <span className="font-medium text-gray-900">{email}</span> is registered,
-            you'll receive a password reset link shortly.
+            If <span className="font-medium text-gray-900">{email}</span> is
+            registered, you'll receive a password reset link shortly.
           </p>
-          <Link href="/login" className="text-sm font-medium text-blue-600 hover:text-blue-500">
+          <Link
+            href="/login"
+            className="text-sm font-medium text-blue-600 hover:text-blue-500"
+          >
             Back to sign in
           </Link>
         </div>
       ) : (
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="email" className="text-sm font-medium text-gray-700">
+            <label
+              htmlFor="email"
+              className="text-sm font-medium text-gray-700"
+            >
               Email address
             </label>
             <input
@@ -63,7 +79,9 @@ export default function ForgotPasswordPage() {
             />
           </div>
           {error && (
-            <p className="rounded-lg bg-red-50 px-3 py-2.5 text-sm text-red-700">{error}</p>
+            <p className="rounded-lg bg-red-50 px-3 py-2.5 text-sm text-red-700">
+              {error}
+            </p>
           )}
           <button
             type="submit"
@@ -72,16 +90,36 @@ export default function ForgotPasswordPage() {
           >
             {loading ? (
               <>
-                <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                <svg
+                  className="h-4 w-4 animate-spin"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  />
                 </svg>
                 Sending…
               </>
-            ) : 'Send reset link'}
+            ) : (
+              'Send reset link'
+            )}
           </button>
           <p className="text-center text-sm text-gray-500">
-            <Link href="/login" className="font-medium text-blue-600 hover:text-blue-500">
+            <Link
+              href="/login"
+              className="font-medium text-blue-600 hover:text-blue-500"
+            >
               Back to sign in
             </Link>
           </p>

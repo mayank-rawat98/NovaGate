@@ -18,7 +18,9 @@ export class RateLimitService implements OnModuleDestroy {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly configService: ConfigService<GatewayConfig, true>,
   ) {
-    this.windowMs = this.configService.get('rateLimit', { infer: true }).windowMs;
+    this.windowMs = this.configService.get('rateLimit', {
+      infer: true,
+    }).windowMs;
   }
 
   async onModuleDestroy(): Promise<void> {

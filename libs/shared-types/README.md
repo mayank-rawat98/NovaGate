@@ -26,14 +26,14 @@ Represents a downstream service with one or more load-balanced targets.
 interface ServiceConfig {
   id: string;
   name: string;
-  targets: ServiceTarget[];   // one entry = single target; multiple = load balanced
+  targets: ServiceTarget[]; // one entry = single target; multiple = load balanced
   healthCheckPath: string;
   timeoutMs: number;
 }
 
 interface ServiceTarget {
   url: string;
-  weight: number;  // 1–100; equal weights = even distribution
+  weight: number; // 1–100; equal weights = even distribution
 }
 ```
 
@@ -44,8 +44,8 @@ An HTTP route with optional Phase 0 features.
 ```typescript
 interface RouteConfig {
   id: string;
-  method: string;        // HTTP verb or 'ANY'
-  pathPattern: string;   // prefix match, e.g. '/api/users'
+  method: string; // HTTP verb or 'ANY'
+  pathPattern: string; // prefix match, e.g. '/api/users'
   serviceId: string;
   authRequired: boolean;
   rateLimitOverride?: number;
@@ -53,9 +53,9 @@ interface RouteConfig {
 
   // Phase 0 — Load balancing & resilience
   retry?: {
-    attempts: number;    // number of retries (total attempts = attempts + 1)
-    on: number[];        // HTTP status codes to retry on, e.g. [502, 503, 504]
-    methods: string[];   // HTTP methods to retry, e.g. ['GET', 'HEAD', 'OPTIONS']
+    attempts: number; // number of retries (total attempts = attempts + 1)
+    on: number[]; // HTTP status codes to retry on, e.g. [502, 503, 504]
+    methods: string[]; // HTTP methods to retry, e.g. ['GET', 'HEAD', 'OPTIONS']
   };
 
   // Phase 0 — Request size limiting
@@ -63,17 +63,17 @@ interface RouteConfig {
 
   // Phase 0 — CORS
   cors?: {
-    origins: string[];         // ['*'] or specific domains
+    origins: string[]; // ['*'] or specific domains
     methods?: string[];
-    headers?: string[];        // extra allowed request headers
+    headers?: string[]; // extra allowed request headers
     credentials?: boolean;
-    maxAge?: number;           // preflight cache seconds, default 86400
+    maxAge?: number; // preflight cache seconds, default 86400
   };
 
   // Phase 0 — IP restriction
   ipRestriction?: {
-    allow?: string[];   // CIDR notation, e.g. ['10.0.0.0/8']
-    deny?: string[];    // deny takes precedence over allow
+    allow?: string[]; // CIDR notation, e.g. ['10.0.0.0/8']
+    deny?: string[]; // deny takes precedence over allow
   };
 }
 ```
@@ -92,13 +92,13 @@ Key flow:
 
 DB row shapes used by the dashboard API client and admin-api. These are **not** the same as config types — they represent what is stored in PostgreSQL, not what is sent to the gateway.
 
-| Entity | Notes |
-| ------ | ----- |
-| `TenantEntity` | Top-level tenant record |
-| `RouteEntity` | Route row in `tenant_<id>.routes`; includes Phase 0 optional fields (`retry`, `cors`, `ipRestriction`, `maxBodyBytes`) |
-| `ServiceEntity` | Service row in `tenant_<id>.services`; `targets` is JSONB array of `{url, weight}` |
-| `ConsumerEntity` | Consumer row in `tenant_<id>.consumers` |
-| `ApiKeyEntity` | API key in `public.api_keys` |
-| `PendingConfigUpdateEntity` | Queued update for offline gateways |
+| Entity                      | Notes                                                                                                                  |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `TenantEntity`              | Top-level tenant record                                                                                                |
+| `RouteEntity`               | Route row in `tenant_<id>.routes`; includes Phase 0 optional fields (`retry`, `cors`, `ipRestriction`, `maxBodyBytes`) |
+| `ServiceEntity`             | Service row in `tenant_<id>.services`; `targets` is JSONB array of `{url, weight}`                                     |
+| `ConsumerEntity`            | Consumer row in `tenant_<id>.consumers`                                                                                |
+| `ApiKeyEntity`              | API key in `public.api_keys`                                                                                           |
+| `PendingConfigUpdateEntity` | Queued update for offline gateways                                                                                     |
 
 `RouteEntity` Phase 0 fields mirror `RouteConfig` exactly — the dashboard sends these to the admin-api which stores them as JSONB; the admin-api assembles them into `TenantConfig` and pushes to the gateway unchanged.

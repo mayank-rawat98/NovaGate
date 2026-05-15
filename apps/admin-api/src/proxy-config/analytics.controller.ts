@@ -1,11 +1,4 @@
-import {
-  Controller,
-  Get,
-  Patch,
-  Param,
-  Query,
-  Body,
-} from '@nestjs/common';
+import { Controller, Get, Patch, Param, Query, Body } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { ConfigPushService } from '../config-push/config-push.service';
 
@@ -49,16 +42,33 @@ export class AnalyticsController {
     @Query('page') page = '1',
   ) {
     return this.withSchema(tenantId, async (manager) => {
-      const params: any[] = [];
+      const params: (string | number)[] = [];
       const conditions: string[] = [];
 
-      if (from) { params.push(from); conditions.push(`timestamp >= $${params.length}`); }
-      if (to) { params.push(to); conditions.push(`timestamp <= $${params.length}`); }
-      if (path) { params.push(`%${path}%`); conditions.push(`path ILIKE $${params.length}`); }
-      if (statusCode) { params.push(Number(statusCode)); conditions.push(`"statusCode" = $${params.length}`); }
-      if (consumerId) { params.push(consumerId); conditions.push(`"consumerId" = $${params.length}`); }
+      if (from) {
+        params.push(from);
+        conditions.push(`timestamp >= $${params.length}`);
+      }
+      if (to) {
+        params.push(to);
+        conditions.push(`timestamp <= $${params.length}`);
+      }
+      if (path) {
+        params.push(`%${path}%`);
+        conditions.push(`path ILIKE $${params.length}`);
+      }
+      if (statusCode) {
+        params.push(Number(statusCode));
+        conditions.push(`"statusCode" = $${params.length}`);
+      }
+      if (consumerId) {
+        params.push(consumerId);
+        conditions.push(`"consumerId" = $${params.length}`);
+      }
 
-      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const where = conditions.length
+        ? `WHERE ${conditions.join(' AND ')}`
+        : '';
       const offset = (Math.max(1, Number(page)) - 1) * 50;
       params.push(offset);
 
@@ -85,7 +95,7 @@ export class AnalyticsController {
     @Query('page') page = '1',
   ) {
     return this.withSchema(tenantId, async (manager) => {
-      const params: any[] = [];
+      const params: (string | number | boolean)[] = [];
       const conditions: string[] = [];
 
       if (resolved !== undefined) {
@@ -93,7 +103,9 @@ export class AnalyticsController {
         conditions.push(`resolved = $${params.length}`);
       }
 
-      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const where = conditions.length
+        ? `WHERE ${conditions.join(' AND ')}`
+        : '';
       const offset = (Math.max(1, Number(page)) - 1) * 50;
       params.push(offset);
 

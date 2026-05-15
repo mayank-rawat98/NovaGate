@@ -2,11 +2,10 @@ name: CI
 
 on:
   push:
-    branches: ['**']
-  pull_request:
+    branches: ['dev']
 
 jobs:
-  lint-and-test:
+  ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,11 +17,18 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
-      - run: npm install
+      - run: npm ci
 
-      - run: npx nx affected --target=lint --base=origin/main --head=HEAD
+      - name: Lint
+        run: npx nx run-many -t lint
 
-      - name: Run affected tests
-        run: npx nx affected --target=test --base=origin/main --head=HEAD
+      - name: Typecheck
+        run: npx nx run-many -t typecheck
+
+      - name: Test
+        run: npx nx run-many -t test
         env:
           CI: 'true'
+
+      - name: Build
+        run: npx nx run-many -t build

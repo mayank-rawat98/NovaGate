@@ -4,10 +4,12 @@ import { MarketingFooter } from '../../components/marketing-footer';
 
 export const metadata: Metadata = {
   title: 'Terms of Service',
-  description: 'NovaGate Terms of Service. Acceptable use policy, data ownership, availability during public beta, and liability limitations.',
+  description:
+    'NovaGate Terms of Service. Acceptable use policy, data ownership, availability during public beta, and liability limitations.',
   openGraph: {
     title: 'NovaGate Terms of Service',
-    description: 'Acceptable use, data ownership, availability, and liability terms for the NovaGate API gateway platform.',
+    description:
+      'Acceptable use, data ownership, availability, and liability terms for the NovaGate API gateway platform.',
     url: 'https://novagate.dev/terms',
   },
   alternates: { canonical: 'https://novagate.dev/terms' },
@@ -33,7 +35,7 @@ const SECTIONS = [
     content: [
       'You may use the service to proxy HTTP traffic to your own backend services.',
       'You may not use the service to proxy traffic for illegal purposes, to circumvent rate limits of third-party APIs, or to conduct denial-of-service attacks.',
-      'You may not attempt to access, modify, or interfere with other tenants\' data or infrastructure.',
+      "You may not attempt to access, modify, or interfere with other tenants' data or infrastructure.",
       'You are responsible for all activity that occurs under your account.',
     ],
   },
@@ -71,7 +73,7 @@ const SECTIONS = [
     title: '8. Limitation of Liability',
     content: [
       'The service is provided "as is" during the beta period. To the fullest extent permitted by law, NovaGate disclaims all warranties.',
-      'NovaGate\'s total liability to you for any claim arising from use of the service shall not exceed the amount you paid to NovaGate in the 12 months preceding the claim.',
+      "NovaGate's total liability to you for any claim arising from use of the service shall not exceed the amount you paid to NovaGate in the 12 months preceding the claim.",
     ],
   },
   {
@@ -97,9 +99,7 @@ const SECTIONS = [
   },
   {
     title: '12. Contact',
-    content: [
-      'For questions about these terms: legal@novagate.dev',
-    ],
+    content: ['For questions about these terms: legal@novagate.dev'],
   },
 ];
 
@@ -110,9 +110,20 @@ export default function TermsPage() {
 
       <div className="max-w-3xl mx-auto px-6 py-20">
         <div className="mb-12">
-          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-violet-500/50 mb-3">LEGAL</p>
-          <h1 className="text-4xl font-black tracking-tight mb-3">Terms of Service</h1>
-          <p className="text-white/35 text-sm">Last updated: {new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-violet-500/50 mb-3">
+            LEGAL
+          </p>
+          <h1 className="text-4xl font-black tracking-tight mb-3">
+            Terms of Service
+          </h1>
+          <p className="text-white/35 text-sm">
+            Last updated:{' '}
+            {new Date().toLocaleDateString('en-GB', {
+              day: 'numeric',
+              month: 'long',
+              year: 'numeric',
+            })}
+          </p>
         </div>
 
         <div className="space-y-10">
@@ -121,7 +132,10 @@ export default function TermsPage() {
               <h2 className="text-lg font-bold text-white mb-4">{sec.title}</h2>
               <ul className="space-y-3">
                 {sec.content.map((item, i) => (
-                  <li key={i} className="flex items-start gap-3 text-sm text-white/45 leading-relaxed">
+                  <li
+                    key={i}
+                    className="flex items-start gap-3 text-sm text-white/45 leading-relaxed"
+                  >
                     <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400/50" />
                     {item}
                   </li>

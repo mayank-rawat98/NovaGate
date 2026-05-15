@@ -37,7 +37,9 @@ export class ConfigPushService implements OnModuleInit {
          ON CONFLICT ("tenantId") DO UPDATE SET config = $2, "createdAt" = NOW()`,
         [tenantId, JSON.stringify({ config, version })],
       );
-      this.logger.warn(`Gateway offline for tenant ${tenantId} — stored pending update`);
+      this.logger.warn(
+        `Gateway offline for tenant ${tenantId} — stored pending update`,
+      );
     }
   }
 
@@ -56,7 +58,7 @@ export class ConfigPushService implements OnModuleInit {
       ),
     ]);
 
-    const services = serviceRows.map((row: any) => ({
+    const services = serviceRows.map((row: Record<string, unknown>) => ({
       id: row.id,
       name: row.name,
       targets: row.targets,

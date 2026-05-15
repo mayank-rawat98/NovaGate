@@ -46,15 +46,26 @@ export class MetricsService {
     registers: [this.registry],
   });
 
-  incrementHttpRequests(method: string, path: string, statusCode: number): void {
+  incrementHttpRequests(
+    method: string,
+    path: string,
+    statusCode: number,
+  ): void {
     this.httpRequestsTotal.labels(method, path, String(statusCode)).inc();
   }
 
-  observeRequestDuration(method: string, path: string, durationMs: number): void {
+  observeRequestDuration(
+    method: string,
+    path: string,
+    durationMs: number,
+  ): void {
     this.httpRequestDurationMs.labels(method, path).observe(durationMs);
   }
 
-  incrementRateLimitHit(clientIp: string, tier: 'authenticated' | 'unauthenticated'): void {
+  incrementRateLimitHit(
+    clientIp: string,
+    tier: 'authenticated' | 'unauthenticated',
+  ): void {
     this.rateLimitHitsTotal.labels(clientIp, tier).inc();
   }
 

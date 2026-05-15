@@ -13,18 +13,18 @@ connections.
 
 ## Pages
 
-| Route | File | Purpose |
-| ----- | ---- | ------- |
-| `/login` | `app/login/page.tsx` | Email + password auth |
-| `/register` | `app/register/page.tsx` | Tenant signup |
-| `/setup` | `app/setup/page.tsx` | 3-step onboarding wizard |
-| `/dashboard` | `app/dashboard/page.tsx` | Metrics overview, gateway status |
-| `/(dashboard)/services` | `app/(dashboard)/services/page.tsx` | Service CRUD with targets[] and health |
-| `/(dashboard)/routes` | `app/(dashboard)/routes/page.tsx` | Route CRUD with Phase 0 advanced fields |
-| `/(dashboard)/consumers` | `app/(dashboard)/consumers/page.tsx` | API key consumers |
-| `/(dashboard)/logs` | `app/(dashboard)/logs/page.tsx` | Filterable request logs |
-| `/(dashboard)/errors` | `app/(dashboard)/errors/page.tsx` | Error tracking and resolution |
-| `/(dashboard)/settings` | `app/(dashboard)/settings/page.tsx` | Tenant info, API key, Docker Compose |
+| Route                    | File                                 | Purpose                                                |
+| ------------------------ | ------------------------------------ | ------------------------------------------------------ |
+| `/login`                 | `app/login/page.tsx`                 | Email + password auth                                  |
+| `/register`              | `app/register/page.tsx`              | Tenant signup                                          |
+| `/setup`                 | `app/setup/page.tsx`                 | 3-step onboarding wizard                               |
+| `/dashboard`             | `app/dashboard/page.tsx`             | Metrics overview, gateway status                       |
+| `/(dashboard)/services`  | `app/(dashboard)/services/page.tsx`  | Service CRUD with targets[] and health                 |
+| `/(dashboard)/routes`    | `app/(dashboard)/routes/page.tsx`    | Route CRUD — three-tab panel: Basic, Advanced, Plugins |
+| `/(dashboard)/consumers` | `app/(dashboard)/consumers/page.tsx` | API key consumers                                      |
+| `/(dashboard)/logs`      | `app/(dashboard)/logs/page.tsx`      | Filterable request logs                                |
+| `/(dashboard)/errors`    | `app/(dashboard)/errors/page.tsx`    | Error tracking and resolution                          |
+| `/(dashboard)/settings`  | `app/(dashboard)/settings/page.tsx`  | Tenant info, API key, Docker Compose                   |
 
 ## API client (`src/lib/api-client.ts`)
 
@@ -45,19 +45,31 @@ then the page that uses it.
 
 ## Routes page
 
-Form has two sections:
+The slide-over panel is `w-[600px]` with three tabs:
 
-**Basic** — method (GET/POST/PUT/PATCH/DELETE/ANY), path pattern, service, auth required,
+**Basic tab** — method (GET/POST/PUT/PATCH/DELETE/ANY), path pattern, service, auth required,
 enabled toggle, rate limit override.
 
-**Advanced** (collapsible) — toggled by the "Advanced options" button:
+**Advanced tab** — optional fields:
+
 - Max body size (`maxBodyBytes` in bytes)
 - Retry policy (`attempts`, `on` status codes, `methods`)
 - CORS (`origins`, `methods`, `headers`, `credentials`, `maxAge`)
 - IP restriction (`allow` and `deny` CIDR lists, one per line)
 
-Feature badges (CORS, IP, Retry, size limit) appear in the routes table when the
-feature is configured on that route. A dimmed row means `enabled: false`.
+**Plugins tab** — per-route plugin pipeline (executed in listed order):
+
+- `cors` — origins, methods, headers, credentials, maxAge
+- `ip-restriction` — allow/deny CIDR lists
+- `rate-limit` — maxRequests, windowMs
+- `request-size-limit` — maxBytes
+- `request-transform` — addHeaders (JSON), removeHeaders (comma-list), addQueryParams (JSON), removeQueryParams (comma-list)
+- `response-transform` — addHeaders (JSON), removeHeaders (comma-list), statusOverride
+- `basic-auth` — realm, credentials (username:password pairs, one per line; stored as SHA-256 hashes)
+
+Only enabled plugins are serialized to `route.plugins[]`. If no plugins are enabled, the field is omitted.
+
+Feature badges in the routes table: CORS, IP, Retry, size limit, and a Plugins count badge when `plugins.length > 0`. A dimmed row means `enabled: false`.
 
 ## Settings page
 
@@ -65,10 +77,25 @@ Fetches `getTenant()` to display real tenant ID and config version.
 Gateway API key is derived from `tenant.id` and can be revealed/copied.
 Docker Compose template and env var reference are static.
 
+## Testing
+
+- Jest with `next/jest` transformer (`jest.config.cts`)
+- Specs live in `specs/` at the app root
+- Run via `npm exec nx test dashboard`
+- `next/navigation` must be mocked in every spec that renders a component using `useRouter` / `usePathname` / `useSearchParams`
+- `IntersectionObserver` must be mocked globally (not in jsdom)
+- `dir: __dirname` in `jest.config.cts` — do NOT change to `'./'`; Nx runs from workspace root so `process.cwd()` would resolve incorrectly
+
+## Typecheck
+
+- Runs `tsc --noEmit` via `nx:run-commands` target (defined in `package.json`)
+- Run via `npm exec nx typecheck dashboard`
+
 ## Guardrails
 
 - Never call `process.env` outside `api-client.ts` (`NEXT_PUBLIC_ADMIN_API_URL`)
 - SWR `refreshInterval` is 30 000ms on all lists; do not go lower
 - All forms use controlled inputs — no uncontrolled refs
-- Slide-over panels are `w-[480px]` for simple forms, `w-[560px]` for forms with advanced sections
+- Slide-over panels are `w-[480px]` for simple forms, `w-[560px]` for forms with advanced sections, `w-[600px]` for forms with multiple tabs (e.g. routes)
 - Never import from `apps/api` or `apps/admin-api` — only `@api-gateway/shared-types`
+- Branding is **NovaGate** — never use "GatewayX" anywhere

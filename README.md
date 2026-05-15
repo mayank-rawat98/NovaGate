@@ -43,14 +43,14 @@ CUSTOMER'S VPS                          SAAS SERVERS (novagate.dev)
 
 ## Tech Stack
 
-| Layer | Technology |
-| --- | --- |
-| Gateway (data plane) | NestJS 10, TypeScript, Redis (sliding-window rate limiter) |
-| Control plane | NestJS, WebSocket (`ws`), Redis pub/sub |
-| Admin API | NestJS, TypeORM, PostgreSQL (schema-per-tenant) |
-| Dashboard | Next.js 14 App Router, Tailwind CSS, SWR |
-| Infrastructure | Docker, Docker Compose, Nginx (SSL termination), GitHub Actions |
-| Monorepo | Nx 20 with project-boundary lint rules |
+| Layer                | Technology                                                      |
+| -------------------- | --------------------------------------------------------------- |
+| Gateway (data plane) | NestJS 10, TypeScript, Redis (sliding-window rate limiter)      |
+| Control plane        | NestJS, WebSocket (`ws`), Redis pub/sub                         |
+| Admin API            | NestJS, TypeORM, PostgreSQL (schema-per-tenant)                 |
+| Dashboard            | Next.js 14 App Router, Tailwind CSS, SWR                        |
+| Infrastructure       | Docker, Docker Compose, Nginx (SSL termination), GitHub Actions |
+| Monorepo             | Nx 20 with project-boundary lint rules                          |
 
 ---
 
@@ -68,6 +68,21 @@ Each tenant gets a dedicated schema (`tenant_<uuid>`) provisioned at signup. Que
 
 The control plane holds one persistent WebSocket per connected gateway. If a gateway is offline when a config change is published, the update is stored in `public.pending_config_updates` and replayed on reconnect. Gateways also persist config to local Redis so they can cold-start without a control-plane round-trip.
 
+### Plugin system — zero gateway.module.ts changes for new plugins
+
+Routes can carry an ordered `plugins[]` array. Each entry names a plugin and passes config:
+
+```json
+"plugins": [
+  { "name": "basic-auth", "config": { "realm": "API", "credentials": [{ "username": "admin", "passwordHash": "<sha256>" }] } },
+  { "name": "request-transform", "config": { "addHeaders": { "X-Tenant": "acme" } } }
+]
+```
+
+The registry resolves the ordered plugin list per route. The runner calls `onRequest` hooks sequentially — any plugin can short-circuit by returning a `PluginShortCircuit` response (status + headers + body). `onResponse` hooks run after the upstream responds; errors there are logged but never rethrow. Adding a new first-party plugin requires only adding the class to `plugins.module.ts` — zero changes to `gateway.module.ts`.
+
+**Built-in plugins:** `cors`, `ip-restriction`, `rate-limit`, `request-size-limit`, `request-transform`, `response-transform`, `basic-auth`.
+
 ### Nx module-boundary enforcement
 
 ESLint tags prevent circular imports between `proxy`, `rate-limit`, `logging`, and `auth` layers. Shared state lives in `shared/` — nothing imports from `proxy` except `gateway.module.ts`.
@@ -78,18 +93,27 @@ ESLint tags prevent circular imports between `proxy`, `rate-limit`, `logging`, a
 
 ```text
 apps/
-  api/            Gateway binary — Docker image deployed on customer VPS
-  control-plane/  WebSocket server — config push & telemetry ingestion
-  admin-api/      REST API for dashboard — CRUD, analytics, auth
-  dashboard/      Next.js 14 tenant UI — route management, observability
+  api/                    Gateway binary — Docker image deployed on customer VPS
+    src/gateway/
+      plugins/            Plugin system — registry, runner, and 7 built-in plugins
+        cors/             Per-route CORS headers and preflight handling
+        ip-restriction/   CIDR allow/deny per route
+        rate-limit/       Per-route Redis sliding-window rate limiter
+        request-size-limit/  Body size guard (Content-Length + stream cap)
+        request-transform/   Mutate headers and query params before upstream
+        response-transform/  Mutate response headers and override status code
+        basic-auth/       SHA-256 credential check with timing-safe comparison
+  control-plane/          WebSocket server — config push & telemetry ingestion
+  admin-api/              REST API for dashboard — CRUD, analytics, auth
+  dashboard/              Next.js 14 tenant UI — route management, observability
 libs/
-  shared-types/   Single source of truth for WS message types, DB entities, TenantConfig
+  shared-types/           Single source of truth for WS message types, DB entities, TenantConfig, GatewayPlugin interface
 docker/
   Dockerfile.api
   Dockerfile.dashboard
   nginx.conf
 .github/
-  workflows/deploy.yml   Build → push GHCR → SSH deploy on merge to main
+  workflows/deploy.yml    Build → push GHCR → SSH deploy on merge to main
 ```
 
 ---
@@ -99,13 +123,21 @@ docker/
 Request path (order is load-bearing):
 
 ```text
-JwtMiddleware → RateLimitGuard → LoggingInterceptor → ProxyMiddleware
+CorsMiddleware → IpRestrictionMiddleware → JwtMiddleware → RequestSizeLimitMiddleware
+  → [RateLimitGuard] → [LoggingInterceptor] → ProxyMiddleware
+                                                  ↓
+                                          PluginRunner.onRequest
+                                          → forward to downstream
+                                          → PluginRunner.onResponse
 ```
 
+- `CorsMiddleware` — handles OPTIONS preflights and applies per-route CORS headers before any auth runs
+- `IpRestrictionMiddleware` — blocks denied IPs (CIDR matching) early, before JWT work
 - `JwtMiddleware` — decodes JWT, attaches `req.user`; never blocks (auth is enforced per-route by the proxy)
+- `RequestSizeLimitMiddleware` — rejects oversized request bodies before the proxy reads the stream
 - `RateLimitGuard` — Redis sliding window; separate limits for authenticated vs unauthenticated clients
 - `LoggingInterceptor` — captures latency, status, `X-Request-ID`; batches logs for async upload
-- `ProxyMiddleware` — strips path prefix, forwards to downstream with timeout, streams response back
+- `ProxyMiddleware` → `ProxyService.forward()` — resolves and runs route plugins, then forwards to downstream with timeout and streams response back
 
 ---
 
@@ -149,7 +181,7 @@ services:
       REDIS_URL: redis://redis:6379
       JWT_SECRET: <min 32 chars>
     ports:
-      - "3000:3000"
+      - '3000:3000'
   redis:
     image: redis:7-alpine
 ```
@@ -176,14 +208,14 @@ Zero-downtime: Docker Compose restarts containers one at a time; Nginx keeps ser
 
 ## Gateway Environment Variables
 
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `GATEWAY_API_KEY` | required | Authenticates gateway with control plane |
-| `CONTROL_PLANE_URL` | required | `wss://ws.novagate.dev/gateway-ws` |
-| `REDIS_URL` | required | Local Redis for config cache and rate limiting |
-| `JWT_SECRET` | required | Min 32 chars — validates consumer tokens |
-| `PORT` | `3000` | HTTP port |
-| `PROXY_TIMEOUT_MS` | `10000` | Downstream request timeout |
-| `RATE_LIMIT_WINDOW_MS` | `60000` | Sliding window duration |
-| `RATE_LIMIT_UNAUTH_MAX` | `100` | Requests/window for unauthenticated clients |
-| `RATE_LIMIT_AUTH_MAX` | `500` | Requests/window for authenticated consumers |
+| Variable                | Default  | Notes                                          |
+| ----------------------- | -------- | ---------------------------------------------- |
+| `GATEWAY_API_KEY`       | required | Authenticates gateway with control plane       |
+| `CONTROL_PLANE_URL`     | required | `wss://ws.novagate.dev/gateway-ws`             |
+| `REDIS_URL`             | required | Local Redis for config cache and rate limiting |
+| `JWT_SECRET`            | required | Min 32 chars — validates consumer tokens       |
+| `PORT`                  | `3000`   | HTTP port                                      |
+| `PROXY_TIMEOUT_MS`      | `10000`  | Downstream request timeout                     |
+| `RATE_LIMIT_WINDOW_MS`  | `60000`  | Sliding window duration                        |
+| `RATE_LIMIT_UNAUTH_MAX` | `100`    | Requests/window for unauthenticated clients    |
+| `RATE_LIMIT_AUTH_MAX`   | `500`    | Requests/window for authenticated consumers    |

@@ -6,7 +6,9 @@ import { ConfigPushService } from '../config-push/config-push.service';
 const TENANT = 'aabbccdd-1111-2222-3333-444455556666';
 
 const mockDataSource = () => ({ query: jest.fn() });
-const mockConfigPush = () => ({ triggerUpdate: jest.fn().mockResolvedValue(undefined) });
+const mockConfigPush = () => ({
+  triggerUpdate: jest.fn().mockResolvedValue(undefined),
+});
 
 async function build(ds = mockDataSource(), cp = mockConfigPush()) {
   const module: TestingModule = await Test.createTestingModule({
@@ -27,7 +29,9 @@ describe('ConsumersController', () => {
       const { controller } = await build(ds);
       const result = await controller.findAll(TENANT);
       expect(result).toEqual([{ id: 'c-1', name: 'mobile-app' }]);
-      expect(ds.query).toHaveBeenCalledWith(expect.stringContaining('"revokedAt" IS NULL'));
+      expect(ds.query).toHaveBeenCalledWith(
+        expect.stringContaining('"revokedAt" IS NULL'),
+      );
     });
   });
 
@@ -35,20 +39,27 @@ describe('ConsumersController', () => {
     it('generates a key, stores hash, returns plaintext once, triggers push', async () => {
       const ds = mockDataSource();
       const cp = mockConfigPush();
-      ds.query.mockResolvedValue([{ id: 'c-new', name: 'web-app', rateLimitTier: 'authenticated' }]);
+      ds.query.mockResolvedValue([
+        { id: 'c-new', name: 'web-app', rateLimitTier: 'authenticated' },
+      ]);
       const { controller } = await build(ds, cp);
 
       const result = await controller.create(TENANT, { name: 'web-app' });
 
       expect(result.id).toBe('c-new');
-      expect(result.apiKey).toMatch(/^gw_aabbccdd-1111-2222-3333-444455556666_[0-9a-f]{32}$/);
+      expect(result.apiKey).toMatch(
+        /^gw_aabbccdd-1111-2222-3333-444455556666_[0-9a-f]{32}$/,
+      );
 
       const [sql, params] = ds.query.mock.calls[0];
       expect(sql).toContain('INSERT');
       expect(params[0]).toBe('web-app');
       // params[1] is the SHA-256 hash — verify it matches the returned key
       const crypto = require('crypto');
-      const expectedHash = crypto.createHash('sha256').update(result.apiKey).digest('hex');
+      const expectedHash = crypto
+        .createHash('sha256')
+        .update(result.apiKey)
+        .digest('hex');
       expect(params[1]).toBe(expectedHash);
 
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);

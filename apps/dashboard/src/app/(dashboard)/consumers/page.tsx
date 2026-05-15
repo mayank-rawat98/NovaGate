@@ -3,7 +3,11 @@
 import { useState } from 'react';
 import useSWR from 'swr';
 import { Plus, X, Copy, Check } from 'lucide-react';
-import { getConsumers, createConsumer, deleteConsumer } from '../../../lib/api-client';
+import {
+  getConsumers,
+  createConsumer,
+  deleteConsumer,
+} from '../../../lib/api-client';
 import { getTenantId } from '../../../lib/auth';
 import type { Consumer } from '../../../lib/api-client';
 
@@ -74,7 +78,10 @@ export default function ConsumersPage() {
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-gray-900">Consumers</h1>
         <button
-          onClick={() => { setName(''); setPanelOpen(true); }}
+          onClick={() => {
+            setName('');
+            setPanelOpen(true);
+          }}
           className="flex items-center gap-1.5 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
         >
           <Plus className="h-4 w-4" />
@@ -101,13 +108,19 @@ export default function ConsumersPage() {
           <tbody>
             {!consumers ? (
               <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-sm text-gray-400">
+                <td
+                  colSpan={4}
+                  className="px-4 py-8 text-center text-sm text-gray-400"
+                >
                   Loading…
                 </td>
               </tr>
             ) : consumers.length === 0 ? (
               <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-sm text-gray-400">
+                <td
+                  colSpan={4}
+                  className="px-4 py-8 text-center text-sm text-gray-400"
+                >
                   No consumers configured
                 </td>
               </tr>
@@ -115,9 +128,16 @@ export default function ConsumersPage() {
               consumers.map((consumer: Consumer) => {
                 const revoked = consumer.revokedAt != null;
                 return (
-                  <tr key={consumer.id} className="border-b border-gray-100 last:border-0">
-                    <td className="px-4 py-3 font-medium text-gray-900">{consumer.name}</td>
-                    <td className="px-4 py-3 text-gray-500">{formatDate(consumer.createdAt)}</td>
+                  <tr
+                    key={consumer.id}
+                    className="border-b border-gray-100 last:border-0"
+                  >
+                    <td className="px-4 py-3 font-medium text-gray-900">
+                      {consumer.name}
+                    </td>
+                    <td className="px-4 py-3 text-gray-500">
+                      {formatDate(consumer.createdAt)}
+                    </td>
                     <td className="px-4 py-3">
                       {revoked ? (
                         <span className="rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
@@ -134,7 +154,9 @@ export default function ConsumersPage() {
                         <div className="flex items-center justify-end">
                           {revokeTarget === consumer.id ? (
                             <div className="flex items-center gap-2">
-                              <span className="text-xs text-gray-600">Revoke access?</span>
+                              <span className="text-xs text-gray-600">
+                                Revoke access?
+                              </span>
                               <button
                                 onClick={handleRevoke}
                                 disabled={revoking}
@@ -171,10 +193,15 @@ export default function ConsumersPage() {
       {/* Add Consumer slide-over */}
       {panelOpen && (
         <div className="fixed inset-0 z-40 flex justify-end">
-          <div className="fixed inset-0 bg-black/20" onClick={() => setPanelOpen(false)} />
+          <div
+            className="fixed inset-0 bg-black/20"
+            onClick={() => setPanelOpen(false)}
+          />
           <div className="relative z-50 flex h-full w-80 flex-col bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
-              <h2 className="text-base font-semibold text-gray-900">Add Consumer</h2>
+              <h2 className="text-base font-semibold text-gray-900">
+                Add Consumer
+              </h2>
               <button
                 onClick={() => setPanelOpen(false)}
                 className="rounded p-1 text-gray-400 hover:bg-gray-100"
@@ -182,9 +209,14 @@ export default function ConsumersPage() {
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <form onSubmit={handleCreate} className="flex flex-1 flex-col gap-4 p-6">
+            <form
+              onSubmit={handleCreate}
+              className="flex flex-1 flex-col gap-4 p-6"
+            >
               <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700">Name</label>
+                <label className="text-sm font-medium text-gray-700">
+                  Name
+                </label>
                 <input
                   type="text"
                   required
@@ -222,7 +254,9 @@ export default function ConsumersPage() {
           <div className="fixed inset-0 bg-black/30" />
           <div className="relative z-50 w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-base font-semibold text-gray-900">Consumer API Key</h2>
+              <h2 className="text-base font-semibold text-gray-900">
+                Consumer API Key
+              </h2>
               <button
                 onClick={() => setNewKey(null)}
                 className="rounded p-1 text-gray-400 hover:bg-gray-100"
@@ -234,7 +268,9 @@ export default function ConsumersPage() {
               Save this key — it won&apos;t be shown again.
             </p>
             <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
-              <code className="flex-1 break-all font-mono text-xs text-gray-800">{newKey}</code>
+              <code className="flex-1 break-all font-mono text-xs text-gray-800">
+                {newKey}
+              </code>
               <button
                 onClick={copyKey}
                 className="shrink-0 rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"

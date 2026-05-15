@@ -8,7 +8,10 @@ import type { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import type { GatewayConfig } from '../../config/configuration';
 import { GatewayError } from '../shared/gateway-error';
-import type { RequestWithUser, ResponseWithLocals } from '../shared/request-context';
+import type {
+  RequestWithUser,
+  ResponseWithLocals,
+} from '../shared/request-context';
 import { MetricsService } from '../metrics/metrics.service';
 import { RateLimitService } from './rate-limit.service';
 
@@ -28,7 +31,9 @@ export class RateLimitGuard implements CanActivate {
     const clientIp = this.getClientIp(request);
     const userId = request.user?.id;
     const tier = userId ? 'authenticated' : 'unauthenticated';
-    const rateLimitConfig = this.configService.get('rateLimit', { infer: true });
+    const rateLimitConfig = this.configService.get('rateLimit', {
+      infer: true,
+    });
     const limit = userId ? rateLimitConfig.authMax : rateLimitConfig.unauthMax;
     const clientKey = userId ? `${userId}:${clientIp}` : clientIp;
 
@@ -39,13 +44,17 @@ export class RateLimitGuard implements CanActivate {
           result.retryAfterMs !== null
             ? Math.max(1, Math.ceil(result.retryAfterMs / 1000))
             : null;
-        if (result.retryAfterMs !== null) {
+        if (retryAfterSeconds !== null) {
           response.setHeader('Retry-After', retryAfterSeconds);
         }
         const start = response.locals?.requestStart ?? Date.now();
         const pathLabel = this.getPathLabel(request);
         this.metricsService.incrementRateLimitHit(clientIp, tier);
-        this.metricsService.incrementHttpRequests(request.method, pathLabel, 429);
+        this.metricsService.incrementHttpRequests(
+          request.method,
+          pathLabel,
+          429,
+        );
         this.metricsService.observeRequestDuration(
           request.method,
           pathLabel,
@@ -73,7 +82,10 @@ export class RateLimitGuard implements CanActivate {
       }
       return true;
     } catch (error) {
-      if (error instanceof GatewayError && error.code === 'RATE_LIMIT_EXCEEDED') {
+      if (
+        error instanceof GatewayError &&
+        error.code === 'RATE_LIMIT_EXCEEDED'
+      ) {
         throw error;
       }
       this.metricsService.incrementRateLimitRedisError();

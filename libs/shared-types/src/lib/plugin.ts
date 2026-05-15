@@ -1,0 +1,56 @@
+import type {
+  IncomingMessage,
+  ServerResponse,
+  OutgoingHttpHeaders,
+} from 'http';
+import type { RouteConfig, ServiceConfig } from './ws-messages.js';
+
+export interface PluginLogger {
+  info(msg: string, meta?: Record<string, unknown>): void;
+  warn(msg: string, meta?: Record<string, unknown>): void;
+  error(msg: string, meta?: Record<string, unknown>): void;
+}
+
+export interface PluginContext {
+  req: IncomingMessage & { user?: { id: string }; requestId: string };
+  res: ServerResponse;
+  route: RouteConfig;
+  service: ServiceConfig | undefined;
+  tenantId: string;
+  requestId: string;
+  logger: PluginLogger;
+}
+
+export interface PluginShortCircuit {
+  status: number;
+  headers?: Record<string, string>;
+  body: string | Buffer;
+}
+
+export interface GatewayPlugin {
+  name: string;
+
+  /**
+   * Called before the request reaches the proxy.
+   * Return a PluginShortCircuit to stop processing and send that response.
+   * Return void to pass to the next plugin.
+   */
+  onRequest?(ctx: PluginContext): Promise<PluginShortCircuit | void>;
+
+  /**
+   * Called after the downstream responds, before the response is sent to client.
+   * Can mutate response headers on ctx.res. Cannot change the body (streaming).
+   */
+  onResponse?(
+    ctx: PluginContext & { statusCode: number; headers: OutgoingHttpHeaders },
+  ): Promise<void>;
+
+  /**
+   * Called when the proxy encounters an error (timeout, 5xx after retries).
+   * Return a PluginShortCircuit to send a custom error response.
+   * Return void to let the default error handling proceed.
+   */
+  onError?(
+    ctx: PluginContext & { error: Error },
+  ): Promise<PluginShortCircuit | void>;
+}

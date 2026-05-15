@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import * as http from 'http';
 import * as https from 'https';
 import type { ServiceConfig, HealthSnapshot } from '@api-gateway/shared-types';
@@ -48,7 +53,9 @@ export class UpstreamHealthService implements OnModuleInit, OnModuleDestroy {
 
   getSnapshots(services: ServiceConfig[]): HealthSnapshot[] {
     return services.map((svc) => {
-      const targetStates = svc.targets.map((t) => this.health.get(t.url)).filter(Boolean) as TargetHealth[];
+      const targetStates = svc.targets
+        .map((t) => this.health.get(t.url))
+        .filter(Boolean) as TargetHealth[];
       const anyUnhealthy = targetStates.some((h) => !h.healthy);
       const anyHealthy = targetStates.some((h) => h.healthy);
       const status: HealthSnapshot['status'] = anyUnhealthy
@@ -57,14 +64,19 @@ export class UpstreamHealthService implements OnModuleInit, OnModuleDestroy {
           ? 'healthy'
           : 'unknown';
       const lastChecked = targetStates.reduce<Date | null>(
-        (latest, h) => (!latest || h.lastChecked > latest ? h.lastChecked : latest),
+        (latest, h) =>
+          !latest || h.lastChecked > latest ? h.lastChecked : latest,
         null,
       );
-      const errorMessage = anyUnhealthy ? targetStates.find((h) => !h.healthy)?.errorMessage : undefined;
+      const errorMessage = anyUnhealthy
+        ? targetStates.find((h) => !h.healthy)?.errorMessage
+        : undefined;
       return {
         serviceId: svc.id,
         status,
-        checkedAt: lastChecked ? lastChecked.toISOString() : new Date().toISOString(),
+        checkedAt: lastChecked
+          ? lastChecked.toISOString()
+          : new Date().toISOString(),
         errorMessage,
       } as HealthSnapshot;
     });
@@ -92,9 +104,16 @@ export class UpstreamHealthService implements OnModuleInit, OnModuleDestroy {
     };
 
     if (success) {
-      const successCount = current.healthy ? current.successCount : current.successCount + 1;
+      const successCount = current.healthy
+        ? current.successCount
+        : current.successCount + 1;
       const nowHealthy = current.healthy || successCount >= SUCCESS_THRESHOLD;
-      this.health.set(url, { healthy: nowHealthy, failCount: 0, successCount, lastChecked: new Date() });
+      this.health.set(url, {
+        healthy: nowHealthy,
+        failCount: 0,
+        successCount,
+        lastChecked: new Date(),
+      });
       if (!current.healthy && nowHealthy) {
         this.logger.log(`Target ${url} recovered`);
       }
@@ -110,7 +129,9 @@ export class UpstreamHealthService implements OnModuleInit, OnModuleDestroy {
         errorMessage: `Failed ${failCount} consecutive health check(s)`,
       });
       if (wasHealthy && nowUnhealthy) {
-        this.logger.warn(`Target ${url} marked unhealthy after ${failCount} consecutive failures`);
+        this.logger.warn(
+          `Target ${url} marked unhealthy after ${failCount} consecutive failures`,
+        );
       }
     }
   }

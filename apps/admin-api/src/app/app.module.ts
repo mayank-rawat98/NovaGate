@@ -18,6 +18,7 @@ import { HealthController } from './health.controller';
 import { AuthController } from '../auth/auth.controller';
 import { AuthService } from '../auth/auth.service';
 import { EmailService } from '../email/email.service';
+import { MigrationService } from '../database/migration.service';
 
 @Module({
   imports: [
@@ -42,6 +43,13 @@ import { EmailService } from '../email/email.service';
     ConsumersController,
     AnalyticsController,
   ],
-  providers: [AuthService, EmailService, TenantsService, TenantProvisioningService, ConfigPushService],
+  providers: [
+    AuthService,
+    EmailService,
+    TenantsService,
+    TenantProvisioningService,
+    ConfigPushService,
+    MigrationService,
+  ],
 })
 export class AppModule {}

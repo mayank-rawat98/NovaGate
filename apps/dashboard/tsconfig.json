@@ -29,6 +29,8 @@
     "src/**/*.tsx",
     "src/**/*.js",
     "src/**/*.jsx",
+    "specs/**/*.ts",
+    "specs/**/*.tsx",
     "../../apps/dashboard/.next/types/**/*.ts",
     "next-env.d.ts"
   ],
@@ -44,5 +46,10 @@
     "eslint.config.js",
     "eslint.config.cjs",
     "eslint.config.mjs"
+  ],
+  "references": [
+    {
+      "path": "../../libs/shared-types"
+    }
   ]
 }

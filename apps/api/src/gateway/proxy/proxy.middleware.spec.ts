@@ -1,3 +1,4 @@
+import * as http from 'http';
 import { Test } from '@nestjs/testing';
 import { EventEmitter } from 'events';
 import { createProxyMiddleware } from 'http-proxy-middleware';
@@ -8,16 +9,19 @@ import { MetricsService } from '../metrics/metrics.service';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 import { LoadBalancerService } from './load-balancer.service';
 import { UpstreamHealthService } from '../health/upstream-health.service';
+import { PluginRegistryService } from '../plugins/plugin-registry.service';
+import { PluginRunnerService } from '../plugins/plugin-runner.service';
 import type { TenantConfig } from '@api-gateway/shared-types';
-import type { RequestWithUser, ResponseWithLocals } from '../shared/request-context';
+import type {
+  RequestWithUser,
+  ResponseWithLocals,
+} from '../shared/request-context';
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
 }));
 
-type ProxyHandler = ReturnType<typeof createProxyMiddleware>;
-
-class MockResponse extends EventEmitter implements Partial<ResponseWithLocals> {
+class MockResponse extends EventEmitter {
   locals: ResponseWithLocals['locals'] = {};
   statusCode = 200;
   headersSent = false;
@@ -35,20 +39,20 @@ class MockResponse extends EventEmitter implements Partial<ResponseWithLocals> {
     this.statusCode = code;
     return this;
   }
-  json(body: unknown): this {
+  json(_body: unknown): this {
     this.headersSent = true;
     this.emit('finish');
     return this;
   }
-  end(body?: string): this {
+  end(_body?: string): this {
     if (!this.headersSent) this.headersSent = true;
     this.emit('finish');
     return this;
   }
-  once(event: string, listener: (...args: any[]) => void): this {
+  override once(event: string, listener: (...args: unknown[]) => void): this {
     return super.once(event, listener) as this;
   }
-  off(event: string, listener: (...args: any[]) => void): this {
+  override off(event: string, listener: (...args: unknown[]) => void): this {
     return super.off(event, listener) as this;
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -82,6 +86,17 @@ const TENANT_CONFIG: TenantConfig = {
 
 const mockConfigManager = () => ({
   getConfig: jest.fn().mockReturnValue(TENANT_CONFIG),
+  getTenantId: jest.fn().mockReturnValue('test-tenant'),
+});
+
+const mockPluginRegistry = () => ({
+  resolve: jest.fn().mockReturnValue([]),
+});
+
+const mockPluginRunner = () => ({
+  runOnRequest: jest.fn().mockResolvedValue(undefined),
+  runOnResponse: jest.fn().mockResolvedValue(undefined),
+  runOnError: jest.fn().mockResolvedValue(undefined),
 });
 
 const mockMetrics = () => ({
@@ -106,6 +121,8 @@ async function buildModule() {
       { provide: MetricsService, useValue: mockMetrics() },
       { provide: LoadBalancerService, useValue: mockLoadBalancer() },
       { provide: UpstreamHealthService, useValue: mockUpstreamHealth() },
+      { provide: PluginRegistryService, useValue: mockPluginRegistry() },
+      { provide: PluginRunnerService, useValue: mockPluginRunner() },
     ],
   }).compile();
 
@@ -121,10 +138,21 @@ describe('ProxyService', () => {
   });
 
   it('forwards GET request to the matching downstream target', async () => {
-    const handler: ProxyHandler = jest.fn((req, res, next) => {
-      const options = (createProxyMiddleware as jest.Mock).mock.calls[0][0] as Options;
+    const handler = jest.fn((req, res, _next) => {
+      const options = (createProxyMiddleware as jest.Mock).mock
+        .calls[0][0] as Options;
       const proxyReq = { setHeader: jest.fn() };
-      options.on?.proxyReq?.(proxyReq as any, req, res as any);
+      (
+        options.on?.proxyReq as unknown as (
+          a: unknown,
+          b: unknown,
+          c: unknown,
+        ) => void
+      )?.(
+        proxyReq as unknown as http.ClientRequest,
+        req,
+        res as unknown as http.ServerResponse,
+      );
 
       const proxyRes = {
         statusCode: 200,
@@ -134,7 +162,11 @@ describe('ProxyService', () => {
         },
         resume: jest.fn(),
       };
-      options.on?.proxyRes?.(proxyRes as any, req, res as any);
+      options.on?.proxyRes?.(
+        proxyRes as unknown as http.IncomingMessage,
+        req,
+        res as unknown as http.ServerResponse,
+      );
     });
     (createProxyMiddleware as jest.Mock).mockReturnValue(handler);
 
@@ -146,25 +178,30 @@ describe('ProxyService', () => {
       baseUrl: '',
       method: 'GET',
       path: '/service/hello',
-    } as RequestWithUser;
+    } as unknown as RequestWithUser;
     const res = new MockResponse();
 
-    await proxyService.forward(req as any, res as any);
+    await proxyService.forward(req, res as unknown as ResponseWithLocals);
 
     expect(res.statusCode).toBe(200);
-    expect((handler as jest.Mock).mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(handler.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
   it('returns 502 when downstream responds with 5xx', async () => {
-    const handler: ProxyHandler = jest.fn((req, res, next) => {
-      const options = (createProxyMiddleware as jest.Mock).mock.calls[0][0] as Options;
+    const handler = jest.fn((req, res, _next) => {
+      const options = (createProxyMiddleware as jest.Mock).mock
+        .calls[0][0] as Options;
       const proxyRes = {
         statusCode: 500,
         headers: {},
         pipe: jest.fn(),
         resume: jest.fn(),
       };
-      options.on?.proxyRes?.(proxyRes as any, req, res as any);
+      options.on?.proxyRes?.(
+        proxyRes as unknown as http.IncomingMessage,
+        req,
+        res as unknown as http.ServerResponse,
+      );
     });
     (createProxyMiddleware as jest.Mock).mockReturnValue(handler);
 
@@ -176,19 +213,20 @@ describe('ProxyService', () => {
       baseUrl: '',
       method: 'GET',
       path: '/service/error',
-    } as RequestWithUser;
+    } as unknown as RequestWithUser;
     const res = new MockResponse();
 
-    await proxyService.forward(req as any, res as any);
+    await proxyService.forward(req, res as unknown as ResponseWithLocals);
 
     expect(res.statusCode).toBe(502);
   });
 
   it('returns 504 on ETIMEDOUT proxy error', async () => {
-    const handler: ProxyHandler = jest.fn((req, res, next) => {
-      const options = (createProxyMiddleware as jest.Mock).mock.calls[0][0] as Options;
+    const handler = jest.fn((req, res, _next) => {
+      const options = (createProxyMiddleware as jest.Mock).mock
+        .calls[0][0] as Options;
       const error = Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' });
-      options.on?.error?.(error, req, res as any);
+      options.on?.error?.(error, req, res as unknown as http.ServerResponse);
     });
     (createProxyMiddleware as jest.Mock).mockReturnValue(handler);
 
@@ -200,10 +238,10 @@ describe('ProxyService', () => {
       baseUrl: '',
       method: 'GET',
       path: '/service/slow',
-    } as RequestWithUser;
+    } as unknown as RequestWithUser;
     const res = new MockResponse();
 
-    await proxyService.forward(req as any, res as any);
+    await proxyService.forward(req, res as unknown as ResponseWithLocals);
 
     expect(res.statusCode).toBe(504);
   });
@@ -220,19 +258,37 @@ describe('ProxyService', () => {
     };
     let callCount = 0;
 
-    const handler: ProxyHandler = jest.fn((req, res, next) => {
+    const handler = jest.fn((req, res, _next) => {
       const options = (createProxyMiddleware as jest.Mock).mock.calls[
         (createProxyMiddleware as jest.Mock).mock.calls.length - 1
       ][0] as Options;
       callCount++;
       if (callCount === 1) {
         // First attempt: simulate 502
-        const proxyRes = { statusCode: 502, headers: {}, pipe: jest.fn(), resume: jest.fn() };
-        options.on?.proxyRes?.(proxyRes as any, req, res as any);
+        const proxyRes = {
+          statusCode: 502,
+          headers: {},
+          pipe: jest.fn(),
+          resume: jest.fn(),
+        };
+        options.on?.proxyRes?.(
+          proxyRes as unknown as http.IncomingMessage,
+          req,
+          res as unknown as http.ServerResponse,
+        );
       } else {
         // Second attempt: success
-        const proxyRes = { statusCode: 200, headers: {}, pipe: (r: any) => r.end('ok'), resume: jest.fn() };
-        options.on?.proxyRes?.(proxyRes as any, req, res as any);
+        const proxyRes = {
+          statusCode: 200,
+          headers: {},
+          pipe: (r: { end: (s: string) => void }) => r.end('ok'),
+          resume: jest.fn(),
+        };
+        options.on?.proxyRes?.(
+          proxyRes as unknown as http.IncomingMessage,
+          req,
+          res as unknown as http.ServerResponse,
+        );
       }
     });
     (createProxyMiddleware as jest.Mock).mockReturnValue(handler);
@@ -241,10 +297,18 @@ describe('ProxyService', () => {
       providers: [
         ProxyService,
         ProxyMiddleware,
-        { provide: GatewayConfigManagerService, useValue: { getConfig: jest.fn().mockReturnValue(configWithRetry) } },
+        {
+          provide: GatewayConfigManagerService,
+          useValue: {
+            getConfig: jest.fn().mockReturnValue(configWithRetry),
+            getTenantId: jest.fn().mockReturnValue('test-tenant'),
+          },
+        },
         { provide: MetricsService, useValue: mockMetrics() },
         { provide: LoadBalancerService, useValue: mockLoadBalancer() },
         { provide: UpstreamHealthService, useValue: mockUpstreamHealth() },
+        { provide: PluginRegistryService, useValue: mockPluginRegistry() },
+        { provide: PluginRunnerService, useValue: mockPluginRunner() },
       ],
     }).compile();
 
@@ -256,10 +320,10 @@ describe('ProxyService', () => {
       baseUrl: '',
       method: 'GET',
       path: '/service/retry',
-    } as RequestWithUser;
+    } as unknown as RequestWithUser;
     const res = new MockResponse();
 
-    await proxyService.forward(req as any, res as any);
+    await proxyService.forward(req, res as unknown as ResponseWithLocals);
 
     expect(callCount).toBe(2);
     expect(res.statusCode).toBe(200);
@@ -274,10 +338,12 @@ describe('ProxyService', () => {
       baseUrl: '',
       method: 'GET',
       path: '/unknown',
-    } as RequestWithUser;
+    } as unknown as RequestWithUser;
     const res = new MockResponse();
 
-    await expect(proxyService.forward(req as any, res as any)).rejects.toMatchObject({
+    await expect(
+      proxyService.forward(req, res as unknown as ResponseWithLocals),
+    ).rejects.toMatchObject({
       code: 'SERVICE_NOT_FOUND',
     });
   });

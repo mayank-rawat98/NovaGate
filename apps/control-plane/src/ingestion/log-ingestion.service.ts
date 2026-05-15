@@ -47,7 +47,7 @@ export class LogIngestionService {
       await this.dataSource.query(`SET search_path TO public`);
     } catch (err) {
       this.logger.error(
-        `Failed to ingest logs for tenant ${tenantId}: ${err.message}`,
+        `Failed to ingest logs for tenant ${tenantId}: ${(err as Error).message}`,
       );
     }
   }
@@ -77,7 +77,7 @@ export class LogIngestionService {
       await this.dataSource.query(`SET search_path TO public`);
     } catch (err) {
       this.logger.error(
-        `Failed to ingest health for tenant ${tenantId}: ${err.message}`,
+        `Failed to ingest health for tenant ${tenantId}: ${(err as Error).message}`,
       );
     }
   }
@@ -107,12 +107,12 @@ export class LogIngestionService {
       await this.dataSource.query(`SET search_path TO public`);
     } catch (err) {
       this.logger.error(
-        `Failed to ingest errors for tenant ${tenantId}: ${err.message}`,
+        `Failed to ingest errors for tenant ${tenantId}: ${(err as Error).message}`,
       );
     }
   }
 
-  async ingestMetrics(tenantId: string, payload: any) {
+  async ingestMetrics(tenantId: string, payload: Record<string, unknown>) {
     try {
       const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
       await this.dataSource.query(`SET search_path TO ${schema}`);
@@ -126,7 +126,7 @@ export class LogIngestionService {
       await this.dataSource.query(`SET search_path TO public`);
     } catch (err) {
       this.logger.error(
-        `Failed to ingest metrics for tenant ${tenantId}: ${err.message}`,
+        `Failed to ingest metrics for tenant ${tenantId}: ${(err as Error).message}`,
       );
     }
   }

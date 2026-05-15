@@ -4,10 +4,12 @@ import { MarketingFooter } from '../../components/marketing-footer';
 
 export const metadata: Metadata = {
   title: 'Privacy Policy',
-  description: 'NovaGate Privacy Policy. We never see your API request or response payloads. Learn exactly what we collect, how we use it, and your data rights.',
+  description:
+    'NovaGate Privacy Policy. We never see your API request or response payloads. Learn exactly what we collect, how we use it, and your data rights.',
   openGraph: {
     title: 'NovaGate Privacy Policy',
-    description: 'We never see your API payloads. Learn what telemetry we collect and how your data is protected.',
+    description:
+      'We never see your API payloads. Learn what telemetry we collect and how your data is protected.',
     url: 'https://novagate.dev/privacy',
   },
   alternates: { canonical: 'https://novagate.dev/privacy' },
@@ -97,11 +99,24 @@ export default function PrivacyPage() {
 
       <div className="max-w-3xl mx-auto px-6 py-20">
         <div className="mb-12">
-          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-violet-500/50 mb-3">LEGAL</p>
-          <h1 className="text-4xl font-black tracking-tight mb-3">Privacy Policy</h1>
-          <p className="text-white/35 text-sm">Last updated: {new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-violet-500/50 mb-3">
+            LEGAL
+          </p>
+          <h1 className="text-4xl font-black tracking-tight mb-3">
+            Privacy Policy
+          </h1>
+          <p className="text-white/35 text-sm">
+            Last updated:{' '}
+            {new Date().toLocaleDateString('en-GB', {
+              day: 'numeric',
+              month: 'long',
+              year: 'numeric',
+            })}
+          </p>
           <p className="mt-4 text-white/45 text-sm leading-relaxed">
-            This policy describes how NovaGate (&quot;we&quot;, &quot;our&quot;, &quot;us&quot;) collects, uses, and protects information when you use novagate.dev and the NovaGate gateway service.
+            This policy describes how NovaGate (&quot;we&quot;, &quot;our&quot;,
+            &quot;us&quot;) collects, uses, and protects information when you
+            use novagate.dev and the NovaGate gateway service.
           </p>
         </div>
 
@@ -111,7 +126,10 @@ export default function PrivacyPage() {
               <h2 className="text-lg font-bold text-white mb-4">{sec.title}</h2>
               <ul className="space-y-3">
                 {sec.content.map((item, i) => (
-                  <li key={i} className="flex items-start gap-3 text-sm text-white/45 leading-relaxed">
+                  <li
+                    key={i}
+                    className="flex items-start gap-3 text-sm text-white/45 leading-relaxed"
+                  >
                     <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400/50" />
                     {item}
                   </li>

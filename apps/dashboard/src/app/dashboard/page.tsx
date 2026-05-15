@@ -1,7 +1,14 @@
 'use client';
 
 import useSWR from 'swr';
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts';
 import { GatewayStatusPill } from '../../components/gateway-status-pill';
 import {
   getGatewayStatus,
@@ -10,15 +17,26 @@ import {
   getLogs,
 } from '../../lib/api-client';
 import { getTenantId } from '../../lib/auth';
-import type { MetricsSnapshot, Route as RouteEntity } from '../../lib/api-client';
+import type {
+  MetricsSnapshot,
+  Route as RouteEntity,
+} from '../../lib/api-client';
 import type { RequestLog } from '../../lib/api-client';
 
 const SWR_OPTS = { refreshInterval: 30000 };
 
-function StatCard({ label, children }: { label: string; children: React.ReactNode }) {
+function StatCard({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">{label}</p>
+      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
+        {label}
+      </p>
       {children}
     </div>
   );
@@ -27,7 +45,6 @@ function StatCard({ label, children }: { label: string; children: React.ReactNod
 function Skeleton({ className = '' }: { className?: string }) {
   return <div className={`animate-pulse rounded bg-gray-100 ${className}`} />;
 }
-
 
 export default function DashboardPage() {
   const tenantId = getTenantId() ?? '';
@@ -56,22 +73,24 @@ export default function DashboardPage() {
     SWR_OPTS,
   );
 
-  const snapshots: MetricsSnapshot[] = Array.isArray(metrics1h) ? metrics1h : [];
-  const latestMetric: MetricsSnapshot | undefined = snapshots[snapshots.length - 1];
+  const snapshots: MetricsSnapshot[] = Array.isArray(metrics1h)
+    ? metrics1h
+    : [];
+  const latestMetric: MetricsSnapshot | undefined =
+    snapshots[snapshots.length - 1];
   const activeRoutes: RouteEntity[] = routes ?? [];
   const recentLogs: RequestLog[] = logsResult?.items ?? [];
 
   // Aggregate top 5 routes from recent logs
-  const routeStats = recentLogs.reduce<Record<string, { count: number; totalLatency: number }>>(
-    (acc, log) => {
-      const key = `${log.method} ${log.path}`;
-      if (!acc[key]) acc[key] = { count: 0, totalLatency: 0 };
-      acc[key].count++;
-      acc[key].totalLatency += log.responseTimeMs;
-      return acc;
-    },
-    {},
-  );
+  const routeStats = recentLogs.reduce<
+    Record<string, { count: number; totalLatency: number }>
+  >((acc, log) => {
+    const key = `${log.method} ${log.path}`;
+    if (!acc[key]) acc[key] = { count: 0, totalLatency: 0 };
+    acc[key].count++;
+    acc[key].totalLatency += log.responseTimeMs;
+    return acc;
+  }, {});
   const topRoutes = Object.entries(routeStats)
     .sort((a, b) => b[1].count - a[1].count)
     .slice(0, 5)
@@ -86,11 +105,15 @@ export default function DashboardPage() {
     });
 
   const sparklineData = snapshots.map((s) => ({
-    time: new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    time: new Date(s.timestamp).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    }),
     rps: s.rps,
   }));
 
-  const isDegraded = status?.online === true && (latestMetric?.errorRate ?? 0) > 0.05;
+  const isDegraded =
+    status?.online === true && (latestMetric?.errorRate ?? 0) > 0.05;
 
   return (
     <div className="p-8">
@@ -106,11 +129,14 @@ export default function DashboardPage() {
               <GatewayStatusPill online={status.online} degraded={isDegraded} />
               {status.online && latestMetric && (
                 <p className="text-xs text-gray-500">
-                  Config v{/* configVersion not in GatewayStatus type; placeholder */}—
+                  Config v
+                  {/* configVersion not in GatewayStatus type; placeholder */}—
                 </p>
               )}
               {!status.online && (
-                <p className="text-xs text-gray-500">Gateway is not connected</p>
+                <p className="text-xs text-gray-500">
+                  Gateway is not connected
+                </p>
               )}
             </div>
           )}
@@ -159,13 +185,16 @@ export default function DashboardPage() {
             <div className="mt-2">
               <p
                 className={`text-2xl font-bold ${
-                  (latestMetric.errorRate ?? 0) > 0.05 ? 'text-red-600' : 'text-gray-900'
+                  (latestMetric.errorRate ?? 0) > 0.05
+                    ? 'text-red-600'
+                    : 'text-gray-900'
                 }`}
               >
                 {((latestMetric.errorRate ?? 0) * 100).toFixed(1)}%
               </p>
               <p className="text-xs text-gray-500">
-                p95 {latestMetric.p95Ms ?? 0}ms · p99 {latestMetric.p99Ms ?? 0}ms
+                p95 {latestMetric.p95Ms ?? 0}ms · p99 {latestMetric.p99Ms ?? 0}
+                ms
               </p>
             </div>
           )}
@@ -177,7 +206,9 @@ export default function DashboardPage() {
             <Skeleton className="h-8 w-12 mt-2" />
           ) : (
             <div className="mt-2">
-              <p className="text-2xl font-bold text-gray-900">{activeRoutes.length}</p>
+              <p className="text-2xl font-bold text-gray-900">
+                {activeRoutes.length}
+              </p>
               <p className="text-xs text-gray-500">configured routes</p>
             </div>
           )}
@@ -186,7 +217,9 @@ export default function DashboardPage() {
 
       {/* Top 5 Routes */}
       <div className="mt-8">
-        <h2 className="mb-3 text-base font-semibold text-gray-900">Top 5 Routes</h2>
+        <h2 className="mb-3 text-base font-semibold text-gray-900">
+          Top 5 Routes
+        </h2>
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
           <table className="w-full text-sm">
             <thead>
@@ -208,21 +241,33 @@ export default function DashboardPage() {
             <tbody>
               {topRoutes.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-4 py-8 text-center text-sm text-gray-400">
+                  <td
+                    colSpan={4}
+                    className="px-4 py-8 text-center text-sm text-gray-400"
+                  >
                     No request data yet
                   </td>
                 </tr>
               ) : (
                 topRoutes.map(({ method, path, count, avgLatency }) => (
-                  <tr key={`${method}-${path}`} className="border-b border-gray-100 last:border-0">
+                  <tr
+                    key={`${method}-${path}`}
+                    className="border-b border-gray-100 last:border-0"
+                  >
                     <td className="px-4 py-3">
                       <span className="inline-block rounded bg-gray-100 px-2 py-0.5 font-mono text-xs font-medium">
                         {method}
                       </span>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-gray-700">{path}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-gray-700">{count}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-gray-700">{avgLatency}ms</td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-700">
+                      {path}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums text-gray-700">
+                      {count}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums text-gray-700">
+                      {avgLatency}ms
+                    </td>
                   </tr>
                 ))
               )}

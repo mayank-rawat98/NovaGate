@@ -2,8 +2,8 @@
 
 ## Rate Limiting Keys
 
-| Purpose | Key Pattern | TTL |
-| --- | --- | --- |
+| Purpose                 | Key Pattern      | TTL                              |
+| ----------------------- | ---------------- | -------------------------------- |
 | Sliding window counters | `rl:{clientKey}` | `windowMs` rounded up to seconds |
 
 ### clientKey

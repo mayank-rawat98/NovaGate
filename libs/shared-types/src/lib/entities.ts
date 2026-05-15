@@ -31,18 +31,7 @@ export interface RouteEntity {
     on: number[];
     methods: string[];
   };
-  maxBodyBytes?: number;
-  cors?: {
-    origins: string[];
-    methods?: string[];
-    headers?: string[];
-    credentials?: boolean;
-    maxAge?: number;
-  };
-  ipRestriction?: {
-    allow?: string[];
-    deny?: string[];
-  };
+  plugins?: Array<{ name: string; config: Record<string, unknown> }>;
   createdAt: string;
   deletedAt?: string;
 }

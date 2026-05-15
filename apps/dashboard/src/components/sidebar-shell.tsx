@@ -29,12 +29,22 @@ const NAV_ITEMS = [
 ];
 
 // Paths that require authentication — everything else is public
-const PROTECTED_PATHS = ['/dashboard', '/routes', '/services', '/logs', '/errors', '/consumers', '/settings'];
+const PROTECTED_PATHS = [
+  '/dashboard',
+  '/routes',
+  '/services',
+  '/logs',
+  '/errors',
+  '/consumers',
+  '/settings',
+];
 
 export function SidebarShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const isPublic = !PROTECTED_PATHS.some((p) => pathname === p || pathname.startsWith(p + '/'));
+  const isPublic = !PROTECTED_PATHS.some(
+    (p) => pathname === p || pathname.startsWith(p + '/'),
+  );
 
   useEffect(() => {
     if (!isPublic && !isAuthenticated()) {
@@ -45,7 +55,7 @@ export function SidebarShell({ children }: { children: React.ReactNode }) {
   const tenantId = getTenantId();
   const { data: status } = useSWR(
     tenantId && !isPublic ? `gateway-status-${tenantId}` : null,
-    () => getGatewayStatus(tenantId!),
+    () => getGatewayStatus(tenantId as string),
     { refreshInterval: 10000 },
   );
 
@@ -60,8 +70,13 @@ export function SidebarShell({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen bg-gray-50">
       <aside className="flex w-56 flex-col border-r border-gray-200 bg-white">
         <div className="flex flex-col gap-2 border-b border-gray-200 px-4 py-4">
-          <span className="text-sm font-semibold text-gray-900">API Gateway</span>
-          <GatewayStatusPill online={status?.online ?? false} degraded={false} />
+          <span className="text-sm font-semibold text-gray-900">
+            API Gateway
+          </span>
+          <GatewayStatusPill
+            online={status?.online ?? false}
+            degraded={false}
+          />
         </div>
         <nav className="flex-1 overflow-y-auto px-2 py-3">
           {NAV_ITEMS.map(({ href, label, icon: Icon }) => {

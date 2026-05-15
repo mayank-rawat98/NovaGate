@@ -22,7 +22,7 @@ const key = `rl:${clientKey}`;
 
 pipeline.zremrangebyscore(key, '-inf', windowStart); // evict old entries
 pipeline.zadd(key, now, `${now}-${Math.random()}`); // record this request
-pipeline.zcard(key);                                  // count in window
+pipeline.zcard(key); // count in window
 pipeline.expire(key, Math.ceil(this.windowMs / 1000)); // auto-cleanup
 
 const results = await pipeline.exec();
@@ -137,7 +137,7 @@ UUID v4 generated at the gateway. This header must:
 4. Be included in the gateway's response to the client
 
 ```typescript
-const requestId = req.headers['x-request-id'] as string ?? uuidv4();
+const requestId = (req.headers['x-request-id'] as string) ?? uuidv4();
 req.headers['x-request-id'] = requestId;
 res.setHeader('X-Request-ID', requestId);
 ```
@@ -154,9 +154,7 @@ When stripping the path prefix before forwarding to downstream:
 
 ```typescript
 // CORRECT — exact prefix match
-const stripped = req.path.startsWith(prefix + '/')
-  ? req.path.slice(prefix.length)
-  : req.path;
+const stripped = req.path.startsWith(prefix + '/') ? req.path.slice(prefix.length) : req.path;
 
 // WRONG — substring replace, can match in the middle of a path
 const stripped = req.path.replace(prefix, '');
@@ -264,9 +262,7 @@ not retry because the request body cannot be safely replayed.
 // DEFAULT — safe methods only
 const retryMethods = retryConfig?.methods ?? ['GET', 'HEAD', 'OPTIONS'];
 const requestMethod = request.method.toUpperCase();
-const canRetry = maxAttempts > 1
-  && ['GET', 'HEAD', 'OPTIONS'].includes(requestMethod)
-  && retryMethods.includes(requestMethod);
+const canRetry = maxAttempts > 1 && ['GET', 'HEAD', 'OPTIONS'].includes(requestMethod) && retryMethods.includes(requestMethod);
 ```
 
 Why: Retrying POST/PUT/PATCH/DELETE can cause double-writes (duplicate payments,
@@ -303,7 +299,7 @@ it must never call `next()` for preflight requests.
 ```typescript
 if (req.method === 'OPTIONS') {
   res.status(204).end(); // ← return here
-  return;               // never falls through to proxy
+  return; // never falls through to proxy
 }
 next();
 ```

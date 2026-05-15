@@ -54,10 +54,16 @@ export default function LoginPage() {
         </div>
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
-            <label htmlFor="password" className="text-sm font-medium text-white/70">
+            <label
+              htmlFor="password"
+              className="text-sm font-medium text-white/70"
+            >
               Password
             </label>
-            <Link href="/forgot-password" className="text-xs font-medium text-violet-400 hover:text-violet-300 transition-colors">
+            <Link
+              href="/forgot-password"
+              className="text-xs font-medium text-violet-400 hover:text-violet-300 transition-colors"
+            >
               Forgot password?
             </Link>
           </div>
@@ -77,18 +83,38 @@ export default function LoginPage() {
         >
           {loading ? (
             <>
-              <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              <svg
+                className="h-4 w-4 animate-spin"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                />
               </svg>
               Signing in…
             </>
-          ) : 'Sign in'}
+          ) : (
+            'Sign in'
+          )}
         </button>
       </form>
       <p className="mt-6 text-center text-sm text-white/35">
         No account?{' '}
-        <Link href="/register" className="font-medium text-violet-400 hover:text-violet-300 transition-colors">
+        <Link
+          href="/register"
+          className="font-medium text-violet-400 hover:text-violet-300 transition-colors"
+        >
           Create one
         </Link>
       </p>

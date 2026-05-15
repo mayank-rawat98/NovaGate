@@ -26,9 +26,7 @@ export class TenantProvisioningService {
           "rateLimitOverride" INTEGER,
           enabled BOOLEAN DEFAULT true,
           retry JSONB,
-          "maxBodyBytes" INTEGER,
-          cors JSONB,
-          "ipRestriction" JSONB,
+          plugins JSONB,
           "createdAt" TIMESTAMP DEFAULT NOW(),
           "deletedAt" TIMESTAMP
         )
