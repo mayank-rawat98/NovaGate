@@ -6,7 +6,9 @@ import { ConfigPushService } from '../config-push/config-push.service';
 const TENANT = 'aabbccdd-1111-2222-3333-444455556666';
 
 const mockDataSource = () => ({ query: jest.fn() });
-const mockConfigPush = () => ({ triggerUpdate: jest.fn().mockResolvedValue(undefined) });
+const mockConfigPush = () => ({
+  triggerUpdate: jest.fn().mockResolvedValue(undefined),
+});
 
 async function build(ds = mockDataSource(), cp = mockConfigPush()) {
   const module: TestingModule = await Test.createTestingModule({
@@ -46,10 +48,12 @@ describe('ServicesController', () => {
       });
 
       expect(result).toEqual({ id: 'svc-new' });
-      expect(ds.query).toHaveBeenCalledWith(
-        expect.stringContaining('INSERT'),
-        ['user-service', JSON.stringify(targets), '/health', 5000],
-      );
+      expect(ds.query).toHaveBeenCalledWith(expect.stringContaining('INSERT'), [
+        'user-service',
+        JSON.stringify(targets),
+        '/health',
+        5000,
+      ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
 
@@ -69,10 +73,12 @@ describe('ServicesController', () => {
       });
 
       expect(result).toEqual({ id: 'svc-lb' });
-      expect(ds.query).toHaveBeenCalledWith(
-        expect.stringContaining('INSERT'),
-        ['user-service', JSON.stringify(targets), '/health', 10000],
-      );
+      expect(ds.query).toHaveBeenCalledWith(expect.stringContaining('INSERT'), [
+        'user-service',
+        JSON.stringify(targets),
+        '/health',
+        10000,
+      ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
   });
@@ -84,7 +90,9 @@ describe('ServicesController', () => {
       ds.query.mockResolvedValue([{ id: 'svc-1', timeoutMs: 3000 }]);
       const { controller } = await build(ds, cp);
 
-      const result = await controller.update(TENANT, 'svc-1', { timeoutMs: 3000 });
+      const result = await controller.update(TENANT, 'svc-1', {
+        timeoutMs: 3000,
+      });
 
       expect(result).toEqual({ id: 'svc-1', timeoutMs: 3000 });
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);

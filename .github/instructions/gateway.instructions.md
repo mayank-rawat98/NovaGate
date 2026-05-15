@@ -97,6 +97,7 @@ The pipeline order in `GatewayModule.configure()` and global providers must alwa
 ```
 
 This order is load-bearing:
+
 - CORS must be first so `OPTIONS` preflights return 204 without auth or rate-limit processing
 - IP restriction before JWT avoids wasting JWT verification on blocked IPs
 - RequestSizeLimitMiddleware before proxy prevents reading oversized streams
@@ -109,15 +110,15 @@ This order is load-bearing:
 
 ## Naming Conventions
 
-| Concern         | File suffix              | Class suffix         |
-|-----------------|--------------------------|----------------------|
-| Guard           | `.guard.ts`              | `Guard`              |
-| Middleware      | `.middleware.ts`         | `Middleware`         |
-| Interceptor     | `.interceptor.ts`        | `Interceptor`        |
-| Service         | `.service.ts`            | `Service`            |
-| Controller      | `.controller.ts`         | `Controller`         |
-| Config schema   | `.schema.ts`             | `Schema`             |
-| Unit test       | `.spec.ts`               | (same as source)     |
+| Concern       | File suffix       | Class suffix     |
+| ------------- | ----------------- | ---------------- |
+| Guard         | `.guard.ts`       | `Guard`          |
+| Middleware    | `.middleware.ts`  | `Middleware`     |
+| Interceptor   | `.interceptor.ts` | `Interceptor`    |
+| Service       | `.service.ts`     | `Service`        |
+| Controller    | `.controller.ts`  | `Controller`     |
+| Config schema | `.schema.ts`      | `Schema`         |
+| Unit test     | `.spec.ts`        | (same as source) |
 
 - All file names are kebab-case
 - All class names are PascalCase
@@ -157,6 +158,7 @@ export default () => ({
 ```
 
 Rules:
+
 - Never read `process.env` directly outside of `configuration.ts`
 - Never hardcode threshold numbers, URLs, or secrets in guard/service/middleware files
 - Adding a new config key requires a corresponding Joi rule in `configuration.schema.ts`
@@ -178,16 +180,16 @@ follow this exact shape:
 ```
 
 Defined error codes:
-| Code                    | HTTP status | Trigger                                      |
+| Code | HTTP status | Trigger |
 |-------------------------|-------------|----------------------------------------------|
-| `TOKEN_EXPIRED`         | 401         | JWT present but expired                      |
-| `TOKEN_INVALID`         | 401         | JWT present but malformed or bad signature   |
-| `RATE_LIMIT_EXCEEDED`   | 429         | Sliding window limit hit                     |
-| `DOWNSTREAM_TIMEOUT`    | 504         | Proxy upstream did not respond within limit  |
-| `DOWNSTREAM_ERROR`      | 502         | Proxy upstream returned 5xx                  |
-| `SERVICE_NOT_FOUND`     | 404         | No downstream service matches the path       |
-| `IP_RESTRICTED`         | 403         | Request IP is in the route's deny list, or not in allow list |
-| `REQUEST_TOO_LARGE`     | 413         | Body exceeds route's `maxBodyBytes` limit    |
+| `TOKEN_EXPIRED` | 401 | JWT present but expired |
+| `TOKEN_INVALID` | 401 | JWT present but malformed or bad signature |
+| `RATE_LIMIT_EXCEEDED` | 429 | Sliding window limit hit |
+| `DOWNSTREAM_TIMEOUT` | 504 | Proxy upstream did not respond within limit |
+| `DOWNSTREAM_ERROR` | 502 | Proxy upstream returned 5xx |
+| `SERVICE_NOT_FOUND` | 404 | No downstream service matches the path |
+| `IP_RESTRICTED` | 403 | Request IP is in the route's deny list, or not in allow list |
+| `REQUEST_TOO_LARGE` | 413 | Body exceeds route's `maxBodyBytes` limit |
 
 Never return a raw NestJS `HttpException` message to clients — always
 map to the above shape via an exception filter.
@@ -197,6 +199,7 @@ map to the above shape via an exception filter.
 ## Dependency Rules
 
 Allowed production dependencies (do not add others without discussion):
+
 - `@nestjs/*` — core framework
 - `ioredis` — Redis client (not `redis` npm package)
 - `prom-client` — Prometheus metrics
@@ -206,6 +209,7 @@ Allowed production dependencies (do not add others without discussion):
 - `uuid` — request ID generation
 
 Allowed test dependencies:
+
 - `ioredis-mock` — Redis mock for unit tests
 - `nock` — HTTP mock for downstream services
 - `autocannon` — load testing (CLI only, not imported in code)

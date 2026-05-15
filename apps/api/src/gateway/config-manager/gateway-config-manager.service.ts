@@ -21,7 +21,12 @@ export class GatewayConfigManagerService {
     this._configCachedAt = new Date();
     this._configSource = 'live';
 
-    await this.redis.set('cfg:default', JSON.stringify({ config, version, cachedAt: this._configCachedAt }), 'EX', 7 * 24 * 60 * 60);
+    await this.redis.set(
+      'cfg:default',
+      JSON.stringify({ config, version, cachedAt: this._configCachedAt }),
+      'EX',
+      7 * 24 * 60 * 60,
+    );
 
     this.logger.log(`Config loaded for tenant ${tenantId}`);
   }
@@ -54,7 +59,9 @@ export class GatewayConfigManagerService {
         if (parsed.config) {
           this.currentConfig = parsed.config;
           this._configVersion = parsed.version ?? null;
-          this._configCachedAt = parsed.cachedAt ? new Date(parsed.cachedAt) : new Date();
+          this._configCachedAt = parsed.cachedAt
+            ? new Date(parsed.cachedAt)
+            : new Date();
           this._configSource = 'cache';
         } else {
           // Legacy format: raw config without envelope

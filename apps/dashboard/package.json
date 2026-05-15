@@ -53,6 +53,13 @@
           "jestConfig": "apps/dashboard/jest.config.cts",
           "passWithNoTests": true
         }
+      },
+      "typecheck": {
+        "executor": "nx:run-commands",
+        "options": {
+          "command": "tsc --noEmit",
+          "cwd": "apps/dashboard"
+        }
       }
     }
   },

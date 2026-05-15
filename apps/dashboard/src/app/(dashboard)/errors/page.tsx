@@ -73,7 +73,9 @@ export default function ErrorsPage() {
           <button
             onClick={() => setShowAll(false)}
             className={`rounded-l-lg px-4 py-2 text-sm font-medium transition-colors ${
-              !showAll ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'
+              !showAll
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-600 hover:bg-gray-50'
             }`}
           >
             Unresolved
@@ -81,7 +83,9 @@ export default function ErrorsPage() {
           <button
             onClick={() => setShowAll(true)}
             className={`rounded-r-lg px-4 py-2 text-sm font-medium transition-colors ${
-              showAll ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'
+              showAll
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-600 hover:bg-gray-50'
             }`}
           >
             All
@@ -118,13 +122,19 @@ export default function ErrorsPage() {
           <tbody>
             {!result ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-sm text-gray-400">
+                <td
+                  colSpan={8}
+                  className="px-4 py-8 text-center text-sm text-gray-400"
+                >
                   Loading…
                 </td>
               </tr>
             ) : errors.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-sm text-gray-400">
+                <td
+                  colSpan={8}
+                  className="px-4 py-8 text-center text-sm text-gray-400"
+                >
                   {showAll ? 'No errors recorded' : 'No unresolved errors'}
                 </td>
               </tr>
@@ -163,7 +173,9 @@ export default function ErrorsPage() {
                       </td>
                       <td className="px-4 py-3 text-gray-500">
                         {err.serviceId ? (
-                          <span className="font-mono text-xs">{err.serviceId.slice(0, 8)}…</span>
+                          <span className="font-mono text-xs">
+                            {err.serviceId.slice(0, 8)}…
+                          </span>
                         ) : (
                           <span className="text-gray-400">—</span>
                         )}
@@ -171,7 +183,10 @@ export default function ErrorsPage() {
                       <td className="px-4 py-3 font-mono text-xs text-gray-500">
                         {err.requestId.slice(0, 8)}…
                       </td>
-                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <td
+                        className="px-4 py-3"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         {!err.resolved && (
                           <button
                             onClick={() => handleResolve(err.id)}
@@ -185,39 +200,56 @@ export default function ErrorsPage() {
                       </td>
                     </tr>
                     {expanded && (
-                      <tr key={`${err.id}-detail`} className="border-b border-gray-100 bg-gray-50">
+                      <tr
+                        key={`${err.id}-detail`}
+                        className="border-b border-gray-100 bg-gray-50"
+                      >
                         <td colSpan={8} className="px-6 py-4">
                           <dl className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm sm:grid-cols-3">
                             <div>
-                              <dt className="text-xs font-medium text-gray-500">Request ID</dt>
+                              <dt className="text-xs font-medium text-gray-500">
+                                Request ID
+                              </dt>
                               <dd className="mt-0.5 font-mono text-xs text-gray-700 break-all">
                                 {err.requestId}
                               </dd>
                             </div>
                             <div>
-                              <dt className="text-xs font-medium text-gray-500">Error Code</dt>
+                              <dt className="text-xs font-medium text-gray-500">
+                                Error Code
+                              </dt>
                               <dd className="mt-0.5 font-mono text-xs text-gray-700">
                                 {err.errorCode}
                               </dd>
                             </div>
                             <div>
-                              <dt className="text-xs font-medium text-gray-500">Message</dt>
-                              <dd className="mt-0.5 text-xs text-gray-700">{err.message}</dd>
+                              <dt className="text-xs font-medium text-gray-500">
+                                Message
+                              </dt>
+                              <dd className="mt-0.5 text-xs text-gray-700">
+                                {err.message}
+                              </dd>
                             </div>
                             <div>
-                              <dt className="text-xs font-medium text-gray-500">Service ID</dt>
+                              <dt className="text-xs font-medium text-gray-500">
+                                Service ID
+                              </dt>
                               <dd className="mt-0.5 font-mono text-xs text-gray-700">
                                 {err.serviceId ?? '—'}
                               </dd>
                             </div>
                             <div>
-                              <dt className="text-xs font-medium text-gray-500">Path</dt>
+                              <dt className="text-xs font-medium text-gray-500">
+                                Path
+                              </dt>
                               <dd className="mt-0.5 font-mono text-xs text-gray-700">
                                 {err.path ?? '—'}
                               </dd>
                             </div>
                             <div>
-                              <dt className="text-xs font-medium text-gray-500">Status Code</dt>
+                              <dt className="text-xs font-medium text-gray-500">
+                                Status Code
+                              </dt>
                               <dd className="mt-0.5 text-xs text-gray-700">
                                 {err.statusCode ?? '—'}
                               </dd>

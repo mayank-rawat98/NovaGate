@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import {
   RequestLog,
   HealthSnapshot,
@@ -8,9 +8,7 @@ import { ControlPlaneConnectorService } from '../connector/control-plane-connect
 
 @Injectable()
 export class GatewayTelemetryService implements OnModuleInit {
-  private readonly logger = new Logger(GatewayTelemetryService.name);
   private logBuffer: RequestLog[] = [];
-  private healthBuffer: HealthSnapshot[] = [];
   private readonly MAX_LOG_BATCH = 100;
   private readonly LOG_FLUSH_INTERVAL = 500;
 
@@ -47,7 +45,7 @@ export class GatewayTelemetryService implements OnModuleInit {
     });
   }
 
-  sendMetrics(metrics: any) {
+  sendMetrics(metrics: Record<string, unknown>) {
     this.connector.send({ type: 'metrics', payload: metrics });
   }
 }

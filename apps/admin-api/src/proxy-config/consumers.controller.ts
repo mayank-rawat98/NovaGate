@@ -24,7 +24,10 @@ export class ConsumersController {
   }
 
   @Post()
-  async create(@Param('tenantId') tenantId: string, @Body() body: any) {
+  async create(
+    @Param('tenantId') tenantId: string,
+    @Body() body: { name: string; rateLimitTier?: string },
+  ) {
     const schema = tenantSchema(tenantId);
     const random = crypto.randomBytes(16).toString('hex');
     const plainKey = `gw_${tenantId}_${random}`;

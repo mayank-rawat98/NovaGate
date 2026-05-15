@@ -3,7 +3,9 @@ import { HealthController } from './health.controller';
 import { ControlPlaneConnectorService } from '../connector/control-plane-connector.service';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 
-const makeConnector = (connected: boolean): Partial<ControlPlaneConnectorService> => ({
+const makeConnector = (
+  connected: boolean,
+): Partial<ControlPlaneConnectorService> => ({
   isConnected: () => connected,
 });
 
@@ -13,9 +15,15 @@ const makeConfigManager = (
   cachedAt: Date | null = new Date('2026-01-01'),
   tenantId: string | null = 'tenant-123',
 ): Partial<GatewayConfigManagerService> => ({
-  get configSource() { return source; },
-  get configVersion() { return version; },
-  get configCachedAt() { return cachedAt; },
+  get configSource() {
+    return source;
+  },
+  get configVersion() {
+    return version;
+  },
+  get configCachedAt() {
+    return cachedAt;
+  },
   getTenantId: () => tenantId,
 });
 
@@ -29,8 +37,14 @@ async function buildModule(
   return Test.createTestingModule({
     controllers: [HealthController],
     providers: [
-      { provide: ControlPlaneConnectorService, useValue: makeConnector(connected) },
-      { provide: GatewayConfigManagerService, useValue: makeConfigManager(source, version, cachedAt, tenantId) },
+      {
+        provide: ControlPlaneConnectorService,
+        useValue: makeConnector(connected),
+      },
+      {
+        provide: GatewayConfigManagerService,
+        useValue: makeConfigManager(source, version, cachedAt, tenantId),
+      },
     ],
   }).compile();
 }
@@ -51,7 +65,12 @@ describe('HealthController', () => {
     });
 
     it('returns 200 with controlPlaneConnected=false when disconnected', async () => {
-      const module = await buildModule(false, 'cache', 41, new Date('2025-12-01'));
+      const module = await buildModule(
+        false,
+        'cache',
+        41,
+        new Date('2025-12-01'),
+      );
       const controller = module.get(HealthController);
       const result = controller.getHealth();
 
@@ -85,7 +104,13 @@ describe('HealthController', () => {
     });
 
     it('includes tenantId', async () => {
-      const module = await buildModule(true, 'live', 42, new Date(), 'my-tenant');
+      const module = await buildModule(
+        true,
+        'live',
+        42,
+        new Date(),
+        'my-tenant',
+      );
       const controller = module.get(HealthController);
       const result = controller.getGatewayInfo();
 

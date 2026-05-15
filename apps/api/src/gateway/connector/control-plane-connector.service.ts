@@ -6,13 +6,13 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { WebSocket } from 'ws';
+import type { RawData } from 'ws';
 import {
   AuthMessage,
   AuthOkMessage,
   BaseWsMessage,
+  ConfigAckMessage,
   ConfigUpdateMessage,
-  PingMessage,
-  PongMessage,
 } from '@api-gateway/shared-types';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 
@@ -91,36 +91,43 @@ export class ControlPlaneConnectorService
     });
   }
 
-  private handleMessage(data: any) {
+  private handleMessage(data: RawData) {
     try {
       const message = JSON.parse(data.toString()) as BaseWsMessage;
 
       switch (message.type) {
         case 'auth_ok': {
           const payload = (message as AuthOkMessage).payload;
-          this.gatewayConfig.loadConfig(payload.tenantId, payload.config, payload.configVersion);
+          this.gatewayConfig.loadConfig(
+            payload.tenantId,
+            payload.config,
+            payload.configVersion,
+          );
           this.flushBuffer();
           break;
         }
         case 'config.update': {
           const update = message as ConfigUpdateMessage;
           this.gatewayConfig.loadConfig(
-            this.gatewayConfig.getTenantId()!,
+            this.gatewayConfig.getTenantId() ?? '',
             update.payload,
             update.version,
           );
-          this.send({ type: 'config.ack', version: update.version });
+          this.send({
+            type: 'config.ack',
+            version: update.version,
+          } as ConfigAckMessage);
           break;
         }
         case 'ping':
           this.send({ type: 'pong' });
           break;
         case 'ack':
-          this.handleAck(message.id!);
+          if (message.id) this.handleAck(message.id);
           break;
       }
     } catch (err) {
-      this.logger.error(`Failed to handle message: ${err.message}`);
+      this.logger.error(`Failed to handle message: ${(err as Error).message}`);
     }
   }
 
@@ -161,7 +168,7 @@ export class ControlPlaneConnectorService
     return this.ws?.readyState === WebSocket.OPEN;
   }
 
-  private handleAck(id: string) {
+  private handleAck(_id: string) {
     // Logic for clearing high-priority errors from a local retry queue could go here
   }
 }

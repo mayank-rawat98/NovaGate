@@ -20,7 +20,9 @@ export class AuthController {
   @HttpCode(200)
   async forgotPassword(@Body() body: { email: string }) {
     await this.authService.forgotPassword(body.email);
-    return { message: 'If that email is registered, a reset link has been sent.' };
+    return {
+      message: 'If that email is registered, a reset link has been sent.',
+    };
   }
 
   @Post('reset-password')

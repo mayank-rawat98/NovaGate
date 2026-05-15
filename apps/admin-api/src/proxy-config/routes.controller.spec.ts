@@ -7,7 +7,9 @@ const TENANT = 'aabbccdd-1111-2222-3333-444455556666';
 const SCHEMA = 'tenant_aabbccdd_1111_2222_3333_444455556666';
 
 const mockDataSource = () => ({ query: jest.fn() });
-const mockConfigPush = () => ({ triggerUpdate: jest.fn().mockResolvedValue(undefined) });
+const mockConfigPush = () => ({
+  triggerUpdate: jest.fn().mockResolvedValue(undefined),
+});
 
 async function build(ds = mockDataSource(), cp = mockConfigPush()) {
   const module: TestingModule = await Test.createTestingModule({
@@ -47,10 +49,16 @@ describe('RoutesController', () => {
       });
 
       expect(result).toEqual({ id: 'new-route' });
-      expect(ds.query).toHaveBeenCalledWith(
-        expect.stringContaining('INSERT'),
-        ['GET', '/api/users', 'svc-1', true, null, true, null, null, null, null],
-      );
+      expect(ds.query).toHaveBeenCalledWith(expect.stringContaining('INSERT'), [
+        'GET',
+        '/api/users',
+        'svc-1',
+        true,
+        null,
+        true,
+        null,
+        null,
+      ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
   });
@@ -62,7 +70,9 @@ describe('RoutesController', () => {
       ds.query.mockResolvedValue([{ id: 'route-1', method: 'POST' }]);
       const { controller } = await build(ds, cp);
 
-      const result = await controller.update(TENANT, 'route-1', { method: 'POST' });
+      const result = await controller.update(TENANT, 'route-1', {
+        method: 'POST',
+      });
 
       expect(result).toEqual({ id: 'route-1', method: 'POST' });
       expect(ds.query).toHaveBeenCalledWith(

@@ -6,7 +6,9 @@ import { getTenant, getGatewayStatus } from '../../lib/api-client';
 import { getTenantId } from '../../lib/auth';
 import type { Tenant as TenantEntity } from '../../lib/api-client';
 
-const CP_WS_URL = process.env.NEXT_PUBLIC_CONTROL_PLANE_WS_URL ?? 'wss://your-control-plane/gateway-ws';
+const CP_WS_URL =
+  process.env.NEXT_PUBLIC_CONTROL_PLANE_WS_URL ??
+  'wss://your-control-plane/gateway-ws';
 
 function maskKey(key: string): string {
   return key.slice(0, 8) + '•'.repeat(24) + key.slice(-4);
@@ -42,7 +44,10 @@ export default function SetupPage() {
   useEffect(() => {
     const id = getTenantId();
     if (!id) return;
-    const storedKey = typeof window !== 'undefined' ? localStorage.getItem('gw_setup_api_key') : null;
+    const storedKey =
+      typeof window !== 'undefined'
+        ? localStorage.getItem('gw_setup_api_key')
+        : null;
     if (storedKey) setApiKey(storedKey);
     getTenant(id)
       .then((t) => setTenant(t))
@@ -72,10 +77,12 @@ export default function SetupPage() {
   }
 
   function copyDocker() {
-    navigator.clipboard.writeText(buildDockerCompose(apiKey, CP_WS_URL)).then(() => {
-      setCopiedDocker(true);
-      setTimeout(() => setCopiedDocker(false), 2000);
-    });
+    navigator.clipboard
+      .writeText(buildDockerCompose(apiKey, CP_WS_URL))
+      .then(() => {
+        setCopiedDocker(true);
+        setTimeout(() => setCopiedDocker(false), 2000);
+      });
   }
 
   const steps = ['API Key', 'Docker Setup', 'Waiting for Gateway'];
@@ -83,7 +90,9 @@ export default function SetupPage() {
   return (
     <div className="flex min-h-screen flex-col items-center bg-gray-50 px-4 py-12">
       <div className="w-full max-w-xl">
-        <h1 className="mb-8 text-2xl font-semibold text-gray-900">Gateway Setup</h1>
+        <h1 className="mb-8 text-2xl font-semibold text-gray-900">
+          Gateway Setup
+        </h1>
 
         {/* Step indicators */}
         <div className="mb-8 flex gap-0">
@@ -99,17 +108,21 @@ export default function SetupPage() {
                       done
                         ? 'bg-green-500 text-white'
                         : active
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-200 text-gray-500'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-200 text-gray-500'
                     }`}
                   >
                     {done ? '✓' : n}
                   </div>
-                  <span className={`text-sm ${active ? 'font-medium text-gray-900' : 'text-gray-500'}`}>
+                  <span
+                    className={`text-sm ${active ? 'font-medium text-gray-900' : 'text-gray-500'}`}
+                  >
                     {label}
                   </span>
                 </div>
-                {i < steps.length - 1 && <div className="mx-3 flex-1 border-t border-gray-300" />}
+                {i < steps.length - 1 && (
+                  <div className="mx-3 flex-1 border-t border-gray-300" />
+                )}
               </div>
             );
           })}
@@ -118,9 +131,12 @@ export default function SetupPage() {
         {/* Step 1: API Key */}
         {step === 1 && (
           <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-            <h2 className="mb-1 text-base font-semibold text-gray-900">Your Gateway API Key</h2>
+            <h2 className="mb-1 text-base font-semibold text-gray-900">
+              Your Gateway API Key
+            </h2>
             <p className="mb-4 text-sm text-gray-500">
-              This key authenticates your gateway instance with our control plane. Store it securely.
+              This key authenticates your gateway instance with our control
+              plane. Store it securely.
             </p>
             <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
               <code className="flex-1 overflow-hidden text-ellipsis font-mono text-sm text-gray-800">
@@ -140,7 +156,9 @@ export default function SetupPage() {
               </button>
             </div>
             {tenant && (
-              <p className="mt-2 text-xs text-gray-400">Tenant: {tenant.name} ({tenant.id})</p>
+              <p className="mt-2 text-xs text-gray-400">
+                Tenant: {tenant.name} ({tenant.id})
+              </p>
             )}
             <div className="mt-6 flex justify-end">
               <button
@@ -156,10 +174,19 @@ export default function SetupPage() {
         {/* Step 2: Docker */}
         {step === 2 && (
           <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-            <h2 className="mb-1 text-base font-semibold text-gray-900">Deploy with Docker Compose</h2>
+            <h2 className="mb-1 text-base font-semibold text-gray-900">
+              Deploy with Docker Compose
+            </h2>
             <p className="mb-4 text-sm text-gray-500">
-              Copy this to a <code className="rounded bg-gray-100 px-1 font-mono text-xs">docker-compose.yml</code> file on your VPS and run{' '}
-              <code className="rounded bg-gray-100 px-1 font-mono text-xs">docker compose up -d</code>.
+              Copy this to a{' '}
+              <code className="rounded bg-gray-100 px-1 font-mono text-xs">
+                docker-compose.yml
+              </code>{' '}
+              file on your VPS and run{' '}
+              <code className="rounded bg-gray-100 px-1 font-mono text-xs">
+                docker compose up -d
+              </code>
+              .
             </p>
             <div className="relative">
               <pre className="overflow-x-auto rounded-lg bg-gray-900 p-4 font-mono text-xs text-gray-100">
@@ -192,9 +219,12 @@ export default function SetupPage() {
         {/* Step 3: Waiting */}
         {step === 3 && (
           <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm text-center">
-            <h2 className="mb-1 text-base font-semibold text-gray-900">Waiting for Gateway</h2>
+            <h2 className="mb-1 text-base font-semibold text-gray-900">
+              Waiting for Gateway
+            </h2>
             <p className="mb-6 text-sm text-gray-500">
-              Start your gateway with Docker Compose, then this page will detect the connection automatically.
+              Start your gateway with Docker Compose, then this page will detect
+              the connection automatically.
             </p>
             {online ? (
               <div className="flex flex-col items-center gap-4">
@@ -212,7 +242,9 @@ export default function SetupPage() {
             ) : (
               <div className="flex flex-col items-center gap-4">
                 <div className="h-10 w-10 animate-spin rounded-full border-4 border-gray-200 border-t-blue-600" />
-                <p className="text-sm text-gray-500">Polling every 3 seconds…</p>
+                <p className="text-sm text-gray-500">
+                  Polling every 3 seconds…
+                </p>
               </div>
             )}
             <div className="mt-6 flex justify-start">

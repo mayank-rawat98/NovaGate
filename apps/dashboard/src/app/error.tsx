@@ -17,8 +17,12 @@ export default function RootError({
   return (
     <div className="min-h-screen bg-[#08080f] text-white flex items-center justify-center px-6">
       <div className="text-center max-w-md">
-        <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-violet-500/50 mb-3">Error</p>
-        <h1 className="text-3xl font-black tracking-tight mb-3">Something went wrong</h1>
+        <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-violet-500/50 mb-3">
+          Error
+        </p>
+        <h1 className="text-3xl font-black tracking-tight mb-3">
+          Something went wrong
+        </h1>
         <p className="text-sm text-white/40 leading-relaxed mb-8">
           {error.message || 'An unexpected error occurred. Please try again.'}
         </p>
@@ -37,7 +41,9 @@ export default function RootError({
           </Link>
         </div>
         {error.digest && (
-          <p className="mt-6 text-[10px] text-white/20 font-mono">ref: {error.digest}</p>
+          <p className="mt-6 text-[10px] text-white/20 font-mono">
+            ref: {error.digest}
+          </p>
         )}
       </div>
     </div>

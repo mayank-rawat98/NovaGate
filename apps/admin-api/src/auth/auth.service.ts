@@ -36,7 +36,9 @@ export class AuthService {
       gatewayConfigVersion: 1,
     });
 
-    const gatewayApiKey = await this.provisioningService.provisionTenant(tenant.id);
+    const gatewayApiKey = await this.provisioningService.provisionTenant(
+      tenant.id,
+    );
 
     return { token: this.sign(tenant.id), tenantId: tenant.id, gatewayApiKey };
   }
@@ -93,7 +95,8 @@ export class AuthService {
   }
 
   private sign(tenantId: string): string {
-    const secret = process.env.PLATFORM_JWT_SECRET ?? 'changeme-platform-secret-32-chars!';
+    const secret =
+      process.env.PLATFORM_JWT_SECRET ?? 'changeme-platform-secret-32-chars!';
     return jwt.sign({ sub: tenantId }, secret, { expiresIn: '7d' });
   }
 }
