@@ -2,7 +2,11 @@ const TOKEN_KEY = 'gw_token';
 const TENANT_KEY = 'gw_tenant_id';
 
 function safe<T>(fn: () => T, fallback: T): T {
-  try { return fn(); } catch { return fallback; }
+  try {
+    return fn();
+  } catch {
+    return fallback;
+  }
 }
 
 export function getToken(): string | null {

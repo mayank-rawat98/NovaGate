@@ -25,6 +25,8 @@ export class TenantProvisioningService {
           "authRequired" BOOLEAN DEFAULT false,
           "rateLimitOverride" INTEGER,
           enabled BOOLEAN DEFAULT true,
+          retry JSONB,
+          plugins JSONB,
           "createdAt" TIMESTAMP DEFAULT NOW(),
           "deletedAt" TIMESTAMP
         )
@@ -34,8 +36,8 @@ export class TenantProvisioningService {
         CREATE TABLE IF NOT EXISTS ${schemaName}.services (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           name VARCHAR NOT NULL,
-          "targetUrl" VARCHAR NOT NULL,
-          "healthCheckPath" VARCHAR,
+          targets JSONB NOT NULL,
+          "healthCheckPath" VARCHAR NOT NULL DEFAULT '/health',
           "timeoutMs" INTEGER DEFAULT 10000,
           "createdAt" TIMESTAMP DEFAULT NOW(),
           "deletedAt" TIMESTAMP

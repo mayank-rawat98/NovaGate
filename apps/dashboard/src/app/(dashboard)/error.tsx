@@ -22,7 +22,9 @@ export default function DashboardError({
             <AlertTriangle className="h-8 w-8 text-red-400" />
           </div>
         </div>
-        <h2 className="text-lg font-semibold text-gray-900 mb-2">Something went wrong</h2>
+        <h2 className="text-lg font-semibold text-gray-900 mb-2">
+          Something went wrong
+        </h2>
         <p className="text-sm text-gray-500 mb-6 leading-relaxed">
           {error.message || 'An unexpected error occurred loading this page.'}
         </p>
@@ -33,7 +35,9 @@ export default function DashboardError({
           Try again
         </button>
         {error.digest && (
-          <p className="mt-4 text-[10px] text-gray-400 font-mono">ref: {error.digest}</p>
+          <p className="mt-4 text-[10px] text-gray-400 font-mono">
+            ref: {error.digest}
+          </p>
         )}
       </div>
     </div>

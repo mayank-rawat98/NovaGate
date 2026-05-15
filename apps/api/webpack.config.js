@@ -6,7 +6,10 @@ const workspaceRoot = resolve(__dirname, '../..');
 module.exports = {
   resolve: {
     alias: {
-      '@api-gateway/shared-types': resolve(workspaceRoot, 'libs/shared-types/src/index.ts'),
+      '@api-gateway/shared-types': resolve(
+        workspaceRoot,
+        'libs/shared-types/src/index.ts',
+      ),
     },
   },
   output: {
@@ -22,11 +25,11 @@ module.exports = {
       compiler: 'tsc',
       main: './src/main.ts',
       tsConfig: './tsconfig.app.json',
-      assets: ["./src/assets"],
+      assets: ['./src/assets'],
       optimization: false,
       outputHashing: 'none',
       generatePackageJson: false,
       sourceMap: true,
-    })
+    }),
   ],
 };

@@ -65,13 +65,13 @@ autocannon -c 50 -d 10 http://localhost:3000/users
 
 ## Environment variables
 
-| Variable | Description | Default |
-| --- | --- | --- |
-| `PORT` | Gateway port | `3000` |
-| `REDIS_URL` | Redis connection URL | _required_ |
-| `JWT_SECRET` | JWT verification secret (min 32 chars) | _required_ |
-| `PROXY_TIMEOUT_MS` | Downstream timeout in ms | `10000` |
-| `PROXY_SERVICES` | JSON array of `{ name, targetUrl, pathPrefix }` | `[]` |
-| `RATE_LIMIT_WINDOW_MS` | Sliding window size in ms | `60000` |
-| `RATE_LIMIT_UNAUTH_MAX` | Max requests per window (unauth) | `100` |
-| `RATE_LIMIT_AUTH_MAX` | Max requests per window (auth) | `500` |
+| Variable                | Description                                     | Default    |
+| ----------------------- | ----------------------------------------------- | ---------- |
+| `PORT`                  | Gateway port                                    | `3000`     |
+| `REDIS_URL`             | Redis connection URL                            | _required_ |
+| `JWT_SECRET`            | JWT verification secret (min 32 chars)          | _required_ |
+| `PROXY_TIMEOUT_MS`      | Downstream timeout in ms                        | `10000`    |
+| `PROXY_SERVICES`        | JSON array of `{ name, targetUrl, pathPrefix }` | `[]`       |
+| `RATE_LIMIT_WINDOW_MS`  | Sliding window size in ms                       | `60000`    |
+| `RATE_LIMIT_UNAUTH_MAX` | Max requests per window (unauth)                | `100`      |
+| `RATE_LIMIT_AUTH_MAX`   | Max requests per window (auth)                  | `500`      |

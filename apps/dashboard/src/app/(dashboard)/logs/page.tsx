@@ -112,7 +112,9 @@ export default function LogsPage() {
           <input
             type="datetime-local"
             value={filters.from}
-            onChange={(e) => setFilters((f) => ({ ...f, from: e.target.value }))}
+            onChange={(e) =>
+              setFilters((f) => ({ ...f, from: e.target.value }))
+            }
             className="rounded-md border border-gray-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
           />
         </div>
@@ -131,7 +133,9 @@ export default function LogsPage() {
             type="text"
             placeholder="/users/…"
             value={filters.path}
-            onChange={(e) => setFilters((f) => ({ ...f, path: e.target.value }))}
+            onChange={(e) =>
+              setFilters((f) => ({ ...f, path: e.target.value }))
+            }
             className="w-44 rounded-md border border-gray-300 px-2 py-1.5 font-mono text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
           />
         </div>
@@ -139,7 +143,9 @@ export default function LogsPage() {
           <label className="text-xs font-medium text-gray-500">Status</label>
           <select
             value={filters.statusGroup}
-            onChange={(e) => setFilters((f) => ({ ...f, statusGroup: e.target.value }))}
+            onChange={(e) =>
+              setFilters((f) => ({ ...f, statusGroup: e.target.value }))
+            }
             className="rounded-md border border-gray-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
           >
             <option value="">All</option>
@@ -155,7 +161,9 @@ export default function LogsPage() {
             type="text"
             placeholder="consumer ID"
             value={filters.consumerId}
-            onChange={(e) => setFilters((f) => ({ ...f, consumerId: e.target.value }))}
+            onChange={(e) =>
+              setFilters((f) => ({ ...f, consumerId: e.target.value }))
+            }
             className="w-36 rounded-md border border-gray-300 px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
           />
         </div>
@@ -201,19 +209,28 @@ export default function LogsPage() {
           <tbody>
             {!fetched ? (
               <tr>
-                <td colSpan={8} className="px-4 py-12 text-center text-sm text-gray-400">
+                <td
+                  colSpan={8}
+                  className="px-4 py-12 text-center text-sm text-gray-400"
+                >
                   Use the filters above and click Search to load logs
                 </td>
               </tr>
             ) : loading ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-sm text-gray-400">
+                <td
+                  colSpan={8}
+                  className="px-4 py-8 text-center text-sm text-gray-400"
+                >
                   Loading…
                 </td>
               </tr>
             ) : logs.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-sm text-gray-400">
+                <td
+                  colSpan={8}
+                  className="px-4 py-8 text-center text-sm text-gray-400"
+                >
                   No logs found
                 </td>
               </tr>
@@ -240,13 +257,16 @@ export default function LogsPage() {
                       <td className="px-4 py-3">
                         <span
                           className={`inline-block rounded px-2 py-0.5 font-mono text-xs font-semibold ${
-                            METHOD_COLORS[log.method] ?? 'bg-gray-100 text-gray-700'
+                            METHOD_COLORS[log.method] ??
+                            'bg-gray-100 text-gray-700'
                           }`}
                         >
                           {log.method}
                         </span>
                       </td>
-                      <td className="px-4 py-3 font-mono text-xs text-gray-700">{log.path}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-gray-700">
+                        {log.path}
+                      </td>
                       <td className="px-4 py-3">
                         <span
                           className={`inline-block rounded px-2 py-0.5 text-xs font-medium tabular-nums ${statusBadgeClass(log.statusCode)}`}
@@ -258,38 +278,55 @@ export default function LogsPage() {
                         {log.responseTimeMs}ms
                       </td>
                       <td className="px-4 py-3 text-gray-500">
-                        {log.downstreamService ?? <span className="text-gray-400">—</span>}
+                        {log.downstreamService ?? (
+                          <span className="text-gray-400">—</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-gray-500">
                         {log.consumerId ? (
-                          <span className="font-mono text-xs">{log.consumerId.slice(0, 8)}…</span>
+                          <span className="font-mono text-xs">
+                            {log.consumerId.slice(0, 8)}…
+                          </span>
                         ) : (
                           <span className="text-gray-400">—</span>
                         )}
                       </td>
                     </tr>
                     {expanded && (
-                      <tr key={`${log.id}-detail`} className="border-b border-gray-100 bg-gray-50">
+                      <tr
+                        key={`${log.id}-detail`}
+                        className="border-b border-gray-100 bg-gray-50"
+                      >
                         <td colSpan={8} className="px-6 py-4">
                           <dl className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm sm:grid-cols-3">
                             <div>
-                              <dt className="text-xs font-medium text-gray-500">Request ID</dt>
+                              <dt className="text-xs font-medium text-gray-500">
+                                Request ID
+                              </dt>
                               <dd className="mt-0.5 font-mono text-xs text-gray-700 break-all">
                                 {log.requestId}
                               </dd>
                             </div>
                             <div>
-                              <dt className="text-xs font-medium text-gray-500">Client IP</dt>
-                              <dd className="mt-0.5 font-mono text-xs text-gray-700">{log.clientIp}</dd>
+                              <dt className="text-xs font-medium text-gray-500">
+                                Client IP
+                              </dt>
+                              <dd className="mt-0.5 font-mono text-xs text-gray-700">
+                                {log.clientIp}
+                              </dd>
                             </div>
                             <div>
-                              <dt className="text-xs font-medium text-gray-500">User Agent</dt>
+                              <dt className="text-xs font-medium text-gray-500">
+                                User Agent
+                              </dt>
                               <dd className="mt-0.5 truncate text-xs text-gray-700">
                                 {log.userAgent ?? '—'}
                               </dd>
                             </div>
                             <div>
-                              <dt className="text-xs font-medium text-gray-500">Downstream Latency</dt>
+                              <dt className="text-xs font-medium text-gray-500">
+                                Downstream Latency
+                              </dt>
                               <dd className="mt-0.5 text-xs text-gray-700">
                                 {log.downstreamLatencyMs != null
                                   ? `${log.downstreamLatencyMs}ms`
@@ -297,7 +334,9 @@ export default function LogsPage() {
                               </dd>
                             </div>
                             <div>
-                              <dt className="text-xs font-medium text-gray-500">Error Code</dt>
+                              <dt className="text-xs font-medium text-gray-500">
+                                Error Code
+                              </dt>
                               <dd className="mt-0.5 text-xs text-gray-700">
                                 {log.errorCode ?? '—'}
                               </dd>

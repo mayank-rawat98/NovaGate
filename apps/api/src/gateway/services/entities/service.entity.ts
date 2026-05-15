@@ -9,20 +9,20 @@ import {
 @Entity('services')
 export class ServiceEntity {
   @PrimaryGeneratedColumn('uuid')
-  id: string;
+  id!: string;
 
   @Column({ unique: true })
-  name: string;
+  name!: string;
 
   @Column()
-  targetUrl: string;
+  targetUrl!: string;
 
   @Column()
-  pathPrefix: string;
+  pathPrefix!: string;
 
   @CreateDateColumn()
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn()
-  updatedAt: Date;
+  updatedAt!: Date;
 }

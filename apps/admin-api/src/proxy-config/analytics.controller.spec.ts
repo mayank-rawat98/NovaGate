@@ -5,31 +5,18 @@ import { ConfigPushService } from '../config-push/config-push.service';
 
 const TENANT = 'aabbccdd-1111-2222-3333-444455556666';
 
-function mockManager(rows: any[] = []) {
-  return { query: jest.fn().mockResolvedValue(rows) };
-}
+type MockManager = { query: jest.Mock };
+type MockDs = { transaction: jest.Mock };
 
-function mockDataSource(rows: any[] = []) {
-  const manager = mockManager(rows);
-  return {
-    transaction: jest.fn().mockImplementation(async (fn: any) => {
-      // first call is SET LOCAL search_path, second is the actual query
-      await fn(manager);
-      // re-invoke to get the last call's return value
-      const calls = manager.query.mock.calls;
-      const lastCall = calls[calls.length - 1];
-      if (lastCall?.[0]?.includes('SET LOCAL')) return rows;
-      return rows;
-    }),
-    _manager: manager,
-  };
+function mockManager(rows: unknown[] = []): MockManager {
+  return { query: jest.fn().mockResolvedValue(rows) };
 }
 
 const mockConfigPush = () => ({
   isOnline: jest.fn().mockResolvedValue(false),
 });
 
-async function build(ds: any, cp = mockConfigPush()) {
+async function build(ds: MockDs, cp = mockConfigPush()) {
   const module: TestingModule = await Test.createTestingModule({
     controllers: [AnalyticsController],
     providers: [
@@ -45,14 +32,20 @@ describe('AnalyticsController', () => {
     it('executes SET LOCAL search_path and queries request_logs', async () => {
       const manager = mockManager([{ id: 'log-1' }]);
       const ds = {
-        transaction: jest.fn().mockImplementation(async (fn: any) => fn(manager)),
+        transaction: jest
+          .fn()
+          .mockImplementation(
+            async (fn: (m: MockManager) => Promise<unknown>) => fn(manager),
+          ),
       };
       const { controller } = await build(ds);
       await controller.getLogs(TENANT);
 
       const calls = manager.query.mock.calls;
       expect(calls[0][0]).toContain('SET LOCAL search_path');
-      expect(calls[0][0]).toContain('tenant_aabbccdd_1111_2222_3333_444455556666');
+      expect(calls[0][0]).toContain(
+        'tenant_aabbccdd_1111_2222_3333_444455556666',
+      );
       expect(calls[1][0]).toContain('request_logs');
       expect(calls[1][0]).toContain('LIMIT 50');
     });
@@ -60,7 +53,11 @@ describe('AnalyticsController', () => {
     it('applies path filter', async () => {
       const manager = mockManager([]);
       const ds = {
-        transaction: jest.fn().mockImplementation(async (fn: any) => fn(manager)),
+        transaction: jest
+          .fn()
+          .mockImplementation(
+            async (fn: (m: MockManager) => Promise<unknown>) => fn(manager),
+          ),
       };
       const { controller } = await build(ds);
       await controller.getLogs(TENANT, undefined, undefined, '/users');
@@ -73,7 +70,11 @@ describe('AnalyticsController', () => {
     it('applies statusCode filter', async () => {
       const manager = mockManager([]);
       const ds = {
-        transaction: jest.fn().mockImplementation(async (fn: any) => fn(manager)),
+        transaction: jest
+          .fn()
+          .mockImplementation(
+            async (fn: (m: MockManager) => Promise<unknown>) => fn(manager),
+          ),
       };
       const { controller } = await build(ds);
       await controller.getLogs(TENANT, undefined, undefined, undefined, '500');
@@ -87,7 +88,11 @@ describe('AnalyticsController', () => {
     it('returns latest snapshot per service', async () => {
       const manager = mockManager([{ serviceId: 's1', status: 'healthy' }]);
       const ds = {
-        transaction: jest.fn().mockImplementation(async (fn: any) => fn(manager)),
+        transaction: jest
+          .fn()
+          .mockImplementation(
+            async (fn: (m: MockManager) => Promise<unknown>) => fn(manager),
+          ),
       };
       const { controller } = await build(ds);
       const result = await controller.getHealth(TENANT);
@@ -103,7 +108,11 @@ describe('AnalyticsController', () => {
     it('filters by resolved=false', async () => {
       const manager = mockManager([]);
       const ds = {
-        transaction: jest.fn().mockImplementation(async (fn: any) => fn(manager)),
+        transaction: jest
+          .fn()
+          .mockImplementation(
+            async (fn: (m: MockManager) => Promise<unknown>) => fn(manager),
+          ),
       };
       const { controller } = await build(ds);
       await controller.getErrors(TENANT, 'false');
@@ -118,10 +127,16 @@ describe('AnalyticsController', () => {
     it('marks error as resolved', async () => {
       const manager = mockManager([]);
       const ds = {
-        transaction: jest.fn().mockImplementation(async (fn: any) => fn(manager)),
+        transaction: jest
+          .fn()
+          .mockImplementation(
+            async (fn: (m: MockManager) => Promise<unknown>) => fn(manager),
+          ),
       };
       const { controller } = await build(ds);
-      const result = await controller.resolveError(TENANT, 'err-1', { resolved: true });
+      const result = await controller.resolveError(TENANT, 'err-1', {
+        resolved: true,
+      });
 
       expect(result).toEqual({ success: true });
       const queryCall = manager.query.mock.calls[1];
@@ -134,7 +149,11 @@ describe('AnalyticsController', () => {
     it('defaults to 24h period', async () => {
       const manager = mockManager([]);
       const ds = {
-        transaction: jest.fn().mockImplementation(async (fn: any) => fn(manager)),
+        transaction: jest
+          .fn()
+          .mockImplementation(
+            async (fn: (m: MockManager) => Promise<unknown>) => fn(manager),
+          ),
       };
       const { controller } = await build(ds);
       await controller.getMetrics(TENANT);
@@ -146,7 +165,11 @@ describe('AnalyticsController', () => {
     it('accepts 7d period', async () => {
       const manager = mockManager([]);
       const ds = {
-        transaction: jest.fn().mockImplementation(async (fn: any) => fn(manager)),
+        transaction: jest
+          .fn()
+          .mockImplementation(
+            async (fn: (m: MockManager) => Promise<unknown>) => fn(manager),
+          ),
       };
       const { controller } = await build(ds);
       await controller.getMetrics(TENANT, '7d');

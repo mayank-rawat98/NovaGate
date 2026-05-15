@@ -6,7 +6,9 @@ export type GatewayErrorCode =
   | 'RATE_LIMIT_EXCEEDED'
   | 'DOWNSTREAM_TIMEOUT'
   | 'DOWNSTREAM_ERROR'
-  | 'SERVICE_NOT_FOUND';
+  | 'SERVICE_NOT_FOUND'
+  | 'IP_RESTRICTED'
+  | 'REQUEST_TOO_LARGE';
 
 export class GatewayError extends HttpException {
   readonly code: GatewayErrorCode;

@@ -31,10 +31,10 @@ import Redis from 'ioredis';
 @Injectable()
 export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TenantConnectionManager.name);
-  private wss: WebSocketServer;
+  private wss!: WebSocketServer;
   private connections = new Map<string, WebSocket>();
-  private redisPub: Redis;
-  private redisSub: Redis;
+  private redisPub!: Redis;
+  private redisSub!: Redis;
 
   constructor(
     @InjectRepository(Tenant)
@@ -105,7 +105,7 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
           await this.redisPub.set(`gw:online:${tenantId}`, '1', 'EX', 90);
 
           // Get config and pending updates
-          const config = await this.getTenantConfig(tenantId);
+          const config = await this.getTenantConfig();
           const tenant = await this.tenantRepo.findOneBy({ id: tenantId });
 
           const authOk: AuthOkMessage = {
@@ -132,9 +132,11 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
         }
 
         // Handle other message types (logs, health, etc.)
-        this.handleInboundMessage(tenantId!, message);
+        if (tenantId) this.handleInboundMessage(tenantId, message);
       } catch (err) {
-        this.logger.error(`Error processing message: ${err.message}`);
+        this.logger.error(
+          `Error processing message: ${(err as Error).message}`,
+        );
       }
     });
 
@@ -160,7 +162,7 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
     return key ? key.tenantId : null;
   }
 
-  private async getTenantConfig(tenantId: string): Promise<TenantConfig> {
+  private async getTenantConfig(): Promise<TenantConfig> {
     // This will be implemented fully once we have the tenant schema logic
     // For now, return a default skeleton or read from public schema placeholder
     return {
@@ -250,7 +252,7 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
     } else {
       await this.pendingUpdateRepo.save({
         tenantId,
-        config,
+        config: config as unknown as Record<string, unknown>,
         createdAt: new Date(),
       });
     }

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as crypto from 'crypto';
@@ -7,8 +7,6 @@ import { TenantProvisioningService } from './tenant-provisioning.service';
 
 @Injectable()
 export class TenantsService {
-  private readonly logger = new Logger(TenantsService.name);
-
   constructor(
     @InjectRepository(Tenant)
     private readonly tenantRepo: Repository<Tenant>,

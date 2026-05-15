@@ -6,7 +6,7 @@ import { TenantConfig } from '@api-gateway/shared-types';
 @Injectable()
 export class ConfigPushService implements OnModuleInit {
   private readonly logger = new Logger(ConfigPushService.name);
-  private redis: Redis;
+  private redis!: Redis;
 
   constructor(private readonly dataSource: DataSource) {}
 
@@ -37,14 +37,16 @@ export class ConfigPushService implements OnModuleInit {
          ON CONFLICT ("tenantId") DO UPDATE SET config = $2, "createdAt" = NOW()`,
         [tenantId, JSON.stringify({ config, version })],
       );
-      this.logger.warn(`Gateway offline for tenant ${tenantId} — stored pending update`);
+      this.logger.warn(
+        `Gateway offline for tenant ${tenantId} — stored pending update`,
+      );
     }
   }
 
   async assembleConfig(tenantId: string): Promise<TenantConfig> {
     const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
 
-    const [routes, services, consumers] = await Promise.all([
+    const [routes, serviceRows, consumers] = await Promise.all([
       this.dataSource.query(
         `SELECT * FROM ${schema}.routes WHERE "deletedAt" IS NULL AND enabled = true`,
       ),
@@ -55,6 +57,14 @@ export class ConfigPushService implements OnModuleInit {
         `SELECT * FROM ${schema}.consumers WHERE "revokedAt" IS NULL`,
       ),
     ]);
+
+    const services = serviceRows.map((row: Record<string, unknown>) => ({
+      id: row.id,
+      name: row.name,
+      targets: row.targets,
+      healthCheckPath: row.healthCheckPath,
+      timeoutMs: row.timeoutMs,
+    }));
 
     return {
       routes,

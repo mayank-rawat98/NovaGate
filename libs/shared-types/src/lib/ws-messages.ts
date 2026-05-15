@@ -108,12 +108,23 @@ export interface RouteConfig {
   authRequired: boolean;
   rateLimitOverride?: number;
   enabled: boolean;
+  retry?: {
+    attempts: number;
+    on: number[];
+    methods: string[];
+  };
+  plugins?: Array<{ name: string; config: Record<string, unknown> }>;
+}
+
+export interface ServiceTarget {
+  url: string;
+  weight: number;
 }
 
 export interface ServiceConfig {
   id: string;
   name: string;
-  targetUrl: string;
+  targets: ServiceTarget[];
   healthCheckPath: string;
   timeoutMs: number;
 }

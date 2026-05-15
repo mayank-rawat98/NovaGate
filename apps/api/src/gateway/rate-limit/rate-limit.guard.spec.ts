@@ -58,12 +58,12 @@ describe('RateLimitGuard', () => {
     const guard = module.get(RateLimitGuard);
     const { context } = createContext();
 
-    await expect(guard.canActivate(context as unknown as ExecutionContext)).resolves.toBe(
-      true,
-    );
-    await expect(guard.canActivate(context as unknown as ExecutionContext)).resolves.toBe(
-      true,
-    );
+    await expect(
+      guard.canActivate(context as unknown as ExecutionContext),
+    ).resolves.toBe(true);
+    await expect(
+      guard.canActivate(context as unknown as ExecutionContext),
+    ).resolves.toBe(true);
   });
 
   it('blocks requests over the limit', async () => {
@@ -88,18 +88,27 @@ describe('RateLimitGuard', () => {
     await expect(
       guard.canActivate(context as unknown as ExecutionContext),
     ).rejects.toBeInstanceOf(GatewayError);
-    expect(res.setHeader).toHaveBeenCalledWith('Retry-After', expect.any(Number));
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Retry-After',
+      expect.any(Number),
+    );
     expect(res.once).toHaveBeenCalledWith('finish', expect.any(Function));
     expect(res.once).toHaveBeenCalledWith('close', expect.any(Function));
   });
 
   it('fails open on Redis errors', async () => {
     const metricsService = new MetricsService();
-    const incrementSpy = jest.spyOn(metricsService, 'incrementRateLimitRedisError');
+    const incrementSpy = jest.spyOn(
+      metricsService,
+      'incrementRateLimitRedisError',
+    );
     const module = await Test.createTestingModule({
       providers: [
         RateLimitGuard,
-        { provide: RateLimitService, useValue: { check: jest.fn().mockRejectedValue(new Error('boom')) } },
+        {
+          provide: RateLimitService,
+          useValue: { check: jest.fn().mockRejectedValue(new Error('boom')) },
+        },
         { provide: MetricsService, useValue: metricsService },
         { provide: ConfigService, useValue: createConfigService() },
       ],
@@ -108,9 +117,9 @@ describe('RateLimitGuard', () => {
     const guard = module.get(RateLimitGuard);
     const { context } = createContext();
 
-    await expect(guard.canActivate(context as unknown as ExecutionContext)).resolves.toBe(
-      true,
-    );
+    await expect(
+      guard.canActivate(context as unknown as ExecutionContext),
+    ).resolves.toBe(true);
     expect(incrementSpy).toHaveBeenCalled();
   });
 });

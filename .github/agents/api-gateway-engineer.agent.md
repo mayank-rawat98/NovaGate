@@ -1,5 +1,5 @@
 ---
-name: "API Gateway SaaS Engineer"
+name: 'API Gateway SaaS Engineer'
 description: "Use when building or fixing anything in the SaaS API Gateway platform: gateway Docker image (runs on user's VPS), WebSocket control plane connector, config hot-reload, request log batching, service health monitoring, error tracking, tenant onboarding, Admin API (route/service/consumer CRUD), dashboard UI (Next.js), tenant provisioning (schema-per-tenant PostgreSQL), API key lifecycle, TenantConnectionManager, pending config delivery, self-host mode, rate limiting, JWT middleware, Prometheus metrics, proxy routing, or any SaaS-layer concern. Also use for architecture decisions about the platform itself."
 tools: [read, search, edit, execute, todo]
 ---
@@ -68,6 +68,7 @@ libs/
 ```
 
 Mandatory reading before any implementation:
+
 - `.github/instructions/gateway.instructions.md` — module conventions, folder structure
 - `AI_RULES_GATEWAY.md` — correctness constraints for rate limiting, proxy, metrics
 - `REDIS_KEY_DESIGN.md` — key schema for the gateway's local Redis
@@ -87,6 +88,7 @@ moment it authenticates with the control plane. This simplifies the gateway
 significantly compared to a shared-gateway multi-tenant model.
 
 Two modes, toggled by env var at startup:
+
 - `GATEWAY_MODE=saas` (default) — requires `GATEWAY_API_KEY` and `CONTROL_PLANE_URL`.
   Gateway authenticates with control plane, receives config over WebSocket.
 - `GATEWAY_MODE=single` — standalone self-hosted mode. Config loaded from a mounted
@@ -105,6 +107,7 @@ from the gateway to your control plane. This is the only network connection
 between the user's VPS and your server.
 
 **Connection lifecycle:**
+
 ```
 gateway boots
   └─ read GATEWAY_API_KEY + CONTROL_PLANE_URL from env
@@ -127,6 +130,7 @@ on disconnect (anything other than 4001/4003/4004):
 ```
 
 **Inbound messages (control plane → gateway):**
+
 - `{ type: "config.update", payload: { routes, services, consumers }, version: number }`
   → hot-reload config in memory + update Redis `cfg:default`, zero downtime, no restart
   → respond `{ type: "config.ack", version: number }`
@@ -134,6 +138,7 @@ on disconnect (anything other than 4001/4003/4004):
 - `{ type: "config.request" }` → respond with current configVersion (drift detection)
 
 **Outbound messages (gateway → control plane), all batched except errors:**
+
 - `{ type: "logs", payload: RequestLog[] }` — flush every 500ms or 100 entries
 - `{ type: "health", payload: HealthSnapshot[] }` — flush every 30s per service
 - `{ type: "errors", payload: ErrorEvent[], id: "err-<uuid>" }` — flush immediately,
@@ -141,6 +146,7 @@ on disconnect (anything other than 4001/4003/4004):
 - `{ type: "metrics", payload: { rps, p50, p95, p99, errorRate } }` — flush every 60s
 
 **If control plane is down:**
+
 - Proxy traffic continues unaffected — config is in memory
 - Outbound messages buffer locally (max 10,000 entries, drop oldest when full)
 - Increment `gateway_log_drop_total` when buffer overflows
@@ -154,6 +160,7 @@ Runs in `apps/control-plane`. Manages a `Map<tenantId, WebSocket>` of all
 live gateway connections.
 
 **On new connection:**
+
 1. Expect `{ type: "auth", apiKey }` within 5s or close with 4002
 2. Hash the key with SHA-256, look up in `public.api_keys`
 3. If not found or revoked → close with 4001
@@ -164,11 +171,13 @@ live gateway connections.
 7. Emit `tenant.connected` event, update `tenants.lastSeen`
 
 **On disconnect:**
+
 1. Remove from map
 2. Emit `tenant.disconnected` event
 3. Update `tenants.lastSeen`
 
 **Config push (called by Admin API after every mutating operation):**
+
 ```typescript
 pushConfigUpdate(tenantId: string, config: TenantConfig): void {
   const ws = this.connections.get(tenantId);
@@ -185,6 +194,7 @@ pushConfigUpdate(tenantId: string, config: TenantConfig): void {
 ponged within 60s (zombie connection cleanup).
 
 **Expose to Admin API:**
+
 - `isOnline(tenantId): boolean`
 - `getConnectionMeta(tenantId): { connectedAt, lastPong, configVersion, bufferedMessages }`
 
@@ -215,13 +225,14 @@ Never hardcode close code numbers outside of this file.
 
 The gateway's Redis is local — it is NOT your Redis. It stores:
 
-| Key pattern | Value | TTL |
-|-------------|-------|-----|
-| `cfg:default` | Full tenant config JSON | 24h (refreshed on every config.update) |
-| `rl:<clientKey>` | Sorted set (sliding window timestamps) | windowMs seconds |
-| `apikey:<sha256hash>` | `{ consumerId, rateLimitTier }` JSON | 5 minutes |
+| Key pattern           | Value                                  | TTL                                    |
+| --------------------- | -------------------------------------- | -------------------------------------- |
+| `cfg:default`         | Full tenant config JSON                | 24h (refreshed on every config.update) |
+| `rl:<clientKey>`      | Sorted set (sliding window timestamps) | windowMs seconds                       |
+| `apikey:<sha256hash>` | `{ consumerId, rateLimitTier }` JSON   | 5 minutes                              |
 
 Rules:
+
 - No `tenantId` prefix in Redis keys — each gateway serves exactly one tenant,
   so the prefix is redundant and must be omitted (contrast with the old shared-gateway model)
 - `cfg:default` acts as a warm-start cache — on boot, if WebSocket auth fails
@@ -234,6 +245,7 @@ Rules:
 ### PostgreSQL — Schema-Per-Tenant (on your server)
 
 **public schema** (platform-level, TypeORM migrations):
+
 ```
 tenants                — id, name, email, plan, createdAt, lastSeen, gatewayConfigVersion
 api_keys               — id, tenantId, keyHash (SHA-256), label, createdAt, revokedAt
@@ -242,7 +254,8 @@ pending_config_updates — id, tenantId, config (jsonb), updatedAt (upsert, one 
 billing_events         — id, tenantId, event, amount, timestamp
 ```
 
-**tenant_<id> schema** (per-tenant, managed by TenantProvisioningService only):
+**tenant\_<id> schema** (per-tenant, managed by TenantProvisioningService only):
+
 ```
 routes           — id, method, pathPattern, serviceId, authRequired, rateLimitOverride,
                    enabled, createdAt, deletedAt
@@ -258,6 +271,7 @@ metrics_snapshots— id, period, rps, p50Ms, p95Ms, p99Ms, errorRate, timestamp
 ```
 
 Rules:
+
 - TypeORM migrations touch `public` schema only
 - Tenant schema DDL (CREATE TABLE, ALTER TABLE) runs exclusively through
   `TenantProvisioningService.provisionTenant(tenantId)` — called at signup
@@ -276,6 +290,7 @@ Log entries arrive at the control plane via the WebSocket `logs` message type.
 The `LogIngestionService` in `apps/control-plane` handles persistence.
 
 **At the gateway (sender side):**
+
 - Collect log entry after every proxied request (never before — need statusCode)
 - Push to local in-memory buffer
 - Flush buffer to control plane every 500ms or when buffer reaches 100 entries
@@ -283,6 +298,7 @@ The `LogIngestionService` in `apps/control-plane` handles persistence.
 - Never block the HTTP response to the client for logging — fire and forget
 
 **At the control plane (receiver side):**
+
 - Receive `{ type: "logs", payload: RequestLog[] }`
 - Batch-insert into `tenant_<id>.request_logs` using a single INSERT statement
 - If insert fails, log the error and drop — never retry log writes indefinitely
@@ -302,6 +318,7 @@ The gateway's `HealthCheckerService` polls downstream services every 30s.
 Results are sent to the control plane via the `health` WebSocket message.
 
 **Gateway behavior:**
+
 - On every configured service: `GET <targetUrl>/health` with 5s timeout
 - 2xx → `{ status: "healthy", latencyMs }`
 - Non-2xx or timeout → `{ status: "unhealthy", errorMessage }`
@@ -309,6 +326,7 @@ Results are sent to the control plane via the `health` WebSocket message.
 - Batch all health results and send as one `health` message every 30s
 
 **Control plane behavior:**
+
 - Receive `{ type: "health", payload: HealthSnapshot[] }`
 - Upsert into `tenant_<id>.health_snapshots`, keep last 100 per service
 - Dashboard polls `GET /tenants/:id/health` which reads latest snapshot per service
@@ -322,6 +340,7 @@ events. These are sent immediately (not batched) via the `errors` WebSocket
 message and require an ack from the control plane.
 
 **Which events generate errors:**
+
 - Gateway 4xx (auth failures, rate limit hits) → always
 - Downstream 4xx → never (downstream's concern)
 - Downstream 5xx → always
@@ -340,6 +359,7 @@ until it receives `{ type: "ack", id }`. Max 3 retries then drop and increment
 Never proxies traffic. Never shares a port or domain with the gateway.
 
 Every mutating endpoint (POST/PUT/PATCH/DELETE) must, after the DB write:
+
 1. Call `TenantConnectionManager.pushConfigUpdate(tenantId, newConfig)`
 2. This either sends the update live (if gateway online) or persists to
    `pending_config_updates` (if offline)
@@ -348,6 +368,7 @@ All endpoints require a platform JWT (tenant login token) — completely separat
 from any JWT secrets the tenant configures for their own API consumers.
 
 Key endpoint groups:
+
 - `POST /tenants` — create tenant, call `TenantProvisioningService.provisionTenant`
 - `POST /tenants/:id/rotate-key` — revoke key, issue new one, close existing
   WebSocket connection with code 4003
@@ -362,6 +383,7 @@ Key endpoint groups:
 `apps/dashboard` — Next.js 14 App Router. Consumes only the Admin API.
 
 Pages:
+
 - `/setup` — first-time onboarding: show `GATEWAY_API_KEY` (once), ready-to-run
   `docker-compose.yml` with key pre-filled, live connection status polling
 - `/dashboard` — gateway online/offline indicator, RPS chart (1h), error rate,
@@ -383,16 +405,19 @@ Image: `ghcr.io/<org>/api-gateway:<semver>` + `latest`
 Published only on git tag `v*.*.*` — never from branch pushes.
 
 Required env vars (`GATEWAY_MODE=saas`):
+
 - `GATEWAY_API_KEY` — tenant's key, crash on startup if missing
 - `CONTROL_PLANE_URL` — `wss://control.yourdomain.com`, crash if missing
 - `REDIS_URL` — user's local Redis, crash if missing
 
 Optional env vars:
+
 - `PORT` (default: 3000)
 - `PROXY_TIMEOUT_MS` (default: 10000)
 - `RATE_LIMIT_WINDOW_MS` (default: 60000)
 
 Image rules:
+
 - Multi-stage Dockerfile: builder (node:20-alpine) → runner (node:20-alpine)
 - Final stage runs as `USER node` — never root
 - `HEALTHCHECK` instruction on `GET /health` (returns 200 even when offline)
@@ -401,12 +426,13 @@ Image rules:
 - Target size: under 200MB
 
 Provide `docker-compose.single-user.yml` at repo root as copy-paste template:
+
 ```yaml
 services:
   gateway:
     image: ghcr.io/<org>/api-gateway:latest
     ports:
-      - "3000:3000"
+      - '3000:3000'
     environment:
       GATEWAY_API_KEY: <your-key-from-dashboard>
       CONTROL_PLANE_URL: wss://control.yourdomain.com
@@ -417,7 +443,7 @@ services:
   redis:
     image: redis:7-alpine
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
       timeout: 5s
       retries: 3
@@ -492,6 +518,7 @@ services:
 ## When to Stop and Ask
 
 Stop and ask before proceeding if:
+
 - A new WebSocket message type is needed — both sender and receiver must be updated
   together and `libs/shared-types` must change first
 - A new field is added to a WS message payload — existing deployed gateways may not

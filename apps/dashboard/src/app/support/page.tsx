@@ -4,11 +4,18 @@ import { MarketingFooter } from '../../components/marketing-footer';
 
 export const metadata: Metadata = {
   title: 'Support',
-  description: 'NovaGate support: email, GitHub issues, and enterprise plans. FAQ covering traffic routing, Redis setup, config propagation speed, gateway key rotation, and offline resilience.',
-  keywords: ['api gateway support', 'novagate help', 'api gateway faq', 'gateway troubleshooting'],
+  description:
+    'NovaGate support: email, GitHub issues, and enterprise plans. FAQ covering traffic routing, Redis setup, config propagation speed, gateway key rotation, and offline resilience.',
+  keywords: [
+    'api gateway support',
+    'novagate help',
+    'api gateway faq',
+    'gateway troubleshooting',
+  ],
   openGraph: {
     title: 'NovaGate Support & FAQ',
-    description: 'Get help with NovaGate. Email support, GitHub issues, and a detailed FAQ covering the most common setup and operations questions.',
+    description:
+      'Get help with NovaGate. Email support, GitHub issues, and a detailed FAQ covering the most common setup and operations questions.',
     url: 'https://novagate.dev/support',
   },
   alternates: { canonical: 'https://novagate.dev/support' },
@@ -29,7 +36,7 @@ const FAQ = [
   },
   {
     q: 'How do I rotate my Gateway API key?',
-    a: 'Go to Dashboard → Settings → Gateway Key → Rotate Key. Your old key is revoked immediately. The new key is shown once. Update your gateway container\'s GATEWAY_API_KEY environment variable and restart it.',
+    a: "Go to Dashboard → Settings → Gateway Key → Rotate Key. Your old key is revoked immediately. The new key is shown once. Update your gateway container's GATEWAY_API_KEY environment variable and restart it.",
   },
   {
     q: 'How quickly do config changes reach the gateway?',
@@ -56,10 +63,15 @@ export default function SupportPage() {
 
       <div className="max-w-4xl mx-auto px-6 py-20">
         <div className="mb-14">
-          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-violet-500/50 mb-3">SUPPORT</p>
-          <h1 className="text-4xl font-black tracking-tight mb-4">How can we help?</h1>
+          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-violet-500/50 mb-3">
+            SUPPORT
+          </p>
+          <h1 className="text-4xl font-black tracking-tight mb-4">
+            How can we help?
+          </h1>
           <p className="text-white/40 text-base max-w-xl leading-relaxed">
-            Find answers below, or reach out directly. We are a small team and we respond personally.
+            Find answers below, or reach out directly. We are a small team and
+            we respond personally.
           </p>
         </div>
 
@@ -69,7 +81,7 @@ export default function SupportPage() {
             {
               icon: '✉️',
               title: 'Email',
-              desc: 'For account issues, billing questions, and anything that doesn\'t fit in a GitHub issue.',
+              desc: "For account issues, billing questions, and anything that doesn't fit in a GitHub issue.",
               action: 'support@novagate.dev',
               href: 'mailto:support@novagate.dev',
             },
@@ -88,11 +100,21 @@ export default function SupportPage() {
               href: '/enterprise',
             },
           ].map((c) => (
-            <div key={c.title} className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-6">
+            <div
+              key={c.title}
+              className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-6"
+            >
               <span className="text-2xl mb-3 block">{c.icon}</span>
-              <h3 className="font-semibold text-white text-sm mb-2">{c.title}</h3>
-              <p className="text-xs text-white/38 leading-relaxed mb-4">{c.desc}</p>
-              <a href={c.href} className="text-xs text-violet-400 hover:text-violet-300 transition-colors font-medium">
+              <h3 className="font-semibold text-white text-sm mb-2">
+                {c.title}
+              </h3>
+              <p className="text-xs text-white/38 leading-relaxed mb-4">
+                {c.desc}
+              </p>
+              <a
+                href={c.href}
+                className="text-xs text-violet-400 hover:text-violet-300 transition-colors font-medium"
+              >
                 {c.action} →
               </a>
             </div>
@@ -101,22 +123,36 @@ export default function SupportPage() {
 
         {/* FAQ */}
         <div>
-          <h2 className="text-2xl font-bold mb-6">Frequently Asked Questions</h2>
+          <h2 className="text-2xl font-bold mb-6">
+            Frequently Asked Questions
+          </h2>
           <div className="space-y-4">
             {FAQ.map((item) => (
-              <div key={item.q} className="rounded-xl border border-white/[0.07] bg-white/[0.025] p-6">
-                <h3 className="font-semibold text-white text-sm mb-2">{item.q}</h3>
-                <p className="text-sm text-white/45 leading-relaxed">{item.a}</p>
+              <div
+                key={item.q}
+                className="rounded-xl border border-white/[0.07] bg-white/[0.025] p-6"
+              >
+                <h3 className="font-semibold text-white text-sm mb-2">
+                  {item.q}
+                </h3>
+                <p className="text-sm text-white/45 leading-relaxed">
+                  {item.a}
+                </p>
               </div>
             ))}
           </div>
         </div>
 
         <div className="mt-12 rounded-2xl border border-white/[0.07] bg-white/[0.025] p-6 text-center">
-          <p className="text-sm text-white/45 mb-3">Didn&apos;t find what you were looking for?</p>
+          <p className="text-sm text-white/45 mb-3">
+            Didn&apos;t find what you were looking for?
+          </p>
           <p className="text-sm text-white/30">
             Email us at{' '}
-            <a href="mailto:support@novagate.dev" className="text-violet-400 hover:text-violet-300 transition-colors">
+            <a
+              href="mailto:support@novagate.dev"
+              className="text-violet-400 hover:text-violet-300 transition-colors"
+            >
               support@novagate.dev
             </a>{' '}
             and we will get back to you within 24 hours.

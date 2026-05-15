@@ -2,8 +2,7 @@ import { Controller, Get } from '@nestjs/common';
 import { ControlPlaneConnectorService } from '../connector/control-plane-connector.service';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const APP_VERSION: string = require('../../../../../package.json').version ?? '0.0.0';
+const APP_VERSION: string = process.env['npm_package_version'] ?? '0.0.0';
 
 interface HealthResponse {
   status: 'ok';

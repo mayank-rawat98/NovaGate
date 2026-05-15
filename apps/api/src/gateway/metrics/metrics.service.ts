@@ -39,16 +39,33 @@ export class MetricsService {
     labelNames: ['service'],
     registers: [this.registry],
   });
+  private readonly proxyRetriesTotal = new Counter({
+    name: 'gateway_proxy_retries_total',
+    help: 'Total proxy retry attempts',
+    labelNames: ['route', 'attempt'],
+    registers: [this.registry],
+  });
 
-  incrementHttpRequests(method: string, path: string, statusCode: number): void {
+  incrementHttpRequests(
+    method: string,
+    path: string,
+    statusCode: number,
+  ): void {
     this.httpRequestsTotal.labels(method, path, String(statusCode)).inc();
   }
 
-  observeRequestDuration(method: string, path: string, durationMs: number): void {
+  observeRequestDuration(
+    method: string,
+    path: string,
+    durationMs: number,
+  ): void {
     this.httpRequestDurationMs.labels(method, path).observe(durationMs);
   }
 
-  incrementRateLimitHit(clientIp: string, tier: 'authenticated' | 'unauthenticated'): void {
+  incrementRateLimitHit(
+    clientIp: string,
+    tier: 'authenticated' | 'unauthenticated',
+  ): void {
     this.rateLimitHitsTotal.labels(clientIp, tier).inc();
   }
 
@@ -66,6 +83,10 @@ export class MetricsService {
 
   incrementDownstreamTimeout(service: string): void {
     this.downstreamTimeoutTotal.labels(service).inc();
+  }
+
+  incrementProxyRetry(route: string, attempt: number): void {
+    this.proxyRetriesTotal.labels(route, String(attempt)).inc();
   }
 
   async getMetrics(): Promise<string> {

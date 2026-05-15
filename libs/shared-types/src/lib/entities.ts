@@ -26,6 +26,12 @@ export interface RouteEntity {
   authRequired: boolean;
   rateLimitOverride?: number;
   enabled: boolean;
+  retry?: {
+    attempts: number;
+    on: number[];
+    methods: string[];
+  };
+  plugins?: Array<{ name: string; config: Record<string, unknown> }>;
   createdAt: string;
   deletedAt?: string;
 }
@@ -34,7 +40,7 @@ export interface ServiceEntity {
   id: string;
   tenantId: string;
   name: string;
-  targetUrl: string;
+  targets: Array<{ url: string; weight: number }>;
   healthCheckPath: string;
   timeoutMs: number;
   createdAt: string;

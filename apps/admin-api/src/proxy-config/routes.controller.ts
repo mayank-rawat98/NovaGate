@@ -1,10 +1,69 @@
-import { Controller, Get, Post, Put, Delete, Param, Body } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Param,
+  Body,
+  BadRequestException,
+} from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ConfigPushService } from '../config-push/config-push.service';
+
+// Plugin names accepted by the admin-api. Reject unknown names so the
+// gateway never tries to resolve a plugin that doesn't exist.
+const KNOWN_PLUGIN_NAMES = new Set([
+  'cors',
+  'ip-restriction',
+  'request-size-limit',
+  'rate-limit',
+  'request-transform',
+  'response-transform',
+  'basic-auth',
+]);
 
 function tenantSchema(tenantId: string): string {
   if (!/^[0-9a-f-]+$/i.test(tenantId)) throw new Error('Invalid tenantId');
   return `tenant_${tenantId.replace(/-/g, '_')}`;
+}
+
+interface PluginEntry {
+  name: string;
+  config: Record<string, unknown>;
+}
+
+interface RouteBody {
+  method?: string;
+  pathPattern?: string;
+  serviceId?: string;
+  authRequired?: boolean;
+  rateLimitOverride?: number | null;
+  enabled?: boolean;
+  retry?: { attempts: number; on: number[]; methods: string[] } | null;
+  plugins?: PluginEntry[] | null;
+}
+
+function validatePlugins(plugins: unknown): void {
+  if (!plugins) return;
+  if (!Array.isArray(plugins))
+    throw new BadRequestException('plugins must be an array');
+  for (const entry of plugins) {
+    if (typeof entry.name !== 'string')
+      throw new BadRequestException('each plugin must have a string name');
+    if (!KNOWN_PLUGIN_NAMES.has(entry.name)) {
+      throw new BadRequestException(`Unknown plugin: "${entry.name}"`);
+    }
+    if (
+      typeof entry.config !== 'object' ||
+      entry.config === null ||
+      Array.isArray(entry.config)
+    ) {
+      throw new BadRequestException(
+        `plugin "${entry.name}" config must be an object`,
+      );
+    }
+  }
 }
 
 @Controller('tenants/:tenantId/routes')
@@ -23,11 +82,14 @@ export class RoutesController {
   }
 
   @Post()
-  async create(@Param('tenantId') tenantId: string, @Body() body: any) {
+  async create(@Param('tenantId') tenantId: string, @Body() body: RouteBody) {
+    validatePlugins(body.plugins);
     const schema = tenantSchema(tenantId);
     const rows = await this.dataSource.query(
-      `INSERT INTO ${schema}.routes (method, "pathPattern", "serviceId", "authRequired", "rateLimitOverride", enabled)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      `INSERT INTO ${schema}.routes
+         (method, "pathPattern", "serviceId", "authRequired", "rateLimitOverride", enabled,
+          retry, plugins)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
       [
         body.method,
         body.pathPattern,
@@ -35,6 +97,8 @@ export class RoutesController {
         body.authRequired ?? false,
         body.rateLimitOverride ?? null,
         body.enabled ?? true,
+        body.retry ? JSON.stringify(body.retry) : null,
+        body.plugins ? JSON.stringify(body.plugins) : null,
       ],
     );
     await this.configPush.triggerUpdate(tenantId);
@@ -45,8 +109,9 @@ export class RoutesController {
   async update(
     @Param('tenantId') tenantId: string,
     @Param('id') id: string,
-    @Body() body: any,
+    @Body() body: RouteBody,
   ) {
+    validatePlugins(body.plugins);
     const schema = tenantSchema(tenantId);
     const rows = await this.dataSource.query(
       `UPDATE ${schema}.routes
@@ -55,7 +120,9 @@ export class RoutesController {
            "serviceId" = COALESCE($4, "serviceId"),
            "authRequired" = COALESCE($5, "authRequired"),
            "rateLimitOverride" = COALESCE($6, "rateLimitOverride"),
-           enabled = COALESCE($7, enabled)
+           enabled = COALESCE($7, enabled),
+           retry = COALESCE($8::jsonb, retry),
+           plugins = COALESCE($9::jsonb, plugins)
        WHERE id = $1 AND "deletedAt" IS NULL RETURNING *`,
       [
         id,
@@ -65,6 +132,8 @@ export class RoutesController {
         body.authRequired ?? null,
         body.rateLimitOverride ?? null,
         body.enabled ?? null,
+        body.retry ? JSON.stringify(body.retry) : null,
+        body.plugins ? JSON.stringify(body.plugins) : null,
       ],
     );
     await this.configPush.triggerUpdate(tenantId);

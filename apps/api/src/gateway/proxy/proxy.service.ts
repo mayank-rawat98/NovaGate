@@ -1,20 +1,56 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as http from 'http';
 import type * as net from 'net';
+import type { OutgoingHttpHeaders } from 'http';
 import type { Request } from 'express';
 import { createProxyMiddleware, RequestHandler } from 'http-proxy-middleware';
 import type { Options } from 'http-proxy-middleware/dist/types';
 import { v4 as uuidv4 } from 'uuid';
-import type { RouteConfig, ServiceConfig } from '@api-gateway/shared-types';
+import type {
+  GatewayPlugin,
+  PluginContext,
+  RouteConfig,
+  ServiceConfig,
+} from '@api-gateway/shared-types';
 import { GatewayError } from '../shared/gateway-error';
-import type { RequestWithUser, ResponseWithLocals } from '../shared/request-context';
+import type {
+  RequestWithUser,
+  ResponseWithLocals,
+} from '../shared/request-context';
 import { MetricsService } from '../metrics/metrics.service';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
+import { LoadBalancerService } from './load-balancer.service';
+import { UpstreamHealthService } from '../health/upstream-health.service';
+import { matchRoute } from '../shared/route-matcher';
+import { PluginRegistryService } from '../plugins/plugin-registry.service';
+import { PluginRunnerService } from '../plugins/plugin-runner.service';
+
+// Per-request context attached to the request object so cached handlers can
+// read retry state without holding per-request closures.
+interface RetryContext {
+  retryOn: number[];
+  isLastAttempt: boolean;
+  serviceName: string;
+  resolve: (statusCode: number) => void;
+}
+
+interface PluginState {
+  plugins: GatewayPlugin[];
+  ctx: PluginContext;
+}
+
+type GwRequest = http.IncomingMessage & {
+  __gw_plugins?: PluginState;
+  __gw_retry?: RetryContext;
+};
+
+const RETRY_DELAY_MS = 100;
 
 @Injectable()
 export class ProxyService {
   private readonly logger = new Logger(ProxyService.name);
-  private readonly proxies = new Map<
+  // Handlers are cached per target URL; the retry context on `req` drives behavior.
+  private readonly handlers = new Map<
     string,
     RequestHandler<http.IncomingMessage, http.ServerResponse>
   >();
@@ -22,6 +58,10 @@ export class ProxyService {
   constructor(
     private readonly configManager: GatewayConfigManagerService,
     private readonly metricsService: MetricsService,
+    private readonly loadBalancer: LoadBalancerService,
+    private readonly upstreamHealth: UpstreamHealthService,
+    private readonly pluginRegistry: PluginRegistryService,
+    private readonly pluginRunner: PluginRunnerService,
   ) {}
 
   async forward(request: Request, response: ResponseWithLocals): Promise<void> {
@@ -35,12 +75,20 @@ export class ProxyService {
 
     const config = this.configManager.getConfig();
     if (!config) {
-      throw new GatewayError('SERVICE_NOT_FOUND', 'No downstream service matches the path', 404);
+      throw new GatewayError(
+        'SERVICE_NOT_FOUND',
+        'No downstream service matches the path',
+        404,
+      );
     }
 
-    const route = this.matchRoute(request.method, normalizedPath, config.routes);
+    const route = matchRoute(request.method, normalizedPath, config.routes);
     if (!route) {
-      throw new GatewayError('SERVICE_NOT_FOUND', 'No downstream service matches the path', 404);
+      throw new GatewayError(
+        'SERVICE_NOT_FOUND',
+        'No downstream service matches the path',
+        404,
+      );
     }
 
     const user = (request as RequestWithUser).user;
@@ -48,67 +96,170 @@ export class ProxyService {
       throw new GatewayError('TOKEN_INVALID', 'Authentication required', 401);
     }
 
-    const service = config.services.find((s: ServiceConfig) => s.id === route.serviceId);
+    const service = config.services.find(
+      (s: ServiceConfig) => s.id === route.serviceId,
+    );
     if (!service) {
-      throw new GatewayError('SERVICE_NOT_FOUND', 'No downstream service matches the path', 404);
+      throw new GatewayError(
+        'SERVICE_NOT_FOUND',
+        'No downstream service matches the path',
+        404,
+      );
+    }
+    if (!service.targets || service.targets.length === 0) {
+      throw new GatewayError(
+        'SERVICE_NOT_FOUND',
+        'No downstream targets configured for service',
+        404,
+      );
     }
 
     response.locals.downstreamService = service.name;
+
+    // Run plugin onRequest hooks before proxying
+    const pluginEntries = route.plugins ?? [];
+    const activePlugins = this.pluginRegistry.resolve(pluginEntries);
+
+    if (activePlugins.length > 0) {
+      const requestId = this.getRequestIdFromRequest(request, response);
+      const pluginCtx = this.buildPluginContext(
+        request,
+        response,
+        route,
+        service,
+        requestId,
+      );
+      const shortCircuit = await this.pluginRunner.runOnRequest(
+        activePlugins,
+        pluginCtx,
+      );
+      if (shortCircuit) {
+        this.sendShortCircuit(response, shortCircuit);
+        return;
+      }
+      // Store plugin state for use in proxyRes / error handlers
+      (request as unknown as GwRequest).__gw_plugins = {
+        plugins: activePlugins,
+        ctx: pluginCtx,
+      } satisfies PluginState;
+    }
+
     const start = Date.now();
+
+    // Strip prefix once and reuse across all retry attempts
     const strippedPath = this.stripPrefix(normalizedPath, route.pathPattern);
-    request.url = query ? `${strippedPath}?${query}` : strippedPath;
+    const finalUrl = query ? `${strippedPath}?${query}` : strippedPath;
 
-    await new Promise<void>((resolve, reject) => {
-      const handler = this.getProxyHandler(service);
-      const cleanup = () => {
-        response.off('finish', onFinish);
-        response.off('close', onFinish);
-      };
+    const retryConfig = route.retry;
+    const maxAttempts = retryConfig ? retryConfig.attempts + 1 : 1;
+    const retryOn = retryConfig?.on ?? [502, 503, 504];
+    const retryMethods = (
+      retryConfig?.methods ?? ['GET', 'HEAD', 'OPTIONS']
+    ).map((m) => m.toUpperCase());
+    const requestMethod = request.method.toUpperCase();
+    const safeRetryMethods = ['GET', 'HEAD', 'OPTIONS'];
+    const canRetry =
+      maxAttempts > 1 &&
+      safeRetryMethods.includes(requestMethod) &&
+      retryMethods.includes(requestMethod);
 
-      const onFinish = () => {
-        response.locals.downstreamLatencyMs = Date.now() - start;
-        cleanup();
-        resolve();
-      };
+    const healthyUrls = this.upstreamHealth.getHealthyUrls(service.targets);
 
-      response.once('finish', onFinish);
-      response.once('close', onFinish);
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const isLastAttempt = attempt === maxAttempts - 1;
+      const targetUrl = this.loadBalancer.selectTarget(
+        service.id,
+        service.targets,
+        healthyUrls,
+      );
 
-      handler(request as unknown as http.IncomingMessage, response as unknown as http.ServerResponse, (error?: unknown) => {
-        cleanup();
-        if (!error || response.headersSent) {
-          resolve();
-          return;
+      // Reset the URL for each attempt (safe for GET/HEAD/OPTIONS which have no body)
+      request.url = finalUrl;
+
+      const statusCode = await this.callProxy(
+        targetUrl,
+        service,
+        request,
+        response,
+        isLastAttempt,
+        retryOn,
+      );
+
+      if (canRetry && !isLastAttempt && retryOn.includes(statusCode)) {
+        this.metricsService.incrementProxyRetry(route.pathPattern, attempt + 1);
+        if (attempt > 0) {
+          await new Promise<void>((r) => setTimeout(r, RETRY_DELAY_MS));
         }
-        reject(error);
-      });
-    });
+        continue;
+      }
+      break;
+    }
+
+    response.locals.downstreamLatencyMs = Date.now() - start;
   }
 
-  private matchRoute(method: string, path: string, routes: RouteConfig[]): RouteConfig | undefined {
-    return routes.find((route: RouteConfig) => {
-      if (!route.enabled) return false;
-      const methodMatches =
-        route.method.toUpperCase() === 'ANY' || route.method.toUpperCase() === method.toUpperCase();
-      if (!methodMatches) return false;
-      const pattern = route.pathPattern;
-      if (pattern === '/') return true;
-      return path === pattern || path.startsWith(`${pattern}/`);
-    });
-  }
-
-  private getProxyHandler(
+  private callProxy(
+    targetUrl: string,
     service: ServiceConfig,
-  ): RequestHandler<http.IncomingMessage, http.ServerResponse> {
-    const cacheKey = `${service.id}:${service.targetUrl}`;
-    const existing = this.proxies.get(cacheKey);
-    if (existing) return existing;
+    request: Request,
+    response: ResponseWithLocals,
+    isLastAttempt: boolean,
+    retryOn: number[],
+  ): Promise<number> {
+    return new Promise<number>((resolve) => {
+      let settled = false;
+      let cleanup: () => void = () => undefined;
+      const resolveOnce = (code: number) => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          delete (request as unknown as GwRequest).__gw_retry;
+          resolve(code);
+        }
+      };
 
-    const timeoutMs = service.timeoutMs ?? 10000;
-    const serviceName = service.name;
+      (request as unknown as GwRequest).__gw_retry = {
+        retryOn,
+        isLastAttempt,
+        serviceName: service.name,
+        resolve: resolveOnce,
+      } satisfies RetryContext;
+
+      const handler = this.getHandler(targetUrl, service.timeoutMs ?? 10_000);
+
+      // Fallback: if the handler calls next() without a proxyRes/error event
+      const onFinish = () => resolveOnce(response.statusCode ?? 200);
+      const onClose = () => resolveOnce(response.statusCode ?? 200);
+      cleanup = () => {
+        response.off('finish', onFinish);
+        response.off('close', onClose);
+      };
+      response.once('finish', onFinish);
+      response.once('close', onClose);
+
+      handler(
+        request as unknown as http.IncomingMessage,
+        response as unknown as http.ServerResponse,
+        (err?: unknown) => {
+          if (err && !response.headersSent) {
+            resolveOnce(502);
+          } else {
+            resolveOnce(response.statusCode ?? 200);
+          }
+        },
+      );
+    });
+  }
+
+  private getHandler(
+    targetUrl: string,
+    timeoutMs: number,
+  ): RequestHandler<http.IncomingMessage, http.ServerResponse> {
+    const cached = this.handlers.get(targetUrl);
+    if (cached) return cached;
 
     const options: Options = {
-      target: service.targetUrl,
+      target: targetUrl,
       changeOrigin: true,
       xfwd: true,
       proxyTimeout: timeoutMs,
@@ -116,21 +267,44 @@ export class ProxyService {
       selfHandleResponse: true,
       on: {
         proxyReq: (proxyReq: http.ClientRequest, req: http.IncomingMessage) => {
-          const requestIdHeader = req.headers['x-request-id'];
-          const requestId = Array.isArray(requestIdHeader) ? requestIdHeader[0] : requestIdHeader;
+          const rid = req.headers['x-request-id'];
+          const requestId = Array.isArray(rid) ? rid[0] : rid;
           if (requestId) proxyReq.setHeader('X-Request-ID', requestId);
-          const forwardedFor = this.getForwardedFor(req);
-          if (forwardedFor) proxyReq.setHeader('X-Forwarded-For', forwardedFor);
+          const fwd = this.getForwardedFor(req);
+          if (fwd) proxyReq.setHeader('X-Forwarded-For', fwd);
         },
-        proxyRes: (proxyRes: http.IncomingMessage, req: http.IncomingMessage, res: http.ServerResponse) => {
+
+        proxyRes: async (
+          proxyRes: http.IncomingMessage,
+          req: http.IncomingMessage,
+          res: http.ServerResponse,
+        ) => {
           const statusCode = proxyRes.statusCode ?? 502;
-          const requestIdHeader = req.headers['x-request-id'];
-          const requestId =
-            Array.isArray(requestIdHeader)
-              ? requestIdHeader[0]
-              : requestIdHeader ?? (res as unknown as ResponseWithLocals).locals?.requestId ?? uuidv4();
+          const retryCtx: RetryContext | undefined = (
+            req as unknown as GwRequest
+          ).__gw_retry;
+          const requestId = this.getRequestId(req, res);
+
+          if (
+            retryCtx &&
+            !retryCtx.isLastAttempt &&
+            retryCtx.retryOn.includes(statusCode)
+          ) {
+            proxyRes.resume();
+            retryCtx.resolve(statusCode);
+            return;
+          }
+
           if (statusCode >= 500) {
             proxyRes.resume();
+            this.logger.error(
+              JSON.stringify({
+                msg: 'Downstream service returned 5xx',
+                statusCode,
+                downstreamService: retryCtx?.serviceName,
+                requestId,
+              }),
+            );
             if (!res.headersSent) {
               res.statusCode = 502;
               res.setHeader('Content-Type', 'application/json');
@@ -142,71 +316,113 @@ export class ProxyService {
                 }),
               );
             }
-            this.logger.error(
-              JSON.stringify({
-                msg: 'Downstream service returned 5xx',
-                statusCode,
-                downstreamService: serviceName,
-                requestId,
-              }),
-            );
             return;
           }
+
+          // Set upstream headers on response
           Object.entries(proxyRes.headers).forEach(([header, value]) => {
             if (value !== undefined) res.setHeader(header, value as string);
           });
           res.statusCode = statusCode;
+
+          // Run onResponse plugins — they may mutate headers; errors are logged, not rethrown
+          const pluginState: PluginState | undefined = (
+            req as unknown as GwRequest
+          ).__gw_plugins;
+          if (pluginState?.plugins.length) {
+            proxyRes.pause();
+            await this.pluginRunner.runOnResponse(pluginState.plugins, {
+              ...pluginState.ctx,
+              statusCode,
+              headers: res.getHeaders() as OutgoingHttpHeaders,
+            });
+            proxyRes.resume();
+          }
+
           proxyRes.pipe(res);
         },
-        error: (error: Error, req: http.IncomingMessage, res: http.ServerResponse | net.Socket) => {
-          if (!(res instanceof http.ServerResponse)) return;
-          const requestIdHeader = req.headers['x-request-id'];
-          const requestId =
-            Array.isArray(requestIdHeader)
-              ? requestIdHeader[0]
-              : requestIdHeader ?? (res as unknown as ResponseWithLocals).locals?.requestId ?? uuidv4();
+
+        error: async (
+          error: Error,
+          req: http.IncomingMessage,
+          res: http.ServerResponse | net.Socket,
+        ) => {
+          const retryCtx: RetryContext | undefined = (
+            req as unknown as GwRequest
+          ).__gw_retry;
           const nodeError = error as NodeJS.ErrnoException;
-          if (this.isTimeoutError(nodeError)) {
-            this.metricsService.incrementDownstreamTimeout(serviceName);
-            this.logger.error(
-              JSON.stringify({
-                msg: 'Downstream request timed out',
-                error: error.message,
-                downstreamService: serviceName,
-                requestId,
-              }),
-            );
-            if (!res.headersSent) {
-              res.statusCode = 504;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(
-                JSON.stringify({
-                  error: 'DOWNSTREAM_TIMEOUT',
-                  message: 'Downstream request timed out',
-                  requestId,
-                }),
+          const isTimeout = this.isTimeoutError(nodeError);
+          const statusCode = isTimeout ? 504 : 502;
+
+          // Run onError plugins — first short-circuit wins
+          const pluginState: PluginState | undefined = (
+            req as unknown as GwRequest
+          ).__gw_plugins;
+          if (pluginState?.plugins.length) {
+            const httpRes = this.toHttpServerResponse(res);
+            if (httpRes && !httpRes.headersSent) {
+              const shortCircuit = await this.pluginRunner.runOnError(
+                pluginState.plugins,
+                {
+                  ...pluginState.ctx,
+                  error,
+                },
               );
+              if (shortCircuit) {
+                this.sendShortCircuit(
+                  httpRes as unknown as ResponseWithLocals,
+                  shortCircuit,
+                );
+                retryCtx?.resolve(statusCode);
+                return;
+              }
             }
+          }
+
+          // Signal retry without sending a response
+          if (
+            retryCtx &&
+            !retryCtx.isLastAttempt &&
+            retryCtx.retryOn.includes(statusCode)
+          ) {
+            retryCtx.resolve(statusCode);
             return;
           }
-          this.logger.error(
-            JSON.stringify({
-              msg: 'Downstream proxy error',
-              error: error.message,
-              downstreamService: serviceName,
-              requestId,
-            }),
-          );
-          if (!res.headersSent) {
-            res.statusCode = 502;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(
+
+          // Send HTTP response when res is a ServerResponse or a mock that quacks like one
+          const httpRes = this.toHttpServerResponse(res);
+          if (httpRes) {
+            const requestId = this.getRequestId(req, httpRes);
+            if (isTimeout) {
+              this.metricsService.incrementDownstreamTimeout(
+                retryCtx?.serviceName ?? 'unknown',
+              );
+            }
+            this.logger.error(
               JSON.stringify({
-                error: 'DOWNSTREAM_ERROR',
-                message: 'Downstream service error',
+                msg: isTimeout
+                  ? 'Downstream request timed out'
+                  : 'Downstream proxy error',
+                error: error.message,
+                downstreamService: retryCtx?.serviceName,
                 requestId,
               }),
             );
+            if (!httpRes.headersSent) {
+              httpRes.statusCode = statusCode;
+              httpRes.setHeader('Content-Type', 'application/json');
+              const errCode = isTimeout
+                ? 'DOWNSTREAM_TIMEOUT'
+                : 'DOWNSTREAM_ERROR';
+              const errMsg = isTimeout
+                ? 'Downstream request timed out'
+                : 'Downstream service error';
+              httpRes.end(
+                JSON.stringify({ error: errCode, message: errMsg, requestId }),
+              );
+            }
+          } else {
+            retryCtx?.resolve(statusCode);
           }
         },
       },
@@ -216,8 +432,49 @@ export class ProxyService {
       http.IncomingMessage,
       http.ServerResponse
     >;
-    this.proxies.set(cacheKey, handler);
+    this.handlers.set(targetUrl, handler);
     return handler;
+  }
+
+  private buildPluginContext(
+    request: Request,
+    response: ResponseWithLocals,
+    route: RouteConfig,
+    service: ServiceConfig,
+    requestId: string,
+  ): PluginContext {
+    const tenantId = this.configManager.getTenantId() ?? 'unknown';
+    const user = (request as RequestWithUser).user;
+    return {
+      req: Object.assign(request, { requestId, user }) as PluginContext['req'],
+      res: response as unknown as http.ServerResponse,
+      route,
+      service,
+      tenantId,
+      requestId,
+      logger: {
+        info: (msg, meta) => this.logger.log(JSON.stringify({ msg, ...meta })),
+        warn: (msg, meta) => this.logger.warn(JSON.stringify({ msg, ...meta })),
+        error: (msg, meta) =>
+          this.logger.error(JSON.stringify({ msg, ...meta })),
+      },
+    };
+  }
+
+  private sendShortCircuit(
+    res: ResponseWithLocals | http.ServerResponse,
+    sc: {
+      status: number;
+      headers?: Record<string, string>;
+      body: string | Buffer;
+    },
+  ): void {
+    if ((res as http.ServerResponse).headersSent) return;
+    for (const [k, v] of Object.entries(sc.headers ?? {})) {
+      (res as http.ServerResponse).setHeader(k, v);
+    }
+    (res as http.ServerResponse).statusCode = sc.status;
+    (res as http.ServerResponse).end(sc.body);
   }
 
   private stripPrefix(path: string, prefix: string): string {
@@ -231,9 +488,38 @@ export class ProxyService {
     return error.code === 'ETIMEDOUT' || error.code === 'ESOCKETTIMEDOUT';
   }
 
-  private getForwardedFor(request: http.IncomingMessage): string | undefined {
-    const req = request as Request;
-    if (Array.isArray(req.ips) && req.ips.length > 0) return req.ips.join(', ');
-    return req.ip ?? undefined;
+  private toHttpServerResponse(
+    res: http.ServerResponse | net.Socket,
+  ): http.ServerResponse | null {
+    if (res instanceof http.ServerResponse) return res;
+    if ('statusCode' in res) return res as unknown as http.ServerResponse;
+    return null;
+  }
+
+  private getForwardedFor(req: http.IncomingMessage): string | undefined {
+    const r = req as Request;
+    if (Array.isArray(r.ips) && r.ips.length > 0) return r.ips.join(', ');
+    return r.ip ?? undefined;
+  }
+
+  private getRequestId(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): string {
+    const h = req.headers['x-request-id'];
+    return (
+      (Array.isArray(h) ? h[0] : h) ??
+      (res as unknown as ResponseWithLocals).locals?.requestId ??
+      uuidv4()
+    );
+  }
+
+  private getRequestIdFromRequest(
+    request: Request,
+    response: ResponseWithLocals,
+  ): string {
+    const h = request.headers['x-request-id'];
+    const fromHeader = Array.isArray(h) ? h[0] : h;
+    return fromHeader ?? response.locals?.requestId ?? uuidv4();
   }
 }

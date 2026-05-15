@@ -1,10 +1,51 @@
-import { Controller, Get, Post, Put, Delete, Param, Body } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Param,
+  Body,
+} from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ConfigPushService } from '../config-push/config-push.service';
+import type { ServiceTarget } from '@api-gateway/shared-types';
 
 function tenantSchema(tenantId: string): string {
   if (!/^[0-9a-f-]+$/i.test(tenantId)) throw new Error('Invalid tenantId');
   return `tenant_${tenantId.replace(/-/g, '_')}`;
+}
+
+interface ServiceBody {
+  name?: string;
+  targets?: unknown;
+  healthCheckPath?: string;
+  timeoutMs?: number;
+}
+
+function validateTargets(targets: unknown): ServiceTarget[] {
+  if (!Array.isArray(targets) || targets.length === 0) {
+    throw new BadRequestException('Targets must be a non-empty array');
+  }
+  return targets.map((target, index) => {
+    if (!target || typeof target !== 'object') {
+      throw new BadRequestException(`targets[${index}] must be an object`);
+    }
+    const record = target as { url?: unknown; weight?: unknown };
+    const url = typeof record.url === 'string' ? record.url.trim() : '';
+    if (!url) {
+      throw new BadRequestException(`targets[${index}].url is required`);
+    }
+    const weight =
+      typeof record.weight === 'number' ? record.weight : Number(record.weight);
+    if (!Number.isFinite(weight) || weight < 1 || weight > 100) {
+      throw new BadRequestException(
+        `targets[${index}].weight must be between 1 and 100`,
+      );
+    }
+    return { url, weight };
+  });
 }
 
 @Controller('tenants/:tenantId/services')
@@ -23,12 +64,18 @@ export class ServicesController {
   }
 
   @Post()
-  async create(@Param('tenantId') tenantId: string, @Body() body: any) {
+  async create(@Param('tenantId') tenantId: string, @Body() body: ServiceBody) {
     const schema = tenantSchema(tenantId);
+    const targets = validateTargets(body.targets);
     const rows = await this.dataSource.query(
-      `INSERT INTO ${schema}.services (name, "targetUrl", "healthCheckPath", "timeoutMs")
+      `INSERT INTO ${schema}.services (name, targets, "healthCheckPath", "timeoutMs")
        VALUES ($1, $2, $3, $4) RETURNING *`,
-      [body.name, body.targetUrl, body.healthCheckPath ?? null, body.timeoutMs ?? 10000],
+      [
+        body.name,
+        JSON.stringify(targets),
+        body.healthCheckPath ?? '/health',
+        body.timeoutMs ?? 10000,
+      ],
     );
     await this.configPush.triggerUpdate(tenantId);
     return rows[0];
@@ -38,20 +85,24 @@ export class ServicesController {
   async update(
     @Param('tenantId') tenantId: string,
     @Param('id') id: string,
-    @Body() body: any,
+    @Body() body: ServiceBody,
   ) {
     const schema = tenantSchema(tenantId);
+    const targets =
+      body.targets === undefined
+        ? null
+        : JSON.stringify(validateTargets(body.targets));
     const rows = await this.dataSource.query(
       `UPDATE ${schema}.services
        SET name = COALESCE($2, name),
-           "targetUrl" = COALESCE($3, "targetUrl"),
-           "healthCheckPath" = COALESCE($4, "healthCheckPath"),
-           "timeoutMs" = COALESCE($5, "timeoutMs")
+            targets = COALESCE($3::jsonb, targets),
+            "healthCheckPath" = COALESCE($4, "healthCheckPath"),
+            "timeoutMs" = COALESCE($5, "timeoutMs")
        WHERE id = $1 AND "deletedAt" IS NULL RETURNING *`,
       [
         id,
         body.name ?? null,
-        body.targetUrl ?? null,
+        targets,
         body.healthCheckPath ?? null,
         body.timeoutMs ?? null,
       ],
