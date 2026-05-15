@@ -4,6 +4,7 @@ import {
   ExceptionFilter,
   HttpException,
   HttpStatus,
+  Logger,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { GatewayError, GatewayErrorCode } from './gateway-error';
@@ -22,6 +23,8 @@ import { ErrorEvent } from '@api-gateway/shared-types';
 
 @Catch()
 export class GatewayExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(GatewayExceptionFilter.name);
+
   constructor(private readonly telemetryService: GatewayTelemetryService) {}
 
   catch(exception: unknown, host: ArgumentsHost) {
@@ -41,7 +44,7 @@ export class GatewayExceptionFilter implements ExceptionFilter {
       errorCode: 'DOWNSTREAM_ERROR', // default
       message: 'Unknown error',
       timestamp: new Date().toISOString(),
-      path: request.url,
+      path: request.originalUrl || request.url,
     };
 
     if (exception instanceof GatewayError) {
@@ -82,6 +85,19 @@ export class GatewayExceptionFilter implements ExceptionFilter {
       return;
     }
 
+    this.logger.error(
+      JSON.stringify({
+        msg: 'Unhandled proxy exception',
+        error:
+          exception instanceof Error ? exception.message : String(exception),
+        stack:
+          exception instanceof Error
+            ? exception.stack?.split('\n')[1]?.trim()
+            : undefined,
+        path: request.originalUrl || request.url,
+        requestId,
+      }),
+    );
     this.telemetryService.sendError(errorEvent);
     response.status(HttpStatus.BAD_GATEWAY).json({
       error: 'DOWNSTREAM_ERROR',
