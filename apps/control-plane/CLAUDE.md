@@ -45,12 +45,12 @@ Config updates originate in the **admin-api** `ConfigPushService`:
 
 ## Close codes (defined in `libs/shared-types/src/lib/ws-close-codes.ts`)
 
-| Code | Meaning        | Gateway should reconnect? |
-| ---- | -------------- | ------------------------- |
-| 4001 | Invalid key    | No                        |
-| 4002 | Auth timeout   | Yes (after backoff)       |
-| 4003 | Key rotated    | No                        |
-| 4004 | Suspended      | No                        |
+| Code | Meaning      | Gateway should reconnect? |
+| ---- | ------------ | ------------------------- |
+| 4001 | Invalid key  | No                        |
+| 4002 | Auth timeout | Yes (after backoff)       |
+| 4003 | Key rotated  | No                        |
+| 4004 | Suspended    | No                        |
 
 ## Heartbeat
 
