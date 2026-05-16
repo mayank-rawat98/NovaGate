@@ -34,6 +34,9 @@ export class Tenant {
   @Column({ type: 'timestamp', nullable: true })
   resetPasswordExpires!: Date;
 
+  @Column({ type: 'text', nullable: true })
+  caCertPem!: string;
+
   @CreateDateColumn()
   createdAt!: Date;
 }

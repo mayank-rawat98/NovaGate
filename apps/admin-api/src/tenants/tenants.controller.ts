@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param, Body } from '@nestjs/common';
+import { Controller, Post, Get, Put, Param, Body } from '@nestjs/common';
 import { TenantsService } from './tenants.service';
 
 @Controller('tenants')
@@ -18,5 +18,13 @@ export class TenantsController {
   @Post(':id/rotate-key')
   async rotateKey(@Param('id') id: string) {
     return this.tenantsService.rotateKey(id);
+  }
+
+  @Put(':id/ca-cert')
+  async setCaCert(
+    @Param('id') id: string,
+    @Body() body: { caCertPem: string | null },
+  ) {
+    return this.tenantsService.setCaCert(id, body.caCertPem);
   }
 }

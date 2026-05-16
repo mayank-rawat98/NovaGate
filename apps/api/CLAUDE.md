@@ -70,6 +70,11 @@ gateway/
     request-transform/              add/remove request headers and query params
     response-transform/             add/remove response headers + status override
     basic-auth/                     WWW-Authenticate challenge; credentials stored as SHA-256
+    oidc/                           JWKS-based JWT validation (Auth0, Cognito, Keycloak); 24h key cache; kid miss triggers refresh
+    oauth2-client-credentials/      token introspection (Redis-cached) OR outbound client-credentials grant injection
+    hmac-auth/                      HMAC-SHA256/512 signature validation; timing-safe compare; multi-secret rotation; clock skew check
+    acl/                            consumer group allow/deny — reads groups from TenantConfig.consumers
+    mtls/                           client cert validation via ssl_client_cert header; uses tenant caCertPem from config
   services/
     service.entity.ts               TypeORM entity for service config
   shared/
@@ -94,8 +99,12 @@ gateway/
 - `PluginContext` carries: `req`, `res`, `route`, `service`, `tenantId`, `requestId`, `logger`
 - `onRequest` returning a `PluginShortCircuit` stops the chain and sends that response immediately
 - Plugins are resolved by name from `PluginRegistryService`; unknown names are silently skipped
-- All 7 built-in plugins are registered via `GATEWAY_PLUGIN` multi-provider token in `plugins.module.ts`
+- All 12 built-in plugins are registered via `GATEWAY_PLUGIN` multi-provider token in `plugins.module.ts`
 - `requestId` is always present on `PluginContext` — generate UUID in `ProxyService` if absent on `req`
+- Phase 2 plugins that need config manager: `acl` and `mtls` inject `GatewayConfigManagerService` directly
+- Phase 2 plugins that need Redis: `oauth2-client-credentials` injects `REDIS_CLIENT` token
+- OIDC plugin caches JWKS keys in-memory (24h TTL); refreshes on `kid` miss then fails if still not found
+- HMAC plugin reads `req.rawBody` if already buffered, otherwise streams and caches it as `req.rawBody`
 
 ## Guardrails
 

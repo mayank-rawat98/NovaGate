@@ -21,6 +21,11 @@ const KNOWN_PLUGIN_NAMES = new Set([
   'request-transform',
   'response-transform',
   'basic-auth',
+  'oidc',
+  'oauth2-client-credentials',
+  'hmac-auth',
+  'acl',
+  'mtls',
 ]);
 
 function tenantSchema(tenantId: string): string {

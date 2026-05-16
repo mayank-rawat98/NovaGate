@@ -10,6 +10,11 @@ import { RateLimitPlugin } from './rate-limit/rate-limit.plugin';
 import { RequestTransformPlugin } from './request-transform/request-transform.plugin';
 import { ResponseTransformPlugin } from './response-transform/response-transform.plugin';
 import { BasicAuthPlugin } from './basic-auth/basic-auth.plugin';
+import { OidcPlugin } from './oidc/oidc.plugin';
+import { OAuth2ClientCredentialsPlugin } from './oauth2-client-credentials/oauth2-client-credentials.plugin';
+import { HmacAuthPlugin } from './hmac-auth/hmac-auth.plugin';
+import { AclPlugin } from './acl/acl.plugin';
+import { MtlsPlugin } from './mtls/mtls.plugin';
 
 const FIRST_PARTY_PLUGINS = [
   CorsPlugin,
@@ -19,6 +24,11 @@ const FIRST_PARTY_PLUGINS = [
   RequestTransformPlugin,
   ResponseTransformPlugin,
   BasicAuthPlugin,
+  OidcPlugin,
+  OAuth2ClientCredentialsPlugin,
+  HmacAuthPlugin,
+  AclPlugin,
+  MtlsPlugin,
 ];
 
 @Module({

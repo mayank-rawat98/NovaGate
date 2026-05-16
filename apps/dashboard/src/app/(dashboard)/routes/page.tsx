@@ -78,6 +78,26 @@ interface BasicAuthConfig {
 interface RequestSizeLimitConfig {
   maxBodyBytes: string;
 }
+interface OidcConfig {
+  jwksUri: string;
+  issuer: string;
+  audience: string;
+  claimsToForward: string;
+}
+interface HmacAuthConfig {
+  header: string;
+  algorithm: string;
+  secrets: string;
+  maxClockSkewSeconds: string;
+  timestampHeader: string;
+}
+interface AclConfig {
+  allow: string;
+  deny: string;
+}
+interface MtlsConfig {
+  required: boolean;
+}
 
 interface PluginsFormState {
   cors: boolean;
@@ -94,6 +114,14 @@ interface PluginsFormState {
   basicAuthConfig: BasicAuthConfig;
   requestSizeLimit: boolean;
   requestSizeLimitConfig: RequestSizeLimitConfig;
+  oidc: boolean;
+  oidcConfig: OidcConfig;
+  hmacAuth: boolean;
+  hmacAuthConfig: HmacAuthConfig;
+  acl: boolean;
+  aclConfig: AclConfig;
+  mtls: boolean;
+  mtlsConfig: MtlsConfig;
 }
 
 const EMPTY_PLUGINS_FORM: PluginsFormState = {
@@ -127,6 +155,20 @@ const EMPTY_PLUGINS_FORM: PluginsFormState = {
   basicAuthConfig: { credentials: '', realm: '' },
   requestSizeLimit: false,
   requestSizeLimitConfig: { maxBodyBytes: '' },
+  oidc: false,
+  oidcConfig: { jwksUri: '', issuer: '', audience: '', claimsToForward: '' },
+  hmacAuth: false,
+  hmacAuthConfig: {
+    header: 'x-hub-signature-256',
+    algorithm: 'sha256',
+    secrets: '',
+    maxClockSkewSeconds: '',
+    timestampHeader: '',
+  },
+  acl: false,
+  aclConfig: { allow: '', deny: '' },
+  mtls: false,
+  mtlsConfig: { required: true },
 };
 
 // ─── Form state ───────────────────────────────────────────────────────────────
@@ -279,6 +321,55 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
     result.push({ name: 'basic-auth', config: cfg });
   }
 
+  if (pf.oidc && pf.oidcConfig.jwksUri && pf.oidcConfig.issuer) {
+    const cfg: Record<string, unknown> = {
+      jwksUri: pf.oidcConfig.jwksUri,
+      issuer: pf.oidcConfig.issuer,
+    };
+    if (pf.oidcConfig.audience) cfg.audience = pf.oidcConfig.audience;
+    if (pf.oidcConfig.claimsToForward)
+      cfg.claimsToForward = pf.oidcConfig.claimsToForward
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    result.push({ name: 'oidc', config: cfg });
+  }
+
+  if (pf.hmacAuth && pf.hmacAuthConfig.secrets) {
+    const cfg: Record<string, unknown> = {
+      header: pf.hmacAuthConfig.header || 'x-hub-signature-256',
+      algorithm: pf.hmacAuthConfig.algorithm || 'sha256',
+      secrets: pf.hmacAuthConfig.secrets
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    };
+    if (pf.hmacAuthConfig.maxClockSkewSeconds)
+      cfg.maxClockSkewSeconds = Number(pf.hmacAuthConfig.maxClockSkewSeconds);
+    if (pf.hmacAuthConfig.timestampHeader)
+      cfg.timestampHeader = pf.hmacAuthConfig.timestampHeader;
+    result.push({ name: 'hmac-auth', config: cfg });
+  }
+
+  if (pf.acl && (pf.aclConfig.allow || pf.aclConfig.deny)) {
+    const cfg: Record<string, unknown> = {};
+    if (pf.aclConfig.allow)
+      cfg.allow = pf.aclConfig.allow
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    if (pf.aclConfig.deny)
+      cfg.deny = pf.aclConfig.deny
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    result.push({ name: 'acl', config: cfg });
+  }
+
+  if (pf.mtls) {
+    result.push({ name: 'mtls', config: { required: pf.mtlsConfig.required } });
+  }
+
   return result;
 }
 
@@ -358,6 +449,38 @@ function pluginsToForm(plugins: PluginEntry[] | undefined): PluginsFormState {
           .map((c) => `${c.username}:${c.passwordHash}`)
           .join('\n'),
         realm: (cfg.realm as string | undefined) ?? '',
+      };
+    } else if (p.name === 'oidc') {
+      state.oidc = true;
+      state.oidcConfig = {
+        jwksUri: (cfg.jwksUri as string | undefined) ?? '',
+        issuer: (cfg.issuer as string | undefined) ?? '',
+        audience: (cfg.audience as string | undefined) ?? '',
+        claimsToForward:
+          (cfg.claimsToForward as string[] | undefined)?.join(',') ?? '',
+      };
+    } else if (p.name === 'hmac-auth') {
+      state.hmacAuth = true;
+      state.hmacAuthConfig = {
+        header: (cfg.header as string | undefined) ?? 'x-hub-signature-256',
+        algorithm: (cfg.algorithm as string | undefined) ?? 'sha256',
+        secrets: (cfg.secrets as string[] | undefined)?.join('\n') ?? '',
+        maxClockSkewSeconds:
+          cfg.maxClockSkewSeconds != null
+            ? String(cfg.maxClockSkewSeconds)
+            : '',
+        timestampHeader: (cfg.timestampHeader as string | undefined) ?? '',
+      };
+    } else if (p.name === 'acl') {
+      state.acl = true;
+      state.aclConfig = {
+        allow: (cfg.allow as string[] | undefined)?.join(', ') ?? '',
+        deny: (cfg.deny as string[] | undefined)?.join(', ') ?? '',
+      };
+    } else if (p.name === 'mtls') {
+      state.mtls = true;
+      state.mtlsConfig = {
+        required: (cfg.required as boolean | undefined) ?? true,
       };
     }
   }
@@ -542,6 +665,10 @@ function PluginsTab({
     pf.requestTransform,
     pf.responseTransform,
     pf.basicAuth,
+    pf.oidc,
+    pf.hmacAuth,
+    pf.acl,
+    pf.mtls,
   ].filter(Boolean).length;
 
   return (
@@ -835,6 +962,182 @@ function PluginsTab({
           placeholder="My API"
         />
       </PluginSection>
+
+      <hr className="border-gray-100" />
+
+      <PluginSection
+        title="OIDC"
+        description="Validate inbound Bearer tokens using JWKS (Auth0, Cognito, Keycloak)"
+        enabled={pf.oidc}
+        onToggle={(v) => setPf({ oidc: v })}
+        badge="Phase 2"
+      >
+        <TextInput
+          label="JWKS URI"
+          value={pf.oidcConfig.jwksUri}
+          onChange={(v) =>
+            setPf({ oidcConfig: { ...pf.oidcConfig, jwksUri: v } })
+          }
+          placeholder="https://your-domain/.well-known/jwks.json"
+        />
+        <TextInput
+          label="Issuer"
+          value={pf.oidcConfig.issuer}
+          onChange={(v) =>
+            setPf({ oidcConfig: { ...pf.oidcConfig, issuer: v } })
+          }
+          placeholder="https://your-domain/"
+        />
+        <div className="grid grid-cols-2 gap-3">
+          <TextInput
+            label="Audience (optional)"
+            value={pf.oidcConfig.audience}
+            onChange={(v) =>
+              setPf({ oidcConfig: { ...pf.oidcConfig, audience: v } })
+            }
+            placeholder="my-api"
+          />
+          <TextInput
+            label="Forward Claims (comma-sep)"
+            value={pf.oidcConfig.claimsToForward}
+            onChange={(v) =>
+              setPf({ oidcConfig: { ...pf.oidcConfig, claimsToForward: v } })
+            }
+            placeholder="sub,email"
+          />
+        </div>
+      </PluginSection>
+
+      <hr className="border-gray-100" />
+
+      <PluginSection
+        title="HMAC Auth"
+        description="Validate HMAC request signatures (Stripe, GitHub webhooks)"
+        enabled={pf.hmacAuth}
+        onToggle={(v) => setPf({ hmacAuth: v })}
+        badge="Phase 2"
+      >
+        <div className="grid grid-cols-2 gap-3">
+          <TextInput
+            label="Signature Header"
+            value={pf.hmacAuthConfig.header}
+            onChange={(v) =>
+              setPf({ hmacAuthConfig: { ...pf.hmacAuthConfig, header: v } })
+            }
+            placeholder="x-hub-signature-256"
+          />
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-gray-600">
+              Algorithm
+            </label>
+            <select
+              value={pf.hmacAuthConfig.algorithm}
+              onChange={(e) =>
+                setPf({
+                  hmacAuthConfig: {
+                    ...pf.hmacAuthConfig,
+                    algorithm: e.target.value,
+                  },
+                })
+              }
+              className="rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            >
+              <option value="sha256">SHA-256</option>
+              <option value="sha512">SHA-512</option>
+            </select>
+          </div>
+        </div>
+        <Textarea
+          label="Secrets (one per line — supports rotation)"
+          value={pf.hmacAuthConfig.secrets}
+          onChange={(v) =>
+            setPf({ hmacAuthConfig: { ...pf.hmacAuthConfig, secrets: v } })
+          }
+          placeholder="whsec_abc123..."
+          rows={3}
+        />
+        <div className="grid grid-cols-2 gap-3">
+          <TextInput
+            label="Timestamp Header (optional)"
+            value={pf.hmacAuthConfig.timestampHeader}
+            onChange={(v) =>
+              setPf({
+                hmacAuthConfig: { ...pf.hmacAuthConfig, timestampHeader: v },
+              })
+            }
+            placeholder="x-timestamp"
+          />
+          <TextInput
+            label="Max Clock Skew (seconds)"
+            value={pf.hmacAuthConfig.maxClockSkewSeconds}
+            onChange={(v) =>
+              setPf({
+                hmacAuthConfig: {
+                  ...pf.hmacAuthConfig,
+                  maxClockSkewSeconds: v,
+                },
+              })
+            }
+            placeholder="300"
+            type="number"
+          />
+        </div>
+      </PluginSection>
+
+      <hr className="border-gray-100" />
+
+      <PluginSection
+        title="ACL"
+        description="Allow or deny access based on consumer groups"
+        enabled={pf.acl}
+        onToggle={(v) => setPf({ acl: v })}
+        badge="Phase 2"
+      >
+        <div className="grid grid-cols-2 gap-3">
+          <TextInput
+            label="Allow Groups (comma-sep)"
+            value={pf.aclConfig.allow}
+            onChange={(v) =>
+              setPf({ aclConfig: { ...pf.aclConfig, allow: v } })
+            }
+            placeholder="admin, internal"
+          />
+          <TextInput
+            label="Deny Groups (takes precedence)"
+            value={pf.aclConfig.deny}
+            onChange={(v) => setPf({ aclConfig: { ...pf.aclConfig, deny: v } })}
+            placeholder="banned"
+          />
+        </div>
+        <p className="text-xs text-gray-400">
+          Consumers without any of the allowed groups are denied. Set groups on
+          consumers in the Consumers page.
+        </p>
+      </PluginSection>
+
+      <hr className="border-gray-100" />
+
+      <PluginSection
+        title="mTLS"
+        description="Require a client certificate signed by the tenant CA"
+        enabled={pf.mtls}
+        onToggle={(v) => setPf({ mtls: v })}
+        badge="Phase 2"
+      >
+        <div className="flex items-center justify-between rounded-md border border-gray-200 px-3 py-2">
+          <span className="text-xs font-medium text-gray-600">
+            Enforce (reject if no cert)
+          </span>
+          <Toggle
+            value={pf.mtlsConfig.required}
+            onChange={(v) => setPf({ mtlsConfig: { required: v } })}
+          />
+        </div>
+        <p className="text-xs text-gray-400">
+          Upload the CA certificate in Settings → Security to enable certificate
+          validation.
+        </p>
+      </PluginSection>
     </div>
   );
 }
@@ -947,6 +1250,10 @@ export default function RoutesPage() {
     pluginsForm.requestTransform,
     pluginsForm.responseTransform,
     pluginsForm.basicAuth,
+    pluginsForm.oidc,
+    pluginsForm.hmacAuth,
+    pluginsForm.acl,
+    pluginsForm.mtls,
   ].filter(Boolean).length;
 
   return (

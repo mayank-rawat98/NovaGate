@@ -81,7 +81,23 @@ Routes can carry an ordered `plugins[]` array. Each entry names a plugin and pas
 
 The registry resolves the ordered plugin list per route. The runner calls `onRequest` hooks sequentially — any plugin can short-circuit by returning a `PluginShortCircuit` response (status + headers + body). `onResponse` hooks run after the upstream responds; errors there are logged but never rethrow. Adding a new first-party plugin requires only adding the class to `plugins.module.ts` — zero changes to `gateway.module.ts`.
 
-**Built-in plugins:** `cors`, `ip-restriction`, `rate-limit`, `request-size-limit`, `request-transform`, `response-transform`, `basic-auth`.
+**Phase 1 plugins:** `cors`, `ip-restriction`, `rate-limit`, `request-size-limit`, `request-transform`, `response-transform`, `basic-auth`.
+
+**Phase 2 plugins (auth completeness):** `oidc`, `oauth2-client-credentials`, `hmac-auth`, `acl`, `mtls`.
+
+### Phase 2 — Auth completeness (OIDC, HMAC, ACL, mTLS)
+
+Five additional plugins ship with Phase 2, all configurable from the dashboard with zero gateway restart:
+
+| Plugin                      | Purpose                                                                             |
+| --------------------------- | ----------------------------------------------------------------------------------- |
+| `oidc`                      | JWKS JWT validation (Auth0, Cognito, Keycloak); 24h key cache; kid-miss refresh     |
+| `oauth2-client-credentials` | Token introspection (Redis-cached) or outbound client-credentials grant injection   |
+| `hmac-auth`                 | HMAC-SHA256/512 signing (Stripe style); multi-secret rotation; clock skew guard     |
+| `acl`                       | Consumer group allow/deny; groups assigned per consumer via dashboard               |
+| `mtls`                      | Client cert validation against tenant CA PEM; cert subject/SAN forwarded as headers |
+
+The CA certificate for mTLS is uploaded in the dashboard **Settings → CA Certificate** section and pushed to the gateway over the existing WebSocket config update channel — no SSH or restart required.
 
 ### Nx module-boundary enforcement
 
@@ -95,7 +111,7 @@ ESLint tags prevent circular imports between `proxy`, `rate-limit`, `logging`, a
 apps/
   api/                    Gateway binary — Docker image deployed on customer VPS
     src/gateway/
-      plugins/            Plugin system — registry, runner, and 7 built-in plugins
+      plugins/            Plugin system — registry, runner, and 12 built-in plugins
         cors/             Per-route CORS headers and preflight handling
         ip-restriction/   CIDR allow/deny per route
         rate-limit/       Per-route Redis sliding-window rate limiter
@@ -103,6 +119,11 @@ apps/
         request-transform/   Mutate headers and query params before upstream
         response-transform/  Mutate response headers and override status code
         basic-auth/       SHA-256 credential check with timing-safe comparison
+        oidc/             JWKS-based JWT validation (Auth0, Cognito, Keycloak); 24h key cache
+        oauth2-client-credentials/  Token introspection (Redis-cached) or outbound grant injection
+        hmac-auth/        HMAC-SHA256/512 signature validation; multi-secret rotation; clock skew
+        acl/              Consumer group allow/deny — reads groups from TenantConfig.consumers
+        mtls/             Client cert validation via ssl_client_cert header; uses tenant CA PEM
   control-plane/          WebSocket server — config push & telemetry ingestion
   admin-api/              REST API for dashboard — CRUD, analytics, auth
   dashboard/              Next.js 14 tenant UI — route management, observability
@@ -123,21 +144,19 @@ docker/
 Request path (order is load-bearing):
 
 ```text
-CorsMiddleware → IpRestrictionMiddleware → JwtMiddleware → RequestSizeLimitMiddleware
-  → [RateLimitGuard] → [LoggingInterceptor] → ProxyMiddleware
-                                                  ↓
-                                          PluginRunner.onRequest
-                                          → forward to downstream
-                                          → PluginRunner.onResponse
+JwtMiddleware → [RateLimitGuard] → [LoggingInterceptor] → ProxyMiddleware
+                                                               ↓
+                                                       PluginRunner.onRequest
+                                                       → forward to downstream
+                                                       → PluginRunner.onResponse
 ```
 
-- `CorsMiddleware` — handles OPTIONS preflights and applies per-route CORS headers before any auth runs
-- `IpRestrictionMiddleware` — blocks denied IPs (CIDR matching) early, before JWT work
-- `JwtMiddleware` — decodes JWT, attaches `req.user`; never blocks (auth is enforced per-route by the proxy)
-- `RequestSizeLimitMiddleware` — rejects oversized request bodies before the proxy reads the stream
+- `JwtMiddleware` — decodes Bearer JWT, attaches `req.user`; never blocks (auth enforced per-route by the proxy)
 - `RateLimitGuard` — Redis sliding window; separate limits for authenticated vs unauthenticated clients
 - `LoggingInterceptor` — captures latency, status, `X-Request-ID`; batches logs for async upload
-- `ProxyMiddleware` → `ProxyService.forward()` — resolves and runs route plugins, then forwards to downstream with timeout and streams response back
+- `ProxyMiddleware` → `ProxyService.forward()` — resolves and runs route plugins, then forwards to downstream
+
+CORS, IP restriction, rate limiting, body size limits, auth, and all other per-route policies run as **plugins** — not middleware. This keeps the middleware pipeline thin and makes every policy configurable per route without gateway restarts.
 
 ---
 

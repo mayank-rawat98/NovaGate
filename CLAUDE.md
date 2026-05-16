@@ -134,14 +134,19 @@ config-manager/ GatewayConfigManagerService — in-memory config + Redis warm-st
 connector/      ControlPlaneConnectorService — WS lifecycle, reconnect, message buffer
 telemetry/      GatewayTelemetryService — batches telemetry to send upstream
 services/       ServicesModule — TypeORM entity + repository for service config
-plugins/        PluginRegistryService + PluginRunnerService + 7 built-in plugins
+plugins/        PluginRegistryService + PluginRunnerService + 12 built-in plugins
 shared/         GatewayExceptionFilter, GatewayError, redis.tokens, request-context, route-matcher
 ```
 
 **Middleware pipeline (order is load-bearing — do not reorder):**
 `JwtMiddleware` → `RateLimitGuard` → `LoggingInterceptor` → `ProxyMiddleware` → `PluginRunner.onRequest` → downstream → `PluginRunner.onResponse`
 
-**Plugin system:** CORS, IP restriction, rate limiting, body size limits, header transforms, and basic-auth are all handled as **plugins** registered on `route.plugins[]`. The 7 built-in plugins are: `cors`, `ip-restriction`, `rate-limit`, `request-size-limit`, `request-transform`, `response-transform`, `basic-auth`. Plugins run in listed order; returning a `PluginShortCircuit` stops the chain.
+**Plugin system:** Auth, CORS, IP restriction, rate limiting, body size limits, and header transforms are all handled as **plugins** registered on `route.plugins[]`. The 12 built-in plugins are:
+
+- Phase 1: `cors`, `ip-restriction`, `rate-limit`, `request-size-limit`, `request-transform`, `response-transform`, `basic-auth`
+- Phase 2: `oidc` (JWKS-based JWT validation), `oauth2-client-credentials` (introspection or grant injection), `hmac-auth` (Stripe-style HMAC signatures), `acl` (consumer group allow/deny), `mtls` (client cert validation)
+
+Plugins run in listed order; returning a `PluginShortCircuit` stops the chain.
 
 **Import rules:** `proxy`, `rate-limit`, `logging` may import from `metrics`. Nothing else imports from `proxy`, `logging`, or `auth` except `gateway.module.ts`. Shared state between subfolders belongs in `shared/`.
 

@@ -70,7 +70,12 @@ export type CreateServiceDto = Pick<ServiceEntity, 'name' | 'targets'> & {
 };
 export type UpdateServiceDto = Partial<CreateServiceDto>;
 
-export type CreateConsumerDto = { name: string; rateLimitTier?: string };
+export type CreateConsumerDto = {
+  name: string;
+  rateLimitTier?: string;
+  groups?: string[];
+};
+export type UpdateConsumerDto = { groups?: string[] };
 export type CreateConsumerResult = ConsumerEntity & { apiKey: string };
 
 const BASE = 'https://api.novagate.dev';
@@ -289,8 +294,29 @@ export function createConsumer(
   });
 }
 
+export function updateConsumer(
+  tenantId: string,
+  id: string,
+  dto: UpdateConsumerDto,
+): Promise<ConsumerEntity> {
+  return request(`/tenants/${tenantId}/consumers/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(dto),
+  });
+}
+
 export function deleteConsumer(tenantId: string, id: string): Promise<void> {
   return request(`/tenants/${tenantId}/consumers/${id}`, { method: 'DELETE' });
+}
+
+export function setCaCert(
+  tenantId: string,
+  caCertPem: string | null,
+): Promise<{ success: boolean }> {
+  return request(`/tenants/${tenantId}/ca-cert`, {
+    method: 'PUT',
+    body: JSON.stringify({ caCertPem }),
+  });
 }
 
 // ─── Health ──────────────────────────────────────────────────────────────────
