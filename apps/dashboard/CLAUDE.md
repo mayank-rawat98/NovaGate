@@ -21,7 +21,7 @@ connections.
 | `/dashboard`             | `app/dashboard/page.tsx`             | Metrics overview, gateway status                       |
 | `/(dashboard)/services`  | `app/(dashboard)/services/page.tsx`  | Service CRUD with targets[] and health                 |
 | `/(dashboard)/routes`    | `app/(dashboard)/routes/page.tsx`    | Route CRUD — three-tab panel: Basic, Advanced, Plugins |
-| `/(dashboard)/consumers` | `app/(dashboard)/consumers/page.tsx` | API key consumers                                      |
+| `/(dashboard)/consumers` | `app/(dashboard)/consumers/page.tsx` | API key consumers; group assignment for ACL plugin     |
 | `/(dashboard)/logs`      | `app/(dashboard)/logs/page.tsx`      | Filterable request logs                                |
 | `/(dashboard)/errors`    | `app/(dashboard)/errors/page.tsx`    | Error tracking and resolution                          |
 | `/(dashboard)/settings`  | `app/(dashboard)/settings/page.tsx`  | Tenant info, API key, Docker Compose                   |
@@ -66,10 +66,21 @@ enabled toggle, rate limit override.
 - `request-transform` — addHeaders (JSON), removeHeaders (comma-list), addQueryParams (JSON), removeQueryParams (comma-list)
 - `response-transform` — addHeaders (JSON), removeHeaders (comma-list), statusOverride
 - `basic-auth` — realm, credentials (username:password pairs, one per line; stored as SHA-256 hashes)
+- `oidc` — jwksUri, issuer, audience (optional), claimsToForward (comma-sep, optional)
+- `hmac-auth` — header name, algorithm (sha256/sha512), secrets (one per line for rotation), timestampHeader + maxClockSkewSeconds (optional)
+- `acl` — allow/deny group lists (comma-sep); groups assigned per consumer
+- `mtls` — required toggle; CA cert uploaded in Settings
 
 Only enabled plugins are serialized to `route.plugins[]`. If no plugins are enabled, the field is omitted.
 
-Feature badges in the routes table: CORS, IP, Retry, size limit, and a Plugins count badge when `plugins.length > 0`. A dimmed row means `enabled: false`.
+Feature badges in the routes table: Retry badge and a Plugins count badge when `plugins.length > 0`. A dimmed row means `enabled: false`.
+
+## Consumers page
+
+- Groups field in the create panel (comma-separated)
+- Edit button (pencil icon) opens panel in edit mode — only groups can be changed
+- Groups displayed as indigo badge chips in the table
+- Groups feed the `acl` plugin on routes
 
 ## Settings page
 

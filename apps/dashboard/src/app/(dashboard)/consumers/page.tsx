@@ -2,10 +2,11 @@
 
 import { useState } from 'react';
 import useSWR from 'swr';
-import { Plus, X, Copy, Check } from 'lucide-react';
+import { Plus, X, Copy, Check, Pencil } from 'lucide-react';
 import {
   getConsumers,
   createConsumer,
+  updateConsumer,
   deleteConsumer,
 } from '../../../lib/api-client';
 import { getTenantId } from '../../../lib/auth';
@@ -19,6 +20,22 @@ function formatDate(ts: string): string {
   });
 }
 
+function GroupBadges({ groups }: { groups?: string[] }) {
+  if (!groups?.length) return <span className="text-xs text-gray-400">—</span>;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {groups.map((g) => (
+        <span
+          key={g}
+          className="rounded bg-indigo-50 px-1.5 py-0.5 text-xs font-medium text-indigo-700"
+        >
+          {g}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export default function ConsumersPage() {
   const tenantId = getTenantId() ?? '';
 
@@ -29,7 +46,10 @@ export default function ConsumersPage() {
   );
 
   const [panelOpen, setPanelOpen] = useState(false);
+  const [panelMode, setPanelMode] = useState<'create' | 'edit'>('create');
+  const [editId, setEditId] = useState<string | null>(null);
   const [name, setName] = useState('');
+  const [groupsInput, setGroupsInput] = useState('');
   const [saving, setSaving] = useState(false);
 
   const [newKey, setNewKey] = useState<string | null>(null);
@@ -38,15 +58,57 @@ export default function ConsumersPage() {
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
   const [revoking, setRevoking] = useState(false);
 
+  function openCreate() {
+    setPanelMode('create');
+    setEditId(null);
+    setName('');
+    setGroupsInput('');
+    setPanelOpen(true);
+  }
+
+  function openEdit(consumer: Consumer) {
+    setPanelMode('edit');
+    setEditId(consumer.id);
+    setName(consumer.name);
+    setGroupsInput((consumer.groups ?? []).join(', '));
+    setPanelOpen(true);
+  }
+
+  function parseGroups(input: string): string[] {
+    return input
+      .split(',')
+      .map((g) => g.trim())
+      .filter(Boolean);
+  }
+
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (!tenantId || !name.trim()) return;
     setSaving(true);
     try {
-      const result = await createConsumer(tenantId, { name: name.trim() });
+      const result = await createConsumer(tenantId, {
+        name: name.trim(),
+        groups: parseGroups(groupsInput),
+      });
       setNewKey(result.apiKey);
       setPanelOpen(false);
       setName('');
+      setGroupsInput('');
+      await mutate();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleUpdate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!tenantId || !editId) return;
+    setSaving(true);
+    try {
+      await updateConsumer(tenantId, editId, {
+        groups: parseGroups(groupsInput),
+      });
+      setPanelOpen(false);
       await mutate();
     } finally {
       setSaving(false);
@@ -78,10 +140,7 @@ export default function ConsumersPage() {
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-gray-900">Consumers</h1>
         <button
-          onClick={() => {
-            setName('');
-            setPanelOpen(true);
-          }}
+          onClick={openCreate}
           className="flex items-center gap-1.5 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
         >
           <Plus className="h-4 w-4" />
@@ -97,6 +156,9 @@ export default function ConsumersPage() {
                 Name
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                Groups
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
                 Created
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
@@ -109,7 +171,7 @@ export default function ConsumersPage() {
             {!consumers ? (
               <tr>
                 <td
-                  colSpan={4}
+                  colSpan={5}
                   className="px-4 py-8 text-center text-sm text-gray-400"
                 >
                   Loading…
@@ -118,7 +180,7 @@ export default function ConsumersPage() {
             ) : consumers.length === 0 ? (
               <tr>
                 <td
-                  colSpan={4}
+                  colSpan={5}
                   className="px-4 py-8 text-center text-sm text-gray-400"
                 >
                   No consumers configured
@@ -134,6 +196,9 @@ export default function ConsumersPage() {
                   >
                     <td className="px-4 py-3 font-medium text-gray-900">
                       {consumer.name}
+                    </td>
+                    <td className="px-4 py-3">
+                      <GroupBadges groups={consumer.groups} />
                     </td>
                     <td className="px-4 py-3 text-gray-500">
                       {formatDate(consumer.createdAt)}
@@ -151,7 +216,14 @@ export default function ConsumersPage() {
                     </td>
                     <td className="px-4 py-3">
                       {!revoked && (
-                        <div className="flex items-center justify-end">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => openEdit(consumer)}
+                            className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                            title="Edit groups"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
                           {revokeTarget === consumer.id ? (
                             <div className="flex items-center gap-2">
                               <span className="text-xs text-gray-600">
@@ -190,7 +262,7 @@ export default function ConsumersPage() {
         </table>
       </div>
 
-      {/* Add Consumer slide-over */}
+      {/* Add / Edit Consumer slide-over */}
       {panelOpen && (
         <div className="fixed inset-0 z-40 flex justify-end">
           <div
@@ -200,7 +272,7 @@ export default function ConsumersPage() {
           <div className="relative z-50 flex h-full w-80 flex-col bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
               <h2 className="text-base font-semibold text-gray-900">
-                Add Consumer
+                {panelMode === 'create' ? 'Add Consumer' : 'Edit Consumer'}
               </h2>
               <button
                 onClick={() => setPanelOpen(false)}
@@ -210,22 +282,40 @@ export default function ConsumersPage() {
               </button>
             </div>
             <form
-              onSubmit={handleCreate}
+              onSubmit={panelMode === 'create' ? handleCreate : handleUpdate}
               className="flex flex-1 flex-col gap-4 p-6"
             >
+              {panelMode === 'create' && (
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm font-medium text-gray-700">
+                    Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    autoFocus
+                    placeholder="my-service"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+              )}
               <div className="flex flex-col gap-1">
                 <label className="text-sm font-medium text-gray-700">
-                  Name
+                  Groups{' '}
+                  <span className="font-normal text-gray-400">(optional)</span>
                 </label>
                 <input
                   type="text"
-                  required
-                  autoFocus
-                  placeholder="my-service"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  placeholder="admin, read-only"
+                  value={groupsInput}
+                  onChange={(e) => setGroupsInput(e.target.value)}
                   className="rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                 />
+                <p className="text-xs text-gray-400">
+                  Comma-separated group names — used by ACL plugin
+                </p>
               </div>
               <div className="mt-auto flex justify-end gap-2 pt-4">
                 <button
@@ -237,10 +327,16 @@ export default function ConsumersPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={saving || !name.trim()}
+                  disabled={saving || (panelMode === 'create' && !name.trim())}
                   className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                 >
-                  {saving ? 'Creating…' : 'Create'}
+                  {saving
+                    ? panelMode === 'create'
+                      ? 'Creating…'
+                      : 'Saving…'
+                    : panelMode === 'create'
+                      ? 'Create'
+                      : 'Save Changes'}
                 </button>
               </div>
             </form>

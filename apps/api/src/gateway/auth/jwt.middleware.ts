@@ -72,16 +72,10 @@ export class JwtMiddleware implements NestMiddleware {
           ?.consumers.find((c) => c.keyHash === hash);
         if (consumer) {
           req.user = { id: consumer.id };
-          next();
-          return;
         }
-        this.respondUnauthorized(
-          req,
-          res,
-          requestId,
-          'TOKEN_INVALID',
-          'Access token is invalid',
-        );
+        // Not a platform JWT and not a consumer key — could be a third-party OIDC
+        // token. Pass through and let route plugins (oidc, hmac-auth, etc.) enforce auth.
+        next();
         return;
       }
       this.logger.warn(

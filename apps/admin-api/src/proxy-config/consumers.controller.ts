@@ -1,4 +1,12 @@
-import { Controller, Get, Post, Delete, Param, Body } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Param,
+  Body,
+} from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import * as crypto from 'crypto';
 import { ConfigPushService } from '../config-push/config-push.service';
@@ -19,14 +27,14 @@ export class ConsumersController {
   async findAll(@Param('tenantId') tenantId: string) {
     const schema = tenantSchema(tenantId);
     return this.dataSource.query(
-      `SELECT id, name, "rateLimitTier", "createdAt" FROM ${schema}.consumers WHERE "revokedAt" IS NULL ORDER BY "createdAt" ASC`,
+      `SELECT id, name, "rateLimitTier", groups, "createdAt" FROM ${schema}.consumers WHERE "revokedAt" IS NULL ORDER BY "createdAt" ASC`,
     );
   }
 
   @Post()
   async create(
     @Param('tenantId') tenantId: string,
-    @Body() body: { name: string; rateLimitTier?: string },
+    @Body() body: { name: string; rateLimitTier?: string; groups?: string[] },
   ) {
     const schema = tenantSchema(tenantId);
     const random = crypto.randomBytes(16).toString('hex');
@@ -34,13 +42,33 @@ export class ConsumersController {
     const keyHash = crypto.createHash('sha256').update(plainKey).digest('hex');
 
     const rows = await this.dataSource.query(
-      `INSERT INTO ${schema}.consumers (name, "keyHash", "rateLimitTier")
-       VALUES ($1, $2, $3) RETURNING id, name, "rateLimitTier", "createdAt"`,
-      [body.name, keyHash, body.rateLimitTier ?? 'authenticated'],
+      `INSERT INTO ${schema}.consumers (name, "keyHash", "rateLimitTier", groups)
+       VALUES ($1, $2, $3, $4) RETURNING id, name, "rateLimitTier", groups, "createdAt"`,
+      [
+        body.name,
+        keyHash,
+        body.rateLimitTier ?? 'authenticated',
+        JSON.stringify(body.groups ?? []),
+      ],
     );
 
     await this.configPush.triggerUpdate(tenantId);
     return { ...rows[0], apiKey: plainKey };
+  }
+
+  @Put(':id')
+  async update(
+    @Param('tenantId') tenantId: string,
+    @Param('id') id: string,
+    @Body() body: { groups?: string[] },
+  ) {
+    const schema = tenantSchema(tenantId);
+    const rows = await this.dataSource.query(
+      `UPDATE ${schema}.consumers SET groups = $2 WHERE id = $1 AND "revokedAt" IS NULL RETURNING id, name, "rateLimitTier", groups, "createdAt"`,
+      [id, JSON.stringify(body.groups ?? [])],
+    );
+    await this.configPush.triggerUpdate(tenantId);
+    return rows[0];
   }
 
   @Delete(':id')

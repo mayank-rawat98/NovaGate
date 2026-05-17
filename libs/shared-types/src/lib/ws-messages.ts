@@ -98,6 +98,7 @@ export interface TenantConfig {
     unauthMax: number;
     authMax: number;
   };
+  caCertPem?: string;
 }
 
 export interface RouteConfig {
@@ -114,6 +115,10 @@ export interface RouteConfig {
     methods: string[];
   };
   plugins?: Array<{ name: string; config: Record<string, unknown> }>;
+  acl?: {
+    allow?: string[];
+    deny?: string[];
+  };
 }
 
 export interface ServiceTarget {
@@ -134,6 +139,7 @@ export interface ConsumerConfig {
   name: string;
   keyHash: string;
   rateLimitTier: 'unauthenticated' | 'authenticated' | string;
+  groups?: string[];
 }
 
 export interface RequestLog {

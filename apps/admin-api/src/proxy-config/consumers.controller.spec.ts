@@ -33,6 +33,14 @@ describe('ConsumersController', () => {
         expect.stringContaining('"revokedAt" IS NULL'),
       );
     });
+
+    it('includes groups column in SELECT', async () => {
+      const ds = mockDataSource();
+      ds.query.mockResolvedValue([]);
+      const { controller } = await build(ds);
+      await controller.findAll(TENANT);
+      expect(ds.query).toHaveBeenCalledWith(expect.stringContaining('groups'));
+    });
   });
 
   describe('POST create', () => {
@@ -40,7 +48,12 @@ describe('ConsumersController', () => {
       const ds = mockDataSource();
       const cp = mockConfigPush();
       ds.query.mockResolvedValue([
-        { id: 'c-new', name: 'web-app', rateLimitTier: 'authenticated' },
+        {
+          id: 'c-new',
+          name: 'web-app',
+          rateLimitTier: 'authenticated',
+          groups: [],
+        },
       ]);
       const { controller } = await build(ds, cp);
 
@@ -65,6 +78,35 @@ describe('ConsumersController', () => {
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
 
+    it('stores groups when provided', async () => {
+      const ds = mockDataSource();
+      ds.query.mockResolvedValue([
+        {
+          id: 'c-new',
+          name: 'admin-app',
+          rateLimitTier: 'authenticated',
+          groups: ['admin'],
+        },
+      ]);
+      const { controller } = await build(ds);
+      const result = await controller.create(TENANT, {
+        name: 'admin-app',
+        groups: ['admin'],
+      });
+      const [, params] = ds.query.mock.calls[0];
+      expect(params[3]).toBe(JSON.stringify(['admin']));
+      expect(result.groups).toEqual(['admin']);
+    });
+
+    it('defaults groups to empty array when not provided', async () => {
+      const ds = mockDataSource();
+      ds.query.mockResolvedValue([{ id: 'c-1', name: 'app', groups: [] }]);
+      const { controller } = await build(ds);
+      await controller.create(TENANT, { name: 'app' });
+      const [, params] = ds.query.mock.calls[0];
+      expect(params[3]).toBe(JSON.stringify([]));
+    });
+
     it('each call generates a unique key', async () => {
       const ds = mockDataSource();
       ds.query.mockResolvedValue([{ id: 'c-1', name: 'app' }]);
@@ -75,6 +117,33 @@ describe('ConsumersController', () => {
       const r2 = await controller.create(TENANT, { name: 'app' });
 
       expect(r1.apiKey).not.toBe(r2.apiKey);
+    });
+  });
+
+  describe('PUT update', () => {
+    it('updates groups and triggers push', async () => {
+      const ds = mockDataSource();
+      const cp = mockConfigPush();
+      ds.query.mockResolvedValue([
+        {
+          id: 'c-1',
+          name: 'app',
+          rateLimitTier: 'authenticated',
+          groups: ['admin', 'read-only'],
+        },
+      ]);
+      const { controller } = await build(ds, cp);
+
+      const result = await controller.update(TENANT, 'c-1', {
+        groups: ['admin', 'read-only'],
+      });
+
+      expect(result.groups).toEqual(['admin', 'read-only']);
+      expect(ds.query).toHaveBeenCalledWith(expect.stringContaining('UPDATE'), [
+        'c-1',
+        JSON.stringify(['admin', 'read-only']),
+      ]);
+      expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
   });
 
