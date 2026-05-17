@@ -197,6 +197,11 @@ export class OidcPlugin implements GatewayPlugin {
   private async fetchAndCache(jwksUri: string): Promise<JwkKey[]> {
     const body = await this.fetchJson(jwksUri);
     const jwks = body as JwksResponse;
+    if (!Array.isArray(jwks?.keys)) {
+      throw new Error(
+        `JWKS endpoint returned an invalid response (missing keys array): ${jwksUri}`,
+      );
+    }
     this.cache.set(jwksUri, { keys: jwks.keys, fetchedAt: Date.now() });
     return jwks.keys;
   }

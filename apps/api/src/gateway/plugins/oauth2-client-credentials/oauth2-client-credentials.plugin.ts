@@ -1,4 +1,5 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
+import * as crypto from 'crypto';
 import * as https from 'https';
 import * as http from 'http';
 import type { Redis } from 'ioredis';
@@ -34,8 +35,11 @@ export class OAuth2ClientCredentialsPlugin implements GatewayPlugin {
   readonly name = 'oauth2-client-credentials';
   private readonly logger = new Logger(OAuth2ClientCredentialsPlugin.name);
 
-  // In-memory cache for outbound access tokens (client credentials grant)
-  private outboundToken: { token: string; expiresAt: number } | null = null;
+  // Keyed by tokenEndpoint+clientId+scopes so routes with different configs don't share tokens
+  private readonly outboundTokenCache = new Map<
+    string,
+    { token: string; expiresAt: number }
+  >();
 
   constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
 
@@ -62,6 +66,17 @@ export class OAuth2ClientCredentialsPlugin implements GatewayPlugin {
     ctx: PluginContext,
     config: OAuth2Config,
   ): Promise<PluginShortCircuit | void> {
+    if (!config.clientId || !config.clientSecret) {
+      ctx.logger.error(
+        'oauth2-client-credentials plugin misconfigured: clientId and clientSecret are required for introspection',
+      );
+      return this.unauthorized(
+        ctx.requestId,
+        'OAUTH2_MISCONFIGURED',
+        'Plugin configuration error: clientId and clientSecret are required',
+      );
+    }
+
     const authHeader = ctx.req.headers['authorization'];
     const header = Array.isArray(authHeader) ? authHeader[0] : authHeader;
 
@@ -76,7 +91,7 @@ export class OAuth2ClientCredentialsPlugin implements GatewayPlugin {
     const token = header.slice(7);
 
     // Check Redis cache first
-    const cacheKey = `${CACHE_PREFIX}${Buffer.from(token).toString('base64').slice(0, 32)}`;
+    const cacheKey = `${CACHE_PREFIX}${crypto.createHash('sha256').update(token).digest('hex')}`;
     let result: IntrospectionResponse | null = null;
 
     try {
@@ -134,11 +149,10 @@ export class OAuth2ClientCredentialsPlugin implements GatewayPlugin {
   }
 
   private async getOutboundToken(config: OAuth2Config): Promise<string> {
-    if (
-      this.outboundToken &&
-      Date.now() < this.outboundToken.expiresAt - 30_000
-    ) {
-      return this.outboundToken.token;
+    const cacheKey = `${config.tokenEndpoint}:${config.clientId}:${(config.scopes ?? []).join(',')}`;
+    const cached = this.outboundTokenCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt - 30_000) {
+      return cached.token;
     }
 
     const body = new URLSearchParams({
@@ -155,10 +169,10 @@ export class OAuth2ClientCredentialsPlugin implements GatewayPlugin {
     const data = response as { access_token: string; expires_in?: number };
 
     const expiresIn = (data.expires_in ?? 3600) * 1000;
-    this.outboundToken = {
+    this.outboundTokenCache.set(cacheKey, {
       token: data.access_token,
       expiresAt: Date.now() + expiresIn,
-    };
+    });
     return data.access_token;
   }
 

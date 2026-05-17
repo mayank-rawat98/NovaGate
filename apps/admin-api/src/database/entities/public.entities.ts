@@ -35,7 +35,7 @@ export class Tenant {
   resetPasswordExpires!: Date;
 
   @Column({ type: 'text', nullable: true })
-  caCertPem!: string;
+  caCertPem!: string | null;
 
   @CreateDateColumn()
   createdAt!: Date;

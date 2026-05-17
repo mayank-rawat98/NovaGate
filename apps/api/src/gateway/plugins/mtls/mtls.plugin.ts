@@ -41,7 +41,16 @@ export class MtlsPlugin implements GatewayPlugin {
     }
 
     // URL-decode if needed (nginx sends URL-encoded PEM)
-    const pem = decodeURIComponent(certStr);
+    let pem: string;
+    try {
+      pem = decodeURIComponent(certStr);
+    } catch {
+      return this.forbidden(
+        ctx.requestId,
+        'MTLS_CERT_INVALID_ENCODING',
+        'Client certificate header is malformed',
+      );
+    }
 
     const caCertPem = this.configManager.getConfig()?.caCertPem;
     if (!caCertPem) {

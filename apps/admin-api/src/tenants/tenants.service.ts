@@ -56,10 +56,7 @@ export class TenantsService {
   }
 
   async setCaCert(tenantId: string, caCertPem: string | null) {
-    await this.tenantRepo.update(
-      { id: tenantId },
-      { caCertPem: caCertPem ?? undefined },
-    );
+    await this.tenantRepo.update({ id: tenantId }, { caCertPem });
     await this.configPush.triggerUpdate(tenantId);
     return { success: true };
   }

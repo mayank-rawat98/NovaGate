@@ -44,7 +44,7 @@ export class MigrationService implements OnModuleInit {
         );
         // Phase 2: consumer groups
         await this.dataSource.query(
-          `ALTER TABLE IF EXISTS ${schema}.consumers ADD COLUMN IF NOT EXISTS groups JSONB DEFAULT '[]'`,
+          `ALTER TABLE IF EXISTS ${schema}.consumers ADD COLUMN IF NOT EXISTS groups JSONB DEFAULT '[]'::jsonb`,
         );
       } catch (err) {
         this.logger.warn(

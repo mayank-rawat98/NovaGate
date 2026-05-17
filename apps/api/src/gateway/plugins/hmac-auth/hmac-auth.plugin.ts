@@ -93,9 +93,6 @@ export class HmacAuthPlugin implements GatewayPlugin {
         'HMAC signature verification failed',
       );
     }
-
-    // Re-attach body so downstream proxy can forward it
-    this.reattachBody(req, body);
   }
 
   private readBody(
@@ -114,14 +111,6 @@ export class HmacAuthPlugin implements GatewayPlugin {
       });
       req.on('error', reject);
     });
-  }
-
-  private reattachBody(
-    req: IncomingMessage & { rawBody?: Buffer },
-    body: Buffer,
-  ): void {
-    // Mark body as already consumed and store it so the proxy can re-send it
-    req.rawBody = body;
   }
 
   private unauthorized(

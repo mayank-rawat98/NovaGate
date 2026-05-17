@@ -151,7 +151,7 @@ JwtMiddleware → [RateLimitGuard] → [LoggingInterceptor] → ProxyMiddleware
                                                        → PluginRunner.onResponse
 ```
 
-- `JwtMiddleware` — decodes Bearer JWT, attaches `req.user`; never blocks (auth enforced per-route by the proxy)
+- `JwtMiddleware` — attaches `req.user` when it recognises a platform JWT or consumer API key; passes through otherwise. Only hard-blocks on `TOKEN_EXPIRED` (platform-signed token that has expired). Third-party OIDC tokens are passed through for the `oidc` plugin to validate.
 - `RateLimitGuard` — Redis sliding window; separate limits for authenticated vs unauthenticated clients
 - `LoggingInterceptor` — captures latency, status, `X-Request-ID`; batches logs for async upload
 - `ProxyMiddleware` → `ProxyService.forward()` — resolves and runs route plugins, then forwards to downstream
