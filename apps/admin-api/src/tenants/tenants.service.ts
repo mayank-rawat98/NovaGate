@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import * as crypto from 'crypto';
 import { Tenant, ApiKey } from '../database/entities/public.entities';
 import { TenantProvisioningService } from './tenant-provisioning.service';
+import { ConfigPushService } from '../config-push/config-push.service';
 
 @Injectable()
 export class TenantsService {
@@ -13,6 +14,7 @@ export class TenantsService {
     @InjectRepository(ApiKey)
     private readonly apiKeyRepo: Repository<ApiKey>,
     private readonly provisioningService: TenantProvisioningService,
+    private readonly configPush: ConfigPushService,
   ) {}
 
   async createTenant(name: string, email: string) {
@@ -51,6 +53,12 @@ export class TenantsService {
     });
 
     return { apiKey: key };
+  }
+
+  async setCaCert(tenantId: string, caCertPem: string | null) {
+    await this.tenantRepo.update({ id: tenantId }, { caCertPem });
+    await this.configPush.triggerUpdate(tenantId);
+    return { success: true };
   }
 
   private generateApiKey(tenantId: string) {

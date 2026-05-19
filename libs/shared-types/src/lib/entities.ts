@@ -6,6 +6,7 @@ export interface TenantEntity {
   gatewayConfigVersion: number;
   lastSeen?: string;
   createdAt: string;
+  caCertPem?: string;
 }
 
 export interface ApiKeyEntity {
@@ -32,6 +33,10 @@ export interface RouteEntity {
     methods: string[];
   };
   plugins?: Array<{ name: string; config: Record<string, unknown> }>;
+  acl?: {
+    allow?: string[];
+    deny?: string[];
+  };
   createdAt: string;
   deletedAt?: string;
 }
@@ -53,6 +58,7 @@ export interface ConsumerEntity {
   name: string;
   keyHash: string;
   rateLimitTier: string;
+  groups?: string[];
   createdAt: string;
   revokedAt?: string;
 }

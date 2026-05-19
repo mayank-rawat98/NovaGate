@@ -12,6 +12,17 @@ export class MigrationService implements OnModuleInit {
   }
 
   private async migrateAllTenants(): Promise<void> {
+    // Public schema migrations
+    try {
+      await this.dataSource.query(
+        `ALTER TABLE IF EXISTS public.tenants ADD COLUMN IF NOT EXISTS "caCertPem" TEXT`,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Could not migrate public.tenants: ${(err as Error).message}`,
+      );
+    }
+
     const tenants = await this.dataSource.query<Array<{ id: string }>>(
       `SELECT id FROM public.tenants`,
     );
@@ -30,6 +41,10 @@ export class MigrationService implements OnModuleInit {
         );
         await this.dataSource.query(
           `ALTER TABLE IF EXISTS ${schema}.routes DROP COLUMN IF EXISTS "ipRestriction"`,
+        );
+        // Phase 2: consumer groups
+        await this.dataSource.query(
+          `ALTER TABLE IF EXISTS ${schema}.consumers ADD COLUMN IF NOT EXISTS groups JSONB DEFAULT '[]'::jsonb`,
         );
       } catch (err) {
         this.logger.warn(

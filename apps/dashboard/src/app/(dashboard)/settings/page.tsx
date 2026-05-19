@@ -3,12 +3,16 @@
 import { useState, useEffect } from 'react';
 import useSWR from 'swr';
 import { toast } from 'sonner';
-import { Copy, Check, Eye, EyeOff, RefreshCw } from 'lucide-react';
-import { getTenant, rotateGatewayKey } from '../../../lib/api-client';
+import { Copy, Check, Eye, EyeOff, RefreshCw, Shield, X } from 'lucide-react';
+import {
+  getTenant,
+  rotateGatewayKey,
+  setCaCert,
+} from '../../../lib/api-client';
 import { getTenantId } from '../../../lib/auth';
 
 const CONTROL_PLANE_WS_URL = 'wss://ws.novagate.dev/gateway-ws';
-const GATEWAY_IMAGE = 'ghcr.io/rawatshahab/novagate/api:latest';
+const GATEWAY_IMAGE = 'ghcr.io/mayank-rawat98/novagate/api:latest';
 
 function buildDockerCompose(apiKey: string): string {
   return `services:
@@ -64,8 +68,12 @@ export default function SettingsPage() {
   const [showKey, setShowKey] = useState(false);
   const [rotating, setRotating] = useState(false);
 
-  const { data: tenant } = useSWR(tenantId ? `tenant-${tenantId}` : null, () =>
-    getTenant(tenantId),
+  const [caCertInput, setCaCertInput] = useState('');
+  const [savingCert, setSavingCert] = useState(false);
+
+  const { data: tenant, mutate: mutateTenant } = useSWR(
+    tenantId ? `tenant-${tenantId}` : null,
+    () => getTenant(tenantId),
   );
 
   useEffect(() => {
@@ -92,6 +100,40 @@ export default function SettingsPage() {
       toast.error(err instanceof Error ? err.message : 'Failed to rotate key');
     } finally {
       setRotating(false);
+    }
+  }
+
+  async function handleSaveCaCert(e: React.FormEvent) {
+    e.preventDefault();
+    if (!tenantId) return;
+    setSavingCert(true);
+    try {
+      await setCaCert(tenantId, caCertInput.trim() || null);
+      await mutateTenant();
+      toast.success('CA certificate saved and pushed to gateway');
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to save CA cert',
+      );
+    } finally {
+      setSavingCert(false);
+    }
+  }
+
+  async function handleRemoveCaCert() {
+    if (!tenantId) return;
+    setSavingCert(true);
+    try {
+      await setCaCert(tenantId, null);
+      setCaCertInput('');
+      await mutateTenant();
+      toast.success('CA certificate removed');
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to remove CA cert',
+      );
+    } finally {
+      setSavingCert(false);
     }
   }
 
@@ -178,6 +220,64 @@ export default function SettingsPage() {
               Rotate Key
             </button>
           </div>
+        </div>
+      </div>
+
+      {/* mTLS — CA Certificate */}
+      <div className="mb-6 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="border-b border-gray-100 px-6 py-4">
+          <div className="flex items-center gap-2">
+            <Shield className="h-4 w-4 text-indigo-600" />
+            <h2 className="text-sm font-semibold text-gray-900">
+              CA Certificate
+            </h2>
+          </div>
+          <p className="mt-0.5 text-xs text-gray-500">
+            PEM-encoded CA used to validate client certificates for mTLS routes.
+            Changes are pushed to the gateway immediately.
+          </p>
+        </div>
+        <div className="px-6 py-4">
+          {tenant?.caCertPem && (
+            <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3">
+              <div>
+                <p className="text-xs font-medium text-green-700">
+                  CA certificate is configured
+                </p>
+                <p className="mt-0.5 font-mono text-xs text-green-600 break-all">
+                  {tenant.caCertPem.slice(0, 64)}…
+                </p>
+              </div>
+              <button
+                onClick={handleRemoveCaCert}
+                disabled={savingCert}
+                className="shrink-0 rounded p-1 text-green-600 hover:bg-green-100 disabled:opacity-50"
+                title="Remove CA certificate"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+          <form onSubmit={handleSaveCaCert} className="flex flex-col gap-3">
+            <textarea
+              rows={6}
+              value={caCertInput}
+              onChange={(e) => setCaCertInput(e.target.value)}
+              placeholder={
+                '-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----'
+              }
+              className="rounded-md border border-gray-300 px-3 py-2 font-mono text-xs outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            />
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={savingCert || !caCertInput.trim()}
+                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {savingCert ? 'Saving…' : 'Save CA Certificate'}
+              </button>
+            </div>
+          </form>
         </div>
       </div>
 

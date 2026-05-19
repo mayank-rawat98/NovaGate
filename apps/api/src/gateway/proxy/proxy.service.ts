@@ -272,6 +272,16 @@ export class ProxyService {
           if (requestId) proxyReq.setHeader('X-Request-ID', requestId);
           const fwd = this.getForwardedFor(req);
           if (fwd) proxyReq.setHeader('X-Forwarded-For', fwd);
+
+          // If a plugin (e.g. hmac-auth) consumed the stream and buffered it,
+          // replay the buffer directly so the upstream receives the full body.
+          const rawBody = (req as http.IncomingMessage & { rawBody?: Buffer })
+            .rawBody;
+          if (rawBody) {
+            proxyReq.setHeader('Content-Length', rawBody.length);
+            proxyReq.write(rawBody);
+            proxyReq.end();
+          }
         },
 
         proxyRes: async (

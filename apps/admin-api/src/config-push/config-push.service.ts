@@ -46,7 +46,7 @@ export class ConfigPushService implements OnModuleInit {
   async assembleConfig(tenantId: string): Promise<TenantConfig> {
     const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
 
-    const [routes, serviceRows, consumers] = await Promise.all([
+    const [routes, serviceRows, consumers, tenantRows] = await Promise.all([
       this.dataSource.query(
         `SELECT * FROM ${schema}.routes WHERE "deletedAt" IS NULL AND enabled = true`,
       ),
@@ -55,6 +55,10 @@ export class ConfigPushService implements OnModuleInit {
       ),
       this.dataSource.query(
         `SELECT * FROM ${schema}.consumers WHERE "revokedAt" IS NULL`,
+      ),
+      this.dataSource.query(
+        `SELECT "caCertPem" FROM public.tenants WHERE id = $1`,
+        [tenantId],
       ),
     ]);
 
@@ -66,12 +70,16 @@ export class ConfigPushService implements OnModuleInit {
       timeoutMs: row.timeoutMs,
     }));
 
-    return {
+    const caCertPem: string | undefined = tenantRows[0]?.caCertPem ?? undefined;
+
+    const config: TenantConfig = {
       routes,
       services,
       consumers,
       rateLimit: { windowMs: 60000, unauthMax: 100, authMax: 500 },
     };
+    if (caCertPem) config.caCertPem = caCertPem;
+    return config;
   }
 
   async isOnline(tenantId: string): Promise<boolean> {
