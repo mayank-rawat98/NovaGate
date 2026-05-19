@@ -151,11 +151,13 @@ export default function DocsPage() {
                 docker run -d --name novagate --restart unless-stopped \<br />
                 {'  '}-p 3000:3000 \<br />
                 {'  '}-e REDIS_URL=redis://your-redis:6379 \<br />
+                {'  '}-e DATABASE_URL=postgres://user:pass@your-db:5432/novagate
+                \<br />
                 {'  '}-e JWT_SECRET=your-32-char-secret \<br />
                 {'  '}-e CONTROL_PLANE_URL=wss://ws.novagate.dev/gateway-ws \
                 <br />
                 {'  '}-e GATEWAY_API_KEY=gw_your_key_here \<br />
-                {'  '}ghcr.io/rawatshahab/novagate/api:latest
+                {'  '}ghcr.io/mayank-rawat98/novagate/api:latest
               </div>
               <p className="mt-3 text-white/40">Verify it started correctly:</p>
               <div className="mt-2 rounded-xl border border-white/[0.08] bg-white/[0.03] p-4 font-mono text-xs text-violet-300/80">

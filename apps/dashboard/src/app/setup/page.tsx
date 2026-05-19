@@ -17,11 +17,12 @@ function maskKey(key: string): string {
 function buildDockerCompose(apiKey: string, cpUrl: string): string {
   return `services:
   gateway:
-    image: ghcr.io/rawatshahab/novagate/api:latest
+    image: ghcr.io/mayank-rawat98/novagate/api:latest
     environment:
       GATEWAY_API_KEY: ${apiKey}
       CONTROL_PLANE_URL: ${cpUrl}
       REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://user:pass@your-db:5432/novagate
   redis:
     image: redis:7-alpine
     volumes: [redis-data:/data]

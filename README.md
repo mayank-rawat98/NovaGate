@@ -193,7 +193,7 @@ The gateway is a single Docker image. On any Linux VPS:
 # docker-compose.yml — two services, zero config beyond your API key
 services:
   gateway:
-    image: ghcr.io/rawatshahab/novagate/api:latest
+    image: ghcr.io/mayank-rawat98/novagate/api:latest
     environment:
       GATEWAY_API_KEY: <from novagate.dev/settings>
       CONTROL_PLANE_URL: wss://ws.novagate.dev/gateway-ws
@@ -218,7 +218,7 @@ Full setup guide: [novagate.dev/docker](https://novagate.dev/docker)
 GitHub Actions pipeline on push to `main`:
 
 1. Build Docker images for `api`, `control-plane`, `admin-api`, `dashboard`
-2. Push to GitHub Container Registry (`ghcr.io/rawatshahab/novagate/*`)
+2. Push to GitHub Container Registry (`ghcr.io/mayank-rawat98/novagate/*`)
 3. SSH into VPS → `docker compose pull && docker compose up -d`
 
 Zero-downtime: Docker Compose restarts containers one at a time; Nginx keeps serving during image pulls.

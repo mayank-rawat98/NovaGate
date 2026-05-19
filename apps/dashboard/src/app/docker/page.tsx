@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: 'Deploy NovaGate in 5 Minutes — Single Docker Container',
     description:
-      'Pull the image, set four environment variables, run the container. Your API gateway is live in under 5 minutes.',
+      'Pull the image, set five environment variables, run the container. Your API gateway is live in under 5 minutes.',
     url: 'https://novagate.dev/docker',
   },
   alternates: { canonical: 'https://novagate.dev/docker' },
@@ -36,6 +36,12 @@ const ENV_VARS = [
     required: true,
     default: '—',
     desc: 'Redis connection URL. Used for rate limiting and config cache.',
+  },
+  {
+    name: 'DATABASE_URL',
+    required: true,
+    default: '—',
+    desc: 'PostgreSQL connection URL. Used by the gateway for service config persistence.',
   },
   {
     name: 'JWT_SECRET',
@@ -136,7 +142,7 @@ export default function DockerPage() {
             <h2 className="text-lg font-bold">Pull the Docker image</h2>
           </div>
           <div className="pl-10 rounded-xl border border-white/[0.08] bg-white/[0.03] p-4 font-mono text-sm text-violet-300/80">
-            docker pull ghcr.io/rawatshahab/novagate/api:latest
+            docker pull ghcr.io/mayank-rawat98/novagate/api:latest
           </div>
         </div>
 
@@ -159,10 +165,12 @@ export default function DockerPage() {
             <br />
             {'  '}-p 3000:3000 \<br />
             {'  '}-e REDIS_URL=redis://your-redis:6379 \<br />
+            {'  '}-e DATABASE_URL=postgres://user:pass@your-db:5432/novagate \
+            <br />
             {'  '}-e JWT_SECRET=your-32-char-secret-here \<br />
             {'  '}-e CONTROL_PLANE_URL=wss://ws.novagate.dev/gateway-ws \<br />
             {'  '}-e GATEWAY_API_KEY=gw_xxxxxxxxxxxxx \<br />
-            {'  '}ghcr.io/rawatshahab/novagate/api:latest
+            {'  '}ghcr.io/mayank-rawat98/novagate/api:latest
           </div>
         </div>
 
