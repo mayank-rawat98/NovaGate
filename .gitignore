@@ -12,6 +12,7 @@ node_modules
 .env.local
 .env.production
 .env.example
+compose.dev.yml
 # IDEs and editors
 /.idea
 .project

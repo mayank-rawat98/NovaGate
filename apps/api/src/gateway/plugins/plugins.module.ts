@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { RateLimitService } from '../rate-limit/rate-limit.service';
+import { ConfigManagerModule } from '../config-manager/config-manager.module';
 import { GATEWAY_PLUGIN } from './gateway-plugin.token';
 import { PluginRegistryService } from './plugin-registry.service';
 import { PluginRunnerService } from './plugin-runner.service';
@@ -32,6 +33,7 @@ const FIRST_PARTY_PLUGINS = [
 ];
 
 @Module({
+  imports: [ConfigManagerModule],
   providers: [
     // RateLimitService is needed by RateLimitPlugin;
     // REDIS_CLIENT is available globally via RedisModule imported in GatewayModule.
