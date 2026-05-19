@@ -12,7 +12,7 @@ import {
 import { getTenantId } from '../../../lib/auth';
 
 const CONTROL_PLANE_WS_URL = 'wss://ws.novagate.dev/gateway-ws';
-const GATEWAY_IMAGE = 'ghcr.io/rawatshahab/novagate/api:latest';
+const GATEWAY_IMAGE = 'ghcr.io/mayank-rawat98/novagate/api:latest';
 
 function buildDockerCompose(apiKey: string): string {
   return `services:

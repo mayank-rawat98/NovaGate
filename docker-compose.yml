@@ -31,7 +31,7 @@ services:
       - gateway-net
 
   control-plane:
-    image: ghcr.io/rawatshahab/control-plane:latest
+    image: ghcr.io/mayank-rawat98/control-plane:latest
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
@@ -52,7 +52,7 @@ services:
       - gateway-net
 
   admin-api:
-    image: ghcr.io/rawatshahab/admin-api:latest
+    image: ghcr.io/mayank-rawat98/admin-api:latest
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
@@ -84,7 +84,7 @@ services:
       - gateway-net
 
   dashboard:
-    image: ghcr.io/rawatshahab/dashboard:latest
+    image: ghcr.io/mayank-rawat98/dashboard:latest
     environment:
       ADMIN_API_URL: http://admin-api:3001
       PORT: 3003
