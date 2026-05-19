@@ -14,14 +14,14 @@ import { RateLimitService } from './rate-limit/rate-limit.service';
 import { GatewayExceptionFilter } from './shared/gateway-exception.filter';
 import { RedisModule } from './shared/redis.module';
 import { ServicesModule } from './services/services.module';
-import { GatewayConfigManagerService } from './config-manager/gateway-config-manager.service';
+import { ConfigManagerModule } from './config-manager/config-manager.module';
 import { ControlPlaneConnectorService } from './connector/control-plane-connector.service';
 import { GatewayTelemetryService } from './telemetry/gateway-telemetry.service';
 import { UpstreamHealthService } from './health/upstream-health.service';
 import { PluginsModule } from './plugins/plugins.module';
 
 @Module({
-  imports: [ServicesModule, RedisModule, PluginsModule],
+  imports: [ServicesModule, RedisModule, ConfigManagerModule, PluginsModule],
   controllers: [HealthController, MetricsController, ProxyController],
   providers: [
     JwtMiddleware,
@@ -32,7 +32,6 @@ import { PluginsModule } from './plugins/plugins.module';
     RateLimitService,
     RateLimitGuard,
     LoggingInterceptor,
-    GatewayConfigManagerService,
     ControlPlaneConnectorService,
     GatewayTelemetryService,
     UpstreamHealthService,
