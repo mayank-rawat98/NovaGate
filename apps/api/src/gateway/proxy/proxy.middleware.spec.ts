@@ -11,6 +11,7 @@ import { LoadBalancerService } from './load-balancer.service';
 import { UpstreamHealthService } from '../health/upstream-health.service';
 import { PluginRegistryService } from '../plugins/plugin-registry.service';
 import { PluginRunnerService } from '../plugins/plugin-runner.service';
+import { Http2SessionPool } from './http2-session-pool.service';
 import type { TenantConfig } from '@api-gateway/shared-types';
 import type {
   RequestWithUser,
@@ -123,6 +124,7 @@ async function buildModule() {
       { provide: UpstreamHealthService, useValue: mockUpstreamHealth() },
       { provide: PluginRegistryService, useValue: mockPluginRegistry() },
       { provide: PluginRunnerService, useValue: mockPluginRunner() },
+      { provide: Http2SessionPool, useValue: {} },
     ],
   }).compile();
 
@@ -309,6 +311,7 @@ describe('ProxyService', () => {
         { provide: UpstreamHealthService, useValue: mockUpstreamHealth() },
         { provide: PluginRegistryService, useValue: mockPluginRegistry() },
         { provide: PluginRunnerService, useValue: mockPluginRunner() },
+        { provide: Http2SessionPool, useValue: {} },
       ],
     }).compile();
 

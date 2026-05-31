@@ -16,6 +16,7 @@ import { OAuth2ClientCredentialsPlugin } from './oauth2-client-credentials/oauth
 import { HmacAuthPlugin } from './hmac-auth/hmac-auth.plugin';
 import { AclPlugin } from './acl/acl.plugin';
 import { MtlsPlugin } from './mtls/mtls.plugin';
+import { GraphqlGuardPlugin } from './graphql-guard/graphql-guard.plugin';
 
 const FIRST_PARTY_PLUGINS = [
   CorsPlugin,
@@ -30,6 +31,7 @@ const FIRST_PARTY_PLUGINS = [
   HmacAuthPlugin,
   AclPlugin,
   MtlsPlugin,
+  GraphqlGuardPlugin,
 ];
 
 @Module({
