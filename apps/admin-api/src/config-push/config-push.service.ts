@@ -68,6 +68,8 @@ export class ConfigPushService implements OnModuleInit {
       targets: row.targets,
       healthCheckPath: row.healthCheckPath,
       timeoutMs: row.timeoutMs,
+      h2: row.h2 ?? false,
+      supportsWebSocket: row.supportsWebSocket ?? false,
     }));
 
     const caCertPem: string | undefined = tenantRows[0]?.caCertPem ?? undefined;

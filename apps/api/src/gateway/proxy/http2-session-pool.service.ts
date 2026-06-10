@@ -38,14 +38,18 @@ export class Http2SessionPool implements OnModuleDestroy {
     path: string,
     requestHeaders: OutgoingHttpHeaders,
     body: Buffer | null,
+    timeoutMs = 10_000,
   ): Promise<H2Response> {
     const entry = this.acquireEntry(targetUrl);
+    // Derive the scheme from the target so https:// origins are forwarded as
+    // https, not hard-coded http.
+    const scheme = new URL(targetUrl).protocol.slice(0, -1);
 
     return new Promise<H2Response>((resolve, reject) => {
       const h2Headers: http2.OutgoingHttpHeaders = {
         ':method': method,
         ':path': path,
-        ':scheme': 'http',
+        ':scheme': scheme,
         ...requestHeaders,
       };
 
@@ -58,10 +62,25 @@ export class Http2SessionPool implements OnModuleDestroy {
       });
 
       entry.activeStreams++;
+      let settled = false;
       const done = () => {
         entry.activeStreams = Math.max(0, entry.activeStreams - 1);
         entry.lastUsed = Date.now();
       };
+
+      // Bound the stream lifetime so a stalled downstream can't keep the
+      // promise (and the client response) open indefinitely.
+      req.setTimeout(timeoutMs, () => {
+        if (settled) return;
+        settled = true;
+        const err = new Error(
+          `HTTP/2 stream timed out after ${timeoutMs}ms`,
+        ) as NodeJS.ErrnoException;
+        err.code = 'ETIMEDOUT';
+        req.close(http2.constants.NGHTTP2_CANCEL);
+        done();
+        reject(err);
+      });
 
       const chunks: Buffer[] = [];
       let responseHeaders: IncomingHttpHeaders = {};
@@ -80,6 +99,8 @@ export class Http2SessionPool implements OnModuleDestroy {
       });
 
       req.on('end', () => {
+        if (settled) return;
+        settled = true;
         done();
         const status = Number(responseHeaders[':status'] ?? 200);
         resolve({
@@ -91,6 +112,8 @@ export class Http2SessionPool implements OnModuleDestroy {
       });
 
       req.on('error', (err) => {
+        if (settled) return;
+        settled = true;
         done();
         reject(err);
       });

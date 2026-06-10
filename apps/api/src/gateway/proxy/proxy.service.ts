@@ -199,6 +199,8 @@ export class ProxyService {
             route,
             request,
             response,
+            canRetry && !isLastAttempt,
+            retryOn,
           )
         : await this.callProxy(
             targetUrl,
@@ -283,6 +285,8 @@ export class ProxyService {
     route: RouteConfig,
     request: Request,
     response: ResponseWithLocals,
+    retriesRemaining: boolean,
+    retryOn: number[],
   ): Promise<number> {
     const requestId = this.getRequestIdFromRequest(request, response);
 
@@ -307,7 +311,14 @@ export class ProxyService {
         finalUrl,
         forwardHeaders,
         body,
+        service.timeoutMs ?? 10_000,
       );
+
+      // A retryable status with attempts left: don't commit the response —
+      // let the outer loop retry, mirroring the HTTP/1 proxy path.
+      if (retriesRemaining && retryOn.includes(h2res.statusCode)) {
+        return h2res.statusCode;
+      }
 
       if (!response.headersSent) {
         for (const [k, v] of Object.entries(h2res.headers)) {
@@ -339,6 +350,11 @@ export class ProxyService {
           requestId,
         }),
       );
+      // Defer the error response while retries remain so a later attempt can
+      // still send a successful response on the same (untouched) connection.
+      if (retriesRemaining && retryOn.includes(502)) {
+        return 502;
+      }
       if (!response.headersSent) {
         response.statusCode = 502;
         response.setHeader('Content-Type', 'application/json');
@@ -369,6 +385,12 @@ export class ProxyService {
             ? request.body
             : JSON.stringify(request.body);
         resolve(Buffer.from(bodyStr));
+        return;
+      }
+      // Bodyless request (e.g. GET/HEAD) or a stream already drained by an
+      // upstream parser — attaching 'data'/'end' here would wait forever.
+      if (request.readableEnded || request.complete) {
+        resolve(Buffer.alloc(0));
         return;
       }
       // Stream is still available

@@ -33,6 +33,7 @@ export function analyzeQuery(query: string): QueryAnalysis {
   let argDepth = 0; // depth inside (...) argument blocks
   let maxDepth = 0;
   let complexity = 0;
+  let hasIntrospection = false;
   const n = query.length;
 
   while (i < n) {
@@ -134,14 +135,18 @@ export function analyzeQuery(query: string): QueryAnalysis {
 
       // It's a field name at the current selection depth
       complexity += Math.max(1, selectionDepth);
+
+      // Introspection meta-fields, matched as exact identifiers so that
+      // `__typename` (a normal field) and `__type`/`__schema` inside string
+      // literals or comments are not misflagged.
+      if (name === '__schema' || name === '__type') {
+        hasIntrospection = true;
+      }
       continue;
     }
 
     i++;
   }
-
-  const hasIntrospection =
-    query.includes('__schema') || query.includes('__type');
 
   return { depth: maxDepth, complexity, hasIntrospection };
 }

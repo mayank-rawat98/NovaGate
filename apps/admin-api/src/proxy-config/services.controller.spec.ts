@@ -53,6 +53,8 @@ describe('ServicesController', () => {
         JSON.stringify(targets),
         '/health',
         5000,
+        false,
+        false,
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
@@ -78,6 +80,8 @@ describe('ServicesController', () => {
         JSON.stringify(targets),
         '/health',
         10000,
+        false,
+        false,
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });

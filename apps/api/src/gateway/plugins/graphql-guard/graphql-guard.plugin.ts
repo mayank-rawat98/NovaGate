@@ -83,11 +83,28 @@ export class GraphqlGuardPlugin implements GatewayPlugin {
   }
 
   private readBody(
-    req: IncomingMessage & { rawBody?: Buffer },
+    req: IncomingMessage & { rawBody?: Buffer; body?: unknown },
   ): Promise<string> {
     // Use already-buffered raw body if available (e.g. from hmac-auth plugin)
     if (req.rawBody) {
       return Promise.resolve(req.rawBody.toString('utf8'));
+    }
+
+    // Nest's default body parser consumes the stream before plugins run, so
+    // attaching 'data'/'end' listeners here would wait forever. Reconstruct
+    // from the already-parsed body when present and cache it as rawBody.
+    if (req.body !== undefined && req.body !== null) {
+      const raw =
+        typeof req.body === 'string'
+          ? Buffer.from(req.body)
+          : Buffer.from(JSON.stringify(req.body));
+      req.rawBody = raw;
+      return Promise.resolve(raw.toString('utf8'));
+    }
+
+    // Stream already ended with no buffered body — nothing left to read.
+    if (req.readableEnded || req.complete) {
+      return Promise.resolve('');
     }
 
     return new Promise<string>((resolve, reject) => {

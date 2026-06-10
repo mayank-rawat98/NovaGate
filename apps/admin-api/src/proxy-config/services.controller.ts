@@ -22,6 +22,8 @@ interface ServiceBody {
   targets?: unknown;
   healthCheckPath?: string;
   timeoutMs?: number;
+  h2?: boolean;
+  supportsWebSocket?: boolean;
 }
 
 function validateTargets(targets: unknown): ServiceTarget[] {
@@ -68,13 +70,15 @@ export class ServicesController {
     const schema = tenantSchema(tenantId);
     const targets = validateTargets(body.targets);
     const rows = await this.dataSource.query(
-      `INSERT INTO ${schema}.services (name, targets, "healthCheckPath", "timeoutMs")
-       VALUES ($1, $2, $3, $4) RETURNING *`,
+      `INSERT INTO ${schema}.services (name, targets, "healthCheckPath", "timeoutMs", h2, "supportsWebSocket")
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
       [
         body.name,
         JSON.stringify(targets),
         body.healthCheckPath ?? '/health',
         body.timeoutMs ?? 10000,
+        body.h2 ?? false,
+        body.supportsWebSocket ?? false,
       ],
     );
     await this.configPush.triggerUpdate(tenantId);
@@ -97,7 +101,9 @@ export class ServicesController {
        SET name = COALESCE($2, name),
             targets = COALESCE($3::jsonb, targets),
             "healthCheckPath" = COALESCE($4, "healthCheckPath"),
-            "timeoutMs" = COALESCE($5, "timeoutMs")
+            "timeoutMs" = COALESCE($5, "timeoutMs"),
+            h2 = COALESCE($6, h2),
+            "supportsWebSocket" = COALESCE($7, "supportsWebSocket")
        WHERE id = $1 AND "deletedAt" IS NULL RETURNING *`,
       [
         id,
@@ -105,6 +111,8 @@ export class ServicesController {
         targets,
         body.healthCheckPath ?? null,
         body.timeoutMs ?? null,
+        body.h2 ?? null,
+        body.supportsWebSocket ?? null,
       ],
     );
     await this.configPush.triggerUpdate(tenantId);

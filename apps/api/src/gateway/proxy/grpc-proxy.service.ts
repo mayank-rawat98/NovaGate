@@ -82,6 +82,14 @@ export class GrpcProxyService {
       return;
     }
 
+    // Enforce route auth on the gRPC path too — there is no JwtMiddleware here,
+    // so a route flagged authRequired must at least carry an authorization
+    // header (gRPC status 16 = UNAUTHENTICATED).
+    if (route.authRequired && !incomingHeaders['authorization']) {
+      this.sendGrpcError(sendResponse, 16, 'Authentication required');
+      return;
+    }
+
     const service = config.services.find(
       (s: ServiceConfig) => s.id === route.serviceId,
     );
@@ -141,11 +149,14 @@ export class GrpcProxyService {
   }> {
     return new Promise((resolve, reject) => {
       const session = this.acquireSession(targetUrl);
+      // Derive scheme from the target so TLS gRPC targets get a consistent
+      // :scheme pseudo-header instead of a hard-coded http.
+      const scheme = new URL(targetUrl).protocol.slice(0, -1);
 
       const forwardHeaders: http2.OutgoingHttpHeaders = {
         ':method': incomingHeaders[':method'] ?? 'POST',
         ':path': incomingHeaders[':path'] ?? '/',
-        ':scheme': 'http',
+        ':scheme': scheme,
         'content-type': incomingHeaders['content-type'],
         'content-length': String(body.length),
         te: 'trailers',

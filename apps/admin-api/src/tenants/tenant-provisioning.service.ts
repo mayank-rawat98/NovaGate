@@ -27,6 +27,7 @@ export class TenantProvisioningService {
           enabled BOOLEAN DEFAULT true,
           retry JSONB,
           plugins JSONB,
+          graphql JSONB,
           "createdAt" TIMESTAMP DEFAULT NOW(),
           "deletedAt" TIMESTAMP
         )
@@ -39,6 +40,8 @@ export class TenantProvisioningService {
           targets JSONB NOT NULL,
           "healthCheckPath" VARCHAR NOT NULL DEFAULT '/health',
           "timeoutMs" INTEGER DEFAULT 10000,
+          h2 BOOLEAN DEFAULT false,
+          "supportsWebSocket" BOOLEAN DEFAULT false,
           "createdAt" TIMESTAMP DEFAULT NOW(),
           "deletedAt" TIMESTAMP
         )

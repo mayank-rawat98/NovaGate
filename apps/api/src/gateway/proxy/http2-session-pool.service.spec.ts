@@ -7,7 +7,14 @@ function makeMockStream(
   body: Buffer = Buffer.alloc(0),
   trailers: Record<string, string> = {},
 ) {
-  const stream = new EventEmitter() as EventEmitter & { end: jest.Mock };
+  const stream = new EventEmitter() as EventEmitter & {
+    end: jest.Mock;
+    setTimeout: jest.Mock;
+    close: jest.Mock;
+  };
+  // Real http2 streams expose setTimeout/close; the pool sets a stream timeout.
+  stream.setTimeout = jest.fn();
+  stream.close = jest.fn();
 
   // Fire events: either when end() is called (body present) or when endStream
   // fires — we trigger via a helper so the caller controls timing.
@@ -171,8 +178,14 @@ describe('Http2SessionPool', () => {
   });
 
   it('rejects when stream emits an error', async () => {
-    const errStream = new EventEmitter() as EventEmitter & { end: jest.Mock };
+    const errStream = new EventEmitter() as EventEmitter & {
+      end: jest.Mock;
+      setTimeout: jest.Mock;
+      close: jest.Mock;
+    };
     errStream.end = jest.fn();
+    errStream.setTimeout = jest.fn();
+    errStream.close = jest.fn();
     const session = {
       destroyed: false,
       remoteSettings: { maxConcurrentStreams: 100 },
