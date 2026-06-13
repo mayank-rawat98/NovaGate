@@ -7,9 +7,22 @@ const { composePlugins, withNx } = require('@nx/next');
  **/
 const ADMIN_API_URL = process.env.ADMIN_API_URL || 'http://localhost:3001';
 
+// Security headers applied to every response. `frame-ancestors 'none'` is the
+// modern clickjacking control; `X-Frame-Options: DENY` is kept for legacy
+// scanners/browsers that still key off it.
+const securityHeaders = [
+  { key: 'X-Frame-Options', value: 'DENY' },
+  { key: 'Content-Security-Policy', value: "frame-ancestors 'none'" },
+  { key: 'X-Content-Type-Options', value: 'nosniff' },
+  { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+];
+
 const nextConfig = {
   output: 'standalone',
   nx: {},
+  async headers() {
+    return [{ source: '/:path*', headers: securityHeaders }];
+  },
   async rewrites() {
     return [
       {
