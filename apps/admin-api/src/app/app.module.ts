@@ -29,7 +29,7 @@ import { MigrationService } from '../database/migration.service';
         type: 'postgres',
         url: config.get('DATABASE_URL'),
         entities: [Tenant, ApiKey, PendingConfigUpdate],
-        synchronize: true,
+        synchronize: false,
       }),
     }),
     TypeOrmModule.forFeature([Tenant, ApiKey, PendingConfigUpdate]),
