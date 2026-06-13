@@ -45,6 +45,23 @@ export class MetricsService {
     labelNames: ['route', 'attempt'],
     registers: [this.registry],
   });
+  private readonly activeWsConnections = new Gauge({
+    name: 'gateway_ws_active_connections',
+    help: 'Active WebSocket connections',
+    registers: [this.registry],
+  });
+  private readonly wsBytesTotal = new Counter({
+    name: 'gateway_ws_bytes_total',
+    help: 'Total WebSocket bytes proxied',
+    labelNames: ['direction'],
+    registers: [this.registry],
+  });
+  private readonly grpcRequestsTotal = new Counter({
+    name: 'gateway_grpc_requests_total',
+    help: 'Total gRPC requests proxied',
+    labelNames: ['grpc_service', 'grpc_method', 'grpc_status'],
+    registers: [this.registry],
+  });
 
   incrementHttpRequests(
     method: string,
@@ -87,6 +104,26 @@ export class MetricsService {
 
   incrementProxyRetry(route: string, attempt: number): void {
     this.proxyRetriesTotal.labels(route, String(attempt)).inc();
+  }
+
+  incrementWsConnections(): void {
+    this.activeWsConnections.inc();
+  }
+
+  decrementWsConnections(): void {
+    this.activeWsConnections.dec();
+  }
+
+  incrementWsBytes(direction: 'inbound' | 'outbound', bytes: number): void {
+    this.wsBytesTotal.labels(direction).inc(bytes);
+  }
+
+  incrementGrpcRequests(
+    grpcService: string,
+    grpcMethod: string,
+    grpcStatus: string,
+  ): void {
+    this.grpcRequestsTotal.labels(grpcService, grpcMethod, grpcStatus).inc();
   }
 
   async getMetrics(): Promise<string> {

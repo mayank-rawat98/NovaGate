@@ -104,10 +104,12 @@ describe('JwtMiddleware', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('returns TOKEN_INVALID for malformed token', () => {
+  it('passes through a non-JWT bearer token for downstream OIDC plugins', () => {
+    // The middleware intentionally passes through unrecognised tokens rather than
+    // returning 401 — route-level plugins (oidc, hmac-auth, etc.) handle auth.
     const req = {
       headers: {
-        authorization: 'Bearer not-a-token',
+        authorization: 'Bearer not-a-jwt',
       },
     } as RequestWithUser;
     const res = createResponse();
@@ -115,12 +117,8 @@ describe('JwtMiddleware', () => {
 
     middleware.use(req, res, next);
 
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({
-      error: 'TOKEN_INVALID',
-      message: 'Access token is invalid',
-      requestId: expect.any(String),
-    });
-    expect(next).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalled();
+    expect(req.user).toBeUndefined();
+    expect(res.status).not.toHaveBeenCalled();
   });
 });

@@ -135,10 +135,19 @@ export function register(
   name: string,
   email: string,
   password: string,
-): Promise<{ token: string; tenantId: string; gatewayApiKey: string }> {
+): Promise<{ message: string }> {
   return request('/auth/register', {
     method: 'POST',
     body: JSON.stringify({ name, email, password }),
+  });
+}
+
+export function verifyEmail(
+  token: string,
+): Promise<{ token: string; tenantId: string; gatewayApiKey: string }> {
+  return request('/auth/verify-email', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
   });
 }
 

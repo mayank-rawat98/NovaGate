@@ -58,6 +58,7 @@ describe('RoutesController', () => {
         true,
         null,
         null,
+        null,
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });

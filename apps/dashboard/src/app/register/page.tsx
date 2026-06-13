@@ -1,11 +1,10 @@
 'use client';
 
 import { useState, FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { toast } from 'sonner';
+import { MailCheck } from 'lucide-react';
 import { register } from '../../lib/api-client';
-import { setToken, setTenantId } from '../../lib/auth';
 import { AuthCard } from '../../components/auth-card';
 import { PasswordInput } from '../../components/password-input';
 
@@ -13,31 +12,68 @@ const inputClass =
   'rounded-lg border border-white/10 bg-white/[0.05] px-3 py-2.5 text-sm text-white placeholder-white/25 outline-none transition focus:border-violet-500/60 focus:ring-2 focus:ring-violet-500/20 w-full';
 
 export default function RegisterPage() {
-  const router = useRouter();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setLoading(true);
     try {
-      const { token, tenantId, gatewayApiKey } = await register(
-        name,
-        email,
-        password,
-      );
-      setToken(token);
-      setTenantId(tenantId);
-      localStorage.setItem('gw_setup_api_key', gatewayApiKey);
-      toast.success('Account created — deploying your gateway…');
-      router.replace('/setup');
+      await register(name, email, password);
+      // Always the same generic outcome — we never learn (or reveal) whether
+      // the email was already registered.
+      setSubmitted(true);
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Registration failed');
     } finally {
       setLoading(false);
     }
+  }
+
+  if (submitted) {
+    return (
+      <AuthCard
+        title="Check your email"
+        subtitle="One more step to set up your gateway"
+      >
+        <div className="flex flex-col items-center gap-4 text-center">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-violet-600/15 text-violet-400">
+            <MailCheck className="h-6 w-6" />
+          </div>
+          <p className="text-sm text-white/60">
+            If{' '}
+            <span className="font-medium text-white/80">
+              {email || 'that address'}
+            </span>{' '}
+            is available, we&apos;ve sent a verification link. Click it to
+            finish creating your account. The link expires in 1 hour.
+          </p>
+          <p className="text-xs text-white/35">
+            Didn&apos;t get it? Check your spam folder, or{' '}
+            <button
+              type="button"
+              onClick={() => setSubmitted(false)}
+              className="font-medium text-violet-400 transition-colors hover:text-violet-300"
+            >
+              try again
+            </button>
+            .
+          </p>
+        </div>
+        <p className="mt-6 text-center text-sm text-white/35">
+          Already have an account?{' '}
+          <Link
+            href="/login"
+            className="font-medium text-violet-400 transition-colors hover:text-violet-300"
+          >
+            Sign in
+          </Link>
+        </p>
+      </AuthCard>
+    );
   }
 
   return (

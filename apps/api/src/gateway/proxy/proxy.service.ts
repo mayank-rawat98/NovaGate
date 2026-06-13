@@ -24,6 +24,7 @@ import { UpstreamHealthService } from '../health/upstream-health.service';
 import { matchRoute } from '../shared/route-matcher';
 import { PluginRegistryService } from '../plugins/plugin-registry.service';
 import { PluginRunnerService } from '../plugins/plugin-runner.service';
+import { Http2SessionPool } from './http2-session-pool.service';
 
 // Per-request context attached to the request object so cached handlers can
 // read retry state without holding per-request closures.
@@ -46,6 +47,18 @@ type GwRequest = http.IncomingMessage & {
 
 const RETRY_DELAY_MS = 100;
 
+/** HTTP hop-by-hop headers that must not be forwarded. */
+const HOP_BY_HOP = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailers',
+  'transfer-encoding',
+  'upgrade',
+]);
+
 @Injectable()
 export class ProxyService {
   private readonly logger = new Logger(ProxyService.name);
@@ -62,6 +75,7 @@ export class ProxyService {
     private readonly upstreamHealth: UpstreamHealthService,
     private readonly pluginRegistry: PluginRegistryService,
     private readonly pluginRunner: PluginRunnerService,
+    private readonly http2Pool: Http2SessionPool,
   ) {}
 
   async forward(request: Request, response: ResponseWithLocals): Promise<void> {
@@ -164,6 +178,7 @@ export class ProxyService {
       retryMethods.includes(requestMethod);
 
     const healthyUrls = this.upstreamHealth.getHealthyUrls(service.targets);
+    const useH2 = service.h2 === true;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const isLastAttempt = attempt === maxAttempts - 1;
@@ -176,14 +191,25 @@ export class ProxyService {
       // Reset the URL for each attempt (safe for GET/HEAD/OPTIONS which have no body)
       request.url = finalUrl;
 
-      const statusCode = await this.callProxy(
-        targetUrl,
-        service,
-        request,
-        response,
-        isLastAttempt,
-        retryOn,
-      );
+      const statusCode = useH2
+        ? await this.callH2Proxy(
+            targetUrl,
+            finalUrl,
+            service,
+            route,
+            request,
+            response,
+            canRetry && !isLastAttempt,
+            retryOn,
+          )
+        : await this.callProxy(
+            targetUrl,
+            service,
+            request,
+            response,
+            isLastAttempt,
+            retryOn,
+          );
 
       if (canRetry && !isLastAttempt && retryOn.includes(statusCode)) {
         this.metricsService.incrementProxyRetry(route.pathPattern, attempt + 1);
@@ -249,6 +275,136 @@ export class ProxyService {
         },
       );
     });
+  }
+
+  /** Forward via HTTP/2 session pool; falls back to 502 on session error. */
+  private async callH2Proxy(
+    targetUrl: string,
+    finalUrl: string,
+    service: ServiceConfig,
+    route: RouteConfig,
+    request: Request,
+    response: ResponseWithLocals,
+    retriesRemaining: boolean,
+    retryOn: number[],
+  ): Promise<number> {
+    const requestId = this.getRequestIdFromRequest(request, response);
+
+    // Buffer request body (already consumed by body-parser or still streaming)
+    const body = await this.bufferBody(request);
+
+    // Build forward headers (strip hop-by-hop)
+    const forwardHeaders: Record<string, string | string[]> = {};
+    for (const [k, v] of Object.entries(request.headers)) {
+      if (HOP_BY_HOP.has(k.toLowerCase()) || k.toLowerCase() === 'host')
+        continue;
+      if (v !== undefined) forwardHeaders[k] = v as string | string[];
+    }
+    forwardHeaders['x-request-id'] = requestId;
+    const fwd = this.getForwardedForFromRequest(request);
+    if (fwd) forwardHeaders['x-forwarded-for'] = fwd;
+
+    try {
+      const h2res = await this.http2Pool.request(
+        targetUrl,
+        request.method,
+        finalUrl,
+        forwardHeaders,
+        body,
+        service.timeoutMs ?? 10_000,
+      );
+
+      // A retryable status with attempts left: don't commit the response —
+      // let the outer loop retry, mirroring the HTTP/1 proxy path.
+      if (retriesRemaining && retryOn.includes(h2res.statusCode)) {
+        return h2res.statusCode;
+      }
+
+      if (!response.headersSent) {
+        for (const [k, v] of Object.entries(h2res.headers)) {
+          if (k.startsWith(':') || HOP_BY_HOP.has(k.toLowerCase())) continue;
+          if (v !== undefined) response.setHeader(k, v as string | string[]);
+        }
+        response.statusCode = h2res.statusCode;
+        response.end(h2res.body);
+
+        // Run onResponse plugins
+        const pluginState = (request as unknown as GwRequest).__gw_plugins;
+        if (pluginState?.plugins.length) {
+          await this.pluginRunner.runOnResponse(pluginState.plugins, {
+            ...pluginState.ctx,
+            statusCode: h2res.statusCode,
+            headers: response.getHeaders() as OutgoingHttpHeaders,
+          });
+        }
+      }
+
+      return h2res.statusCode;
+    } catch (err) {
+      this.logger.error(
+        JSON.stringify({
+          msg: 'HTTP/2 downstream error, falling back to 502',
+          error: (err as Error).message,
+          targetUrl,
+          routeId: route.id,
+          requestId,
+        }),
+      );
+      // Defer the error response while retries remain so a later attempt can
+      // still send a successful response on the same (untouched) connection.
+      if (retriesRemaining && retryOn.includes(502)) {
+        return 502;
+      }
+      if (!response.headersSent) {
+        response.statusCode = 502;
+        response.setHeader('Content-Type', 'application/json');
+        response.end(
+          JSON.stringify({
+            error: 'DOWNSTREAM_ERROR',
+            message: 'Downstream service error',
+            requestId,
+          }),
+        );
+      }
+      return 502;
+    }
+  }
+
+  private bufferBody(request: Request): Promise<Buffer> {
+    return new Promise<Buffer>((resolve, reject) => {
+      // If body-parser already consumed and parsed the body, reconstruct it
+      const rawBody = (request as Request & { rawBody?: Buffer }).rawBody;
+      if (rawBody) {
+        resolve(rawBody);
+        return;
+      }
+      // Check if body is already an object (body-parser parsed it)
+      if (request.body !== undefined && request.body !== null) {
+        const bodyStr =
+          typeof request.body === 'string'
+            ? request.body
+            : JSON.stringify(request.body);
+        resolve(Buffer.from(bodyStr));
+        return;
+      }
+      // Bodyless request (e.g. GET/HEAD) or a stream already drained by an
+      // upstream parser — attaching 'data'/'end' here would wait forever.
+      if (request.readableEnded || request.complete) {
+        resolve(Buffer.alloc(0));
+        return;
+      }
+      // Stream is still available
+      const chunks: Buffer[] = [];
+      request.on('data', (chunk: Buffer) => chunks.push(chunk));
+      request.on('end', () => resolve(Buffer.concat(chunks)));
+      request.on('error', reject);
+    });
+  }
+
+  private getForwardedForFromRequest(request: Request): string | undefined {
+    if (Array.isArray(request.ips) && request.ips.length > 0)
+      return request.ips.join(', ');
+    return request.ip ?? undefined;
   }
 
   private getHandler(
