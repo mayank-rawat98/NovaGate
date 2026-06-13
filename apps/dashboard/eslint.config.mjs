@@ -7,6 +7,6 @@ export default [
   ...nx.configs['flat/react-typescript'],
   ...baseConfig,
   {
-    ignores: ['.next/**/*', '**/out-tsc', '**/next-env.d.ts'],
+    ignores: ['**/.next/**', '**/out-tsc', '**/next-env.d.ts'],
   },
 ];

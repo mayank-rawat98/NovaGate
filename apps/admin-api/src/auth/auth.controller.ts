@@ -6,8 +6,22 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('register')
-  register(@Body() body: { name: string; email: string; password: string }) {
-    return this.authService.register(body.name, body.email, body.password);
+  @HttpCode(200)
+  async register(
+    @Body() body: { name: string; email: string; password: string },
+  ) {
+    await this.authService.register(body.name, body.email, body.password);
+    // Generic response — never reveals whether the email was already registered.
+    return {
+      message:
+        'If that email is available, a verification link has been sent. Check your inbox to finish signing up.',
+    };
+  }
+
+  @Post('verify-email')
+  @HttpCode(200)
+  verifyEmail(@Body() body: { token: string }) {
+    return this.authService.verifyEmail(body.token);
   }
 
   @Post('login')
