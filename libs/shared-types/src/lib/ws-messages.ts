@@ -119,6 +119,11 @@ export interface RouteConfig {
     allow?: string[];
     deny?: string[];
   };
+  graphql?: {
+    maxDepth?: number;
+    maxComplexity?: number;
+    introspectionAllowed?: boolean;
+  };
 }
 
 export interface ServiceTarget {
@@ -132,6 +137,8 @@ export interface ServiceConfig {
   targets: ServiceTarget[];
   healthCheckPath: string;
   timeoutMs: number;
+  supportsWebSocket?: boolean;
+  h2?: boolean;
 }
 
 export interface ConsumerConfig {

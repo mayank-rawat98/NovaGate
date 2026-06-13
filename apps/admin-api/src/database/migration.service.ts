@@ -46,6 +46,16 @@ export class MigrationService implements OnModuleInit {
         await this.dataSource.query(
           `ALTER TABLE IF EXISTS ${schema}.consumers ADD COLUMN IF NOT EXISTS groups JSONB DEFAULT '[]'::jsonb`,
         );
+        // Protocol expansion: GraphQL guard config + HTTP/2 / WebSocket flags
+        await this.dataSource.query(
+          `ALTER TABLE IF EXISTS ${schema}.routes ADD COLUMN IF NOT EXISTS graphql JSONB`,
+        );
+        await this.dataSource.query(
+          `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS h2 BOOLEAN DEFAULT false`,
+        );
+        await this.dataSource.query(
+          `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "supportsWebSocket" BOOLEAN DEFAULT false`,
+        );
       } catch (err) {
         this.logger.warn(
           `Could not migrate schema ${schema}: ${(err as Error).message}`,

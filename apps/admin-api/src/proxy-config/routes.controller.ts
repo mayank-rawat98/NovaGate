@@ -47,6 +47,11 @@ interface RouteBody {
   enabled?: boolean;
   retry?: { attempts: number; on: number[]; methods: string[] } | null;
   plugins?: PluginEntry[] | null;
+  graphql?: {
+    maxDepth?: number;
+    maxComplexity?: number;
+    introspectionAllowed?: boolean;
+  } | null;
 }
 
 function validatePlugins(plugins: unknown): void {
@@ -93,8 +98,8 @@ export class RoutesController {
     const rows = await this.dataSource.query(
       `INSERT INTO ${schema}.routes
          (method, "pathPattern", "serviceId", "authRequired", "rateLimitOverride", enabled,
-          retry, plugins)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+          retry, plugins, graphql)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
       [
         body.method,
         body.pathPattern,
@@ -104,6 +109,7 @@ export class RoutesController {
         body.enabled ?? true,
         body.retry ? JSON.stringify(body.retry) : null,
         body.plugins ? JSON.stringify(body.plugins) : null,
+        body.graphql ? JSON.stringify(body.graphql) : null,
       ],
     );
     await this.configPush.triggerUpdate(tenantId);
@@ -127,7 +133,8 @@ export class RoutesController {
            "rateLimitOverride" = COALESCE($6, "rateLimitOverride"),
            enabled = COALESCE($7, enabled),
            retry = COALESCE($8::jsonb, retry),
-           plugins = COALESCE($9::jsonb, plugins)
+           plugins = COALESCE($9::jsonb, plugins),
+           graphql = COALESCE($10::jsonb, graphql)
        WHERE id = $1 AND "deletedAt" IS NULL RETURNING *`,
       [
         id,
@@ -139,6 +146,7 @@ export class RoutesController {
         body.enabled ?? null,
         body.retry ? JSON.stringify(body.retry) : null,
         body.plugins ? JSON.stringify(body.plugins) : null,
+        body.graphql ? JSON.stringify(body.graphql) : null,
       ],
     );
     await this.configPush.triggerUpdate(tenantId);

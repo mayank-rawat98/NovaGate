@@ -9,6 +9,9 @@ import { ProxyController } from './proxy/proxy.controller';
 import { ProxyMiddleware } from './proxy/proxy.middleware';
 import { ProxyService } from './proxy/proxy.service';
 import { LoadBalancerService } from './proxy/load-balancer.service';
+import { WsProxyService } from './proxy/ws-proxy.service';
+import { GrpcProxyService } from './proxy/grpc-proxy.service';
+import { Http2SessionPool } from './proxy/http2-session-pool.service';
 import { RateLimitGuard } from './rate-limit/rate-limit.guard';
 import { RateLimitService } from './rate-limit/rate-limit.service';
 import { GatewayExceptionFilter } from './shared/gateway-exception.filter';
@@ -29,6 +32,9 @@ import { PluginsModule } from './plugins/plugins.module';
     ProxyService,
     ProxyMiddleware,
     LoadBalancerService,
+    WsProxyService,
+    GrpcProxyService,
+    Http2SessionPool,
     RateLimitService,
     RateLimitGuard,
     LoggingInterceptor,
@@ -48,6 +54,7 @@ import { PluginsModule } from './plugins/plugins.module';
       useClass: GatewayExceptionFilter,
     },
   ],
+  exports: [WsProxyService, GrpcProxyService],
 })
 export class GatewayModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
