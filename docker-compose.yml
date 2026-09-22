@@ -52,6 +52,7 @@ services:
       start_period: 20s
     networks:
       - gateway-net
+      - edge # reached by the shared Caddy in the squadup stack
 
   admin-api:
     image: ghcr.io/mayank-rawat98/admin-api:latest
@@ -81,6 +82,7 @@ services:
       start_period: 20s
     networks:
       - gateway-net
+      - edge # reached by the shared Caddy in the squadup stack
 
   dashboard:
     image: ghcr.io/mayank-rawat98/dashboard:latest
@@ -99,26 +101,19 @@ services:
       start_period: 30s
     networks:
       - gateway-net
-
-  nginx:
-    image: nginx:alpine
-    profiles: [production]
-    ports:
-      - '80:80'
-      - '443:443'
-    volumes:
-      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
-      - /etc/letsencrypt/live/novagate.dev/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
-      - /etc/letsencrypt/live/novagate.dev/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
-    depends_on:
-      - dashboard
-      - admin-api
-    command: '/bin/sh -c ''while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g "daemon off;"'''
-    networks:
-      - gateway-net
+      - edge # reached by the shared Caddy in the squadup stack
 
 networks:
   gateway-net:
+    driver: bridge
+
+  # TLS and routing for novagate.dev are handled by the Caddy in the squadup
+  # stack (squadup.in/caddy/Caddyfile), which owns ports 80/443 on the server.
+  # The fixed name lets that stack join this network as an external one, and
+  # only the three public services sit on it, so Caddy can't reach Postgres
+  # or Redis.
+  edge:
+    name: novagate-edge
     driver: bridge
 
 volumes:
