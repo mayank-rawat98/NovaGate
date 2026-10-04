@@ -38,9 +38,6 @@ export interface ProxyServiceConfig {
 export interface GatewayConfig {
   port: number;
   trustedProxies?: string[];
-  database: {
-    url: string;
-  };
   redis: {
     url: string;
   };
@@ -75,9 +72,6 @@ export default (): GatewayConfig => ({
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean),
-  database: {
-    url: process.env.DATABASE_URL ?? '',
-  },
   redis: {
     url: process.env.REDIS_URL ?? '',
   },

@@ -264,6 +264,8 @@ For native gRPC upstreams, choose **Native gRPC health service** in the Services
 
 The Services form also exposes HTTP/2 upstream connections and WebSocket upgrades. Native gRPC client traffic uses the separate opt-in gRPC endpoint; the HTTP/2 setting controls ordinary HTTP proxy connections and HTTP health probes. The service timeout and caller `grpc-timeout` can shorten the gateway's maximum gRPC deadline. Live-network verification covers listener/upstream TLS, call/session admission limits, cancellation reuse, slow-client backpressure and shutdown grace. Upstreams use Node’s certificate trust store; mount a private CA and set `NODE_EXTRA_CA_CERTS` before startup when your upstream uses a private PKI. Certificate/key mounts must be readable by the image’s non-root UID 1000. Publish the gRPC port explicitly on your private network when enabling the listener.
 
+The gateway data plane uses Redis and tenant configuration from the control plane. It has no PostgreSQL connection or local administrative CRUD; manage services through the authenticated tenant admin API. `DATABASE_URL` is required by the admin API and control plane, and is ignored by the gateway.
+
 Use `docker/gateway.env.example` as a non-secret gateway configuration template. Only list reverse proxies you control in `TRUSTED_PROXY_CIDRS`; do not use a broad network to make client IP detection appear to work. Route IP restrictions support IPv4 and IPv6.
 
 ## Local regression verification
@@ -282,14 +284,14 @@ The test credentials are for the isolated local stack only. Integration suites r
 
 Fresh PostgreSQL volumes are initialized with `docker/postgres-init.sql`; admin-api performs idempotent schema upgrades for existing volumes. The control plane uses `synchronize: false` to preserve admin authentication columns. Admin-api requires `PLATFORM_JWT_SECRET` with at least 32 characters; tenant operations require a signed bearer token whose subject matches the tenant ID. Signup goes through email verification, and tenant responses exclude password and recovery tokens.
 
-The packaged gRPC verifier runs against a disposable database and Redis container on that verification network. Build the image, then run the task:
+The packaged gRPC verifier creates a disposable gateway/Redis network with no PostgreSQL dependency. Build the image, then run the task:
 
 ```sh
-docker build -f docker/Dockerfile.api -t novagate-api:issue41 .
-NOVAGATE_GRPC_IMAGE=novagate-api:issue41 npm exec nx run api:grpc-container-smoke
+docker build -f docker/Dockerfile.api -t novagate-api:verification .
+NOVAGATE_GRPC_IMAGE=novagate-api:verification npm exec nx run api:grpc-container-smoke
 ```
 
-It requires OrbStack, OpenSSL, the verification stack and access to the pinned grpcurl image. It generates short-lived fixture certificates inside `.local-work`, checks authenticated protobuf calls with grpcurl and writes evidence to `.local-work/issue41-container-evidence.json`. It removes its own database, containers and certificate directory after running. Existing storage and cache contents are preserved.
+It requires OrbStack, OpenSSL and access to the pinned grpcurl image. It generates short-lived fixture certificates inside `.local-work`, checks authenticated protobuf calls with grpcurl and writes evidence to `.local-work/grpc-container-evidence.json`. It verifies absent local admin CRUD and an authenticated tenant proxy route on the same prefix, then removes its containers, network and certificate directory. Existing storage and cache contents are preserved.
 
 ## Release and developer checks
 

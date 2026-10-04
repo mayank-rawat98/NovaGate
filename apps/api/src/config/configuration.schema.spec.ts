@@ -1,10 +1,17 @@
 import { configSchema } from './configuration.schema';
 
 const required = {
-  DATABASE_URL: 'postgres://gateway:placeholder@localhost:5432/gateway',
   REDIS_URL: 'redis://localhost:6379',
   JWT_SECRET: 'verification-only-secret-with-32-characters',
 };
+
+describe('Data-plane configuration', () => {
+  it('starts without a database connection setting', () => {
+    const result = configSchema.validate(required);
+    expect(result.error).toBeUndefined();
+    expect(result.value.DATABASE_URL).toBeUndefined();
+  });
+});
 
 describe('Trusted reverse proxy configuration', () => {
   it('trusts no proxy unless configured', () => {

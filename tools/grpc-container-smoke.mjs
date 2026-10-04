@@ -13,32 +13,31 @@ import * as http2 from 'node:http2';
 import { resolve } from 'node:path';
 import { once } from 'node:events';
 import { promisify } from 'node:util';
-import pg from 'pg';
 import { WebSocketServer } from 'ws';
 
-// Run after building docker/Dockerfile.api. All disposable resources belong to
-// this invocation; existing Redis keys, databases and containers are untouched.
+// Run after building docker/Dockerfile.api. The gateway and Redis are isolated
+// on a disposable network without PostgreSQL. Existing resources are untouched.
 const root = resolve(import.meta.dirname, '..');
 const artifacts = resolve(root, '.local-work');
 mkdirSync(artifacts, { recursive: true });
 const directory = mkdtempSync(resolve(artifacts, 'grpc-container-'));
 chmodSync(directory, 0o755); // Disposable verification certificates, never production keys.
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
-const database = `novagate_grpc_${suffix}`;
+const networkName = `novagate-grpc-${suffix}`;
 const redisName = `novagate-grpc-redis-${suffix}`;
 const gatewayName = `novagate-grpc-gateway-${suffix}`;
-const image = process.env.NOVAGATE_GRPC_IMAGE ?? 'novagate-api:issue41';
+const grpcurlName = `novagate-grpc-client-${suffix}`;
+const image = process.env.NOVAGATE_GRPC_IMAGE ?? 'novagate-api:verification';
 const docker = (...args) =>
-  execFileSync('docker', args, { encoding: 'utf8', timeout: 60000 }).trim();
-const db = new pg.Client({
-  connectionString:
-    process.env.TEST_DATABASE_URL ??
-    'postgresql://novagate_test:local-verification-only@127.0.0.1:15432/novagate_test',
-});
+  execFileSync('docker', args, {
+    encoding: 'utf8',
+    timeout: 60000,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
 const sockets = new Set();
 const servers = [];
 let plane;
-let databaseCreated = false;
+let networkCreated = false;
 let trustedCalls = 0;
 let untrustedCalls = 0;
 const trustedHealthRequests = [];
@@ -169,9 +168,8 @@ try {
     'orbstack',
     'Container verification requires OrbStack',
   );
-  await db.connect();
-  await db.query(`CREATE DATABASE "${database}"`);
-  databaseCreated = true;
+  docker('network', 'create', networkName);
+  networkCreated = true;
   const trusted = certificate('trusted');
   const untrusted = certificate('untrusted');
   const trustedTarget = await upstream(
@@ -237,28 +235,29 @@ try {
     '--name',
     redisName,
     '--network',
-    'novagate-verification_default',
+    networkName,
     'redis:7-alpine',
   );
-  await until(
-    () => docker('exec', redisName, 'redis-cli', 'ping') === 'PONG',
-    'private Redis startup',
-  );
+  await until(() => {
+    try {
+      return docker('exec', redisName, 'redis-cli', 'ping') === 'PONG';
+    } catch {
+      return false;
+    }
+  }, 'private Redis startup');
   docker(
     'run',
     '-d',
     '--name',
     gatewayName,
     '--network',
-    'novagate-verification_default',
+    networkName,
     '-p',
     '127.0.0.1::50051',
     '-p',
     '127.0.0.1::3000',
     '--mount',
     `type=bind,src=${directory},dst=/verification,readonly`,
-    '-e',
-    `DATABASE_URL=postgresql://novagate_test:local-verification-only@novagate-verification-postgres-1:5432/${database}`,
     '-e',
     `REDIS_URL=redis://${redisName}:6379`,
     '-e',
@@ -313,6 +312,24 @@ try {
     trustedHealthRequests[0],
     frame(Buffer.concat([Buffer.from([10, 9]), Buffer.from('test.Echo')])),
   );
+  for (const [method, path] of [
+    ['GET', '/admin/services'],
+    ['GET', '/admin/services/unused'],
+    ['POST', '/admin/services'],
+    ['PUT', '/admin/services/unused'],
+    ['DELETE', '/admin/services/unused'],
+  ]) {
+    const legacy = await fetch(`http://127.0.0.1:${httpPort}${path}`, {
+      method,
+    });
+    assert.equal(legacy.status, 404);
+    const error = await legacy.json();
+    assert.equal(error.error, 'SERVICE_NOT_FOUND');
+    assert.equal(typeof error.requestId, 'string');
+  }
+  const metrics = await fetch(`http://127.0.0.1:${httpPort}/metrics`);
+  assert.equal(metrics.status, 200);
+  assert.match(await metrics.text(), /gateway_grpc_active_calls/);
   const result = await call(grpcPort, trusted.cert);
   assert.equal(result.status, '0');
   assert.deepEqual(result.body, frame(replyMessage));
@@ -327,8 +344,10 @@ try {
     [
       'run',
       '--rm',
+      '--name',
+      grpcurlName,
       '--network',
-      'novagate-verification_default',
+      networkName,
       '--mount',
       `type=bind,src=${directory},dst=/verification,readonly`,
       grpcurlImage,
@@ -358,17 +377,48 @@ try {
     '16',
   );
   assert.equal(trustedCalls, 2);
+  // This prefix is an ordinary tenant route, not a hidden local CRUD surface.
+  config.routes.push({
+    id: 'http-route',
+    method: 'GET',
+    pathPattern: '/admin/services',
+    serviceId: 'service',
+    authRequired: true,
+    enabled: true,
+  });
+  for (const socket of plane.clients)
+    socket.send(
+      JSON.stringify({ type: 'config.update', version: 2, payload: config }),
+    );
+  await until(() => acknowledged === 2, 'tenant HTTP route ACK');
+  assert.equal(
+    (await fetch(`http://127.0.0.1:${httpPort}/admin/services`)).status,
+    401,
+  );
+  const proxied = await fetch(`http://127.0.0.1:${httpPort}/admin/services`, {
+    headers: { authorization: `Bearer ${consumerKey}` },
+  });
+  assert.equal(proxied.status, 200);
+  assert.deepEqual(
+    Buffer.from(await proxied.arrayBuffer()),
+    frame(replyMessage),
+  );
+  assert.equal(trustedCalls, 3);
   // Explicit fallback reaches the transport even if the untrusted health probe
   // fails first, so this proves certificate validation in the forwarding path.
   config.services[0].targets = [{ url: untrustedTarget, weight: 1 }];
   config.services[0].unhealthyFallback = true;
   for (const socket of plane.clients)
     socket.send(
-      JSON.stringify({ type: 'config.update', version: 2, payload: config }),
+      JSON.stringify({ type: 'config.update', version: 3, payload: config }),
     );
-  await until(() => acknowledged === 2, 'updated target ACK');
+  await until(() => acknowledged === 3, 'updated target ACK');
   assert.equal((await call(grpcPort, trusted.cert)).status, '14');
   assert.equal(untrustedCalls, 0);
+  const environment = JSON.parse(
+    docker('inspect', gatewayName, '--format', '{{json .Config.Env}}'),
+  );
+  assert.ok(!environment.some((entry) => entry.startsWith('DATABASE_URL=')));
   const runtime = docker(
     'exec',
     gatewayName,
@@ -378,10 +428,12 @@ try {
   );
   assert.equal(JSON.parse(runtime).uid, 1000);
   writeFileSync(
-    resolve(artifacts, 'issue41-container-evidence.json'),
+    resolve(artifacts, 'grpc-container-evidence.json'),
     JSON.stringify(
       {
         image,
+        imageId: docker('image', 'inspect', image, '--format', '{{.Id}}'),
+        databaseRequired: false,
         runtime: JSON.parse(runtime),
         trustedCalls,
         trustedHealthChecks: trustedHealthRequests.length,
@@ -397,6 +449,9 @@ try {
           'invalid-auth-denied',
           'untrusted-upstream-denied',
           'non-root-runtime',
+          'postgres-free-startup',
+          'legacy-admin-CRUD-absent',
+          'authenticated-tenant-HTTP-prefix-route',
         ],
       },
       null,
@@ -407,13 +462,13 @@ try {
 } finally {
   try {
     writeFileSync(
-      resolve(artifacts, 'issue41-container.log'),
+      resolve(artifacts, 'grpc-container.log'),
       docker('logs', gatewayName),
     );
   } catch {
     /* Startup may fail before creation. */
   }
-  for (const name of [gatewayName, redisName]) {
+  for (const name of [grpcurlName, gatewayName, redisName]) {
     try {
       docker('rm', '-f', name);
     } catch {
@@ -426,8 +481,6 @@ try {
   }
   for (const socket of sockets) socket.destroy();
   for (const server of servers) await new Promise((done) => server.close(done));
-  if (databaseCreated)
-    await db.query(`DROP DATABASE "${database}" WITH (FORCE)`);
-  await db.end();
+  if (networkCreated) docker('network', 'rm', networkName);
   rmSync(directory, { recursive: true, force: true });
 }

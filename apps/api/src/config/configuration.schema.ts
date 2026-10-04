@@ -107,7 +107,6 @@ export const configSchema = Joi.object({
     .min(0)
     .max(60000)
     .default(DEFAULT_GRPC.shutdownGraceMs),
-  DATABASE_URL: Joi.string().uri().required(),
   REDIS_URL: Joi.string().uri().required(),
   JWT_SECRET: Joi.string().min(32).required(),
   PROXY_TIMEOUT_MS: Joi.number().default(10000),
