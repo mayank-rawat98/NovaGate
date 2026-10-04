@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { tenantSchema } from '../tenants/tenant-schema';
 
 @Injectable()
 export class MigrationService implements OnModuleInit {
@@ -12,74 +13,77 @@ export class MigrationService implements OnModuleInit {
   }
 
   private async migrateAllTenants(): Promise<void> {
-    await this.dataSource.query(`ALTER TABLE public.tenants
-      ADD COLUMN IF NOT EXISTS "passwordHash" VARCHAR,
-      ADD COLUMN IF NOT EXISTS "resetPasswordToken" VARCHAR,
-      ADD COLUMN IF NOT EXISTS "resetPasswordExpires" TIMESTAMP,
-      ADD COLUMN IF NOT EXISTS "emailVerified" BOOLEAN NOT NULL DEFAULT false,
-      ADD COLUMN IF NOT EXISTS "verifyToken" VARCHAR,
-      ADD COLUMN IF NOT EXISTS "verifyExpires" TIMESTAMP`);
-    // One durable latest update per tenant. Older installations may contain duplicates.
-    await this.dataSource.query(`
-      DELETE FROM public.pending_config_updates a USING public.pending_config_updates b
-      WHERE a."tenantId" = b."tenantId" AND (a."createdAt", a.id) < (b."createdAt", b.id)
-    `);
-    await this.dataSource.query(
-      `CREATE UNIQUE INDEX IF NOT EXISTS pending_config_updates_tenant_unique ON public.pending_config_updates ("tenantId")`,
-    );
-    // Public schema migrations
-    try {
-      await this.dataSource.query(
-        `ALTER TABLE IF EXISTS public.tenants ADD COLUMN IF NOT EXISTS "caCertPem" TEXT`,
+    const tenantCount = await this.dataSource.transaction(async (manager) => {
+      // Serialize migrations across admin replicas; release the lock at commit.
+      await manager.query(
+        `SELECT pg_advisory_xact_lock(hashtext('novagate-schema-migrations'))`,
       );
-    } catch (err) {
-      this.logger.warn(
-        `Could not migrate public.tenants: ${(err as Error).message}`,
+      await manager.query(`ALTER TABLE public.tenants
+        ADD COLUMN IF NOT EXISTS "passwordHash" VARCHAR,
+        ADD COLUMN IF NOT EXISTS "resetPasswordToken" VARCHAR,
+        ADD COLUMN IF NOT EXISTS "resetPasswordExpires" TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS "emailVerified" BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS "verifyToken" VARCHAR,
+        ADD COLUMN IF NOT EXISTS "verifyExpires" TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS "caCertPem" TEXT`);
+      await manager.query(`DELETE FROM public.pending_config_updates a USING public.pending_config_updates b
+        WHERE a."tenantId" = b."tenantId" AND (a."createdAt", a.id) < (b."createdAt", b.id)`);
+      await manager.query(`CREATE UNIQUE INDEX IF NOT EXISTS pending_config_updates_tenant_unique
+        ON public.pending_config_updates ("tenantId")`);
+      const tenants = await manager.query<Array<{ id: string }>>(
+        `SELECT id FROM public.tenants`,
       );
-    }
-
-    const tenants = await this.dataSource.query<Array<{ id: string }>>(
-      `SELECT id FROM public.tenants`,
-    );
-
-    for (const tenant of tenants) {
-      const schema = `tenant_${tenant.id.replace(/-/g, '_')}`;
-      try {
-        await this.dataSource.query(
+      for (const tenant of tenants) {
+        const schema = tenantSchema(tenant.id);
+        await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.routes ADD COLUMN IF NOT EXISTS plugins JSONB`,
         );
-        await this.dataSource.query(
-          `ALTER TABLE IF EXISTS ${schema}.routes DROP COLUMN IF EXISTS "maxBodyBytes"`,
+        const columns = await manager.query<Array<{ column_name: string }>>(
+          `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'routes'`,
+          [schema],
         );
-        await this.dataSource.query(
-          `ALTER TABLE IF EXISTS ${schema}.routes DROP COLUMN IF EXISTS cors`,
-        );
-        await this.dataSource.query(
-          `ALTER TABLE IF EXISTS ${schema}.routes DROP COLUMN IF EXISTS "ipRestriction"`,
-        );
-        // Phase 2: consumer groups
-        await this.dataSource.query(
+        // Convert each legacy policy only when an explicit plugin does not already
+        // own it. Conversion and removal commit together; a failure preserves the
+        // original policy and prevents starting with a partially upgraded schema.
+        for (const [column, plugin, expression] of [
+          [
+            'maxBodyBytes',
+            'request-size-limit',
+            `jsonb_build_object('maxBodyBytes', "maxBodyBytes")`,
+          ],
+          ['cors', 'cors', 'cors::jsonb'],
+          ['ipRestriction', 'ip-restriction', '"ipRestriction"::jsonb'],
+        ]) {
+          if (!columns.some((entry) => entry.column_name === column)) continue;
+          await manager.query(
+            `UPDATE ${schema}.routes
+            SET plugins = COALESCE(plugins, '[]'::jsonb) || jsonb_build_array(jsonb_build_object('name', $1::text, 'config', ${expression}))
+            WHERE "${column}" IS NOT NULL AND NOT EXISTS
+              (SELECT 1 FROM jsonb_array_elements(COALESCE(plugins, '[]'::jsonb)) p WHERE p->>'name' = $1)`,
+            [plugin],
+          );
+          await manager.query(
+            `ALTER TABLE ${schema}.routes DROP COLUMN "${column}"`,
+          );
+        }
+        await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.consumers ADD COLUMN IF NOT EXISTS groups JSONB DEFAULT '[]'::jsonb`,
         );
-        // Protocol expansion: GraphQL guard config + HTTP/2 / WebSocket flags
-        await this.dataSource.query(
+        await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.routes ADD COLUMN IF NOT EXISTS graphql JSONB`,
         );
-        await this.dataSource.query(
+        await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS h2 BOOLEAN DEFAULT false`,
         );
-        await this.dataSource.query(
+        await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "supportsWebSocket" BOOLEAN DEFAULT false`,
         );
-      } catch (err) {
-        this.logger.warn(
-          `Could not migrate schema ${schema}: ${(err as Error).message}`,
-        );
       }
-    }
+      return tenants.length;
+    });
 
-    if (tenants.length > 0) {
-      this.logger.log(`Migrated ${tenants.length} tenant schema(s)`);
+    if (tenantCount > 0) {
+      this.logger.log(`Migrated ${tenantCount} tenant schema(s)`);
     }
   }
 }

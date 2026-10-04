@@ -46,6 +46,8 @@ Reference review: Mailtr remote `dev` (`db4a0cc3d5184e67208d0c6c196c045e518b1664
 
 Issue #31 applies reference release safeguards: reusable CI before image builds, immutable revision deployment, release concurrency, deterministic Node 24/npm-ci Docker builds and read-only staged formatting checks. Container builds and smoke checks are required before merge.
 
+Issue #33 repairs upgrade data preservation: legacy CORS, IP and body-limit settings are copied into plugin configurations transactionally before column removal, explicit plugin settings win, repeated startup is idempotent and failures abort/roll back. Route/service/consumer PUT responses are verified against PostgreSQL; omitted fields are retained and nullable route policies can be cleared. Missing records return 404 without publishing.
+
 Implementation sequence: reconcile baseline → repair isolation/config/plugin prerequisites → close phases 0–3 verification gaps → Phase 4 with RustFS and refreshed dashboard → phases 5–6 and additional requirements → formal acceptance. Terraform and Kubernetes code must live under this repository, not in separate repositories.
 
 ---

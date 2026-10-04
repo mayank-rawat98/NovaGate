@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  NotFoundException,
   Controller,
   Get,
   Post,
@@ -10,12 +11,8 @@ import {
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ConfigPushService } from '../config-push/config-push.service';
+import { tenantSchema } from '../tenants/tenant-schema';
 import type { ServiceTarget } from '@api-gateway/shared-types';
-
-function tenantSchema(tenantId: string): string {
-  if (!/^[0-9a-f-]+$/i.test(tenantId)) throw new Error('Invalid tenantId');
-  return `tenant_${tenantId.replace(/-/g, '_')}`;
-}
 
 interface ServiceBody {
   name?: string;
@@ -97,14 +94,14 @@ export class ServicesController {
         ? null
         : JSON.stringify(validateTargets(body.targets));
     const rows = await this.dataSource.query(
-      `UPDATE ${schema}.services
+      `WITH updated AS (UPDATE ${schema}.services
        SET name = COALESCE($2, name),
             targets = COALESCE($3::jsonb, targets),
             "healthCheckPath" = COALESCE($4, "healthCheckPath"),
             "timeoutMs" = COALESCE($5, "timeoutMs"),
             h2 = COALESCE($6, h2),
             "supportsWebSocket" = COALESCE($7, "supportsWebSocket")
-       WHERE id = $1 AND "deletedAt" IS NULL RETURNING *`,
+       WHERE id = $1 AND "deletedAt" IS NULL RETURNING *) SELECT * FROM updated`,
       [
         id,
         body.name ?? null,
@@ -115,6 +112,8 @@ export class ServicesController {
         body.supportsWebSocket ?? null,
       ],
     );
+    if (!rows.length)
+      throw new NotFoundException('Configuration entry not found');
     await this.configPush.triggerUpdate(tenantId);
     return rows[0];
   }

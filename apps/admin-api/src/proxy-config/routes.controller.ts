@@ -7,9 +7,11 @@ import {
   Param,
   Body,
   BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ConfigPushService } from '../config-push/config-push.service';
+import { tenantSchema } from '../tenants/tenant-schema';
 
 // Plugin names accepted by the admin-api. Reject unknown names so the
 // gateway never tries to resolve a plugin that doesn't exist.
@@ -26,12 +28,8 @@ const KNOWN_PLUGIN_NAMES = new Set([
   'hmac-auth',
   'acl',
   'mtls',
+  'graphql-guard',
 ]);
-
-function tenantSchema(tenantId: string): string {
-  if (!/^[0-9a-f-]+$/i.test(tenantId)) throw new Error('Invalid tenantId');
-  return `tenant_${tenantId.replace(/-/g, '_')}`;
-}
 
 interface PluginEntry {
   name: string;
@@ -59,7 +57,7 @@ function validatePlugins(plugins: unknown): void {
   if (!Array.isArray(plugins))
     throw new BadRequestException('plugins must be an array');
   for (const entry of plugins) {
-    if (typeof entry.name !== 'string')
+    if (!entry || typeof entry !== 'object' || typeof entry.name !== 'string')
       throw new BadRequestException('each plugin must have a string name');
     if (!KNOWN_PLUGIN_NAMES.has(entry.name)) {
       throw new BadRequestException(`Unknown plugin: "${entry.name}"`);
@@ -125,17 +123,17 @@ export class RoutesController {
     validatePlugins(body.plugins);
     const schema = tenantSchema(tenantId);
     const rows = await this.dataSource.query(
-      `UPDATE ${schema}.routes
+      `WITH updated AS (UPDATE ${schema}.routes
        SET method = COALESCE($2, method),
            "pathPattern" = COALESCE($3, "pathPattern"),
            "serviceId" = COALESCE($4, "serviceId"),
            "authRequired" = COALESCE($5, "authRequired"),
-           "rateLimitOverride" = COALESCE($6, "rateLimitOverride"),
+           "rateLimitOverride" = CASE WHEN $11 THEN $6 ELSE "rateLimitOverride" END,
            enabled = COALESCE($7, enabled),
-           retry = COALESCE($8::jsonb, retry),
-           plugins = COALESCE($9::jsonb, plugins),
-           graphql = COALESCE($10::jsonb, graphql)
-       WHERE id = $1 AND "deletedAt" IS NULL RETURNING *`,
+           retry = CASE WHEN $12 THEN $8::jsonb ELSE retry END,
+           plugins = CASE WHEN $13 THEN $9::jsonb ELSE plugins END,
+           graphql = CASE WHEN $14 THEN $10::jsonb ELSE graphql END
+       WHERE id = $1 AND "deletedAt" IS NULL RETURNING *) SELECT * FROM updated`,
       [
         id,
         body.method ?? null,
@@ -147,8 +145,14 @@ export class RoutesController {
         body.retry ? JSON.stringify(body.retry) : null,
         body.plugins ? JSON.stringify(body.plugins) : null,
         body.graphql ? JSON.stringify(body.graphql) : null,
+        body.rateLimitOverride !== undefined,
+        body.retry !== undefined,
+        body.plugins !== undefined,
+        body.graphql !== undefined,
       ],
     );
+    if (!rows.length)
+      throw new NotFoundException('Configuration entry not found');
     await this.configPush.triggerUpdate(tenantId);
     return rows[0];
   }

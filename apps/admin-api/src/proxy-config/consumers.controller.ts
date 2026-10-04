@@ -6,15 +6,12 @@ import {
   Delete,
   Param,
   Body,
+  NotFoundException,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import * as crypto from 'crypto';
 import { ConfigPushService } from '../config-push/config-push.service';
-
-function tenantSchema(tenantId: string): string {
-  if (!/^[0-9a-f-]+$/i.test(tenantId)) throw new Error('Invalid tenantId');
-  return `tenant_${tenantId.replace(/-/g, '_')}`;
-}
+import { tenantSchema } from '../tenants/tenant-schema';
 
 @Controller('tenants/:tenantId/consumers')
 export class ConsumersController {
@@ -64,9 +61,11 @@ export class ConsumersController {
   ) {
     const schema = tenantSchema(tenantId);
     const rows = await this.dataSource.query(
-      `UPDATE ${schema}.consumers SET groups = $2 WHERE id = $1 AND "revokedAt" IS NULL RETURNING id, name, "rateLimitTier", groups, "createdAt"`,
-      [id, JSON.stringify(body.groups ?? [])],
+      `WITH updated AS (UPDATE ${schema}.consumers SET groups = CASE WHEN $3 THEN $2::jsonb ELSE groups END WHERE id = $1 AND "revokedAt" IS NULL RETURNING id, name, "rateLimitTier", groups, "createdAt") SELECT * FROM updated`,
+      [id, JSON.stringify(body.groups ?? []), body.groups !== undefined],
     );
+    if (!rows.length)
+      throw new NotFoundException('Configuration entry not found');
     await this.configPush.triggerUpdate(tenantId);
     return rows[0];
   }

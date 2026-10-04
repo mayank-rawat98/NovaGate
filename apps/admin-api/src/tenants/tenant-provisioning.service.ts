@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import * as crypto from 'crypto';
+import { tenantSchema } from './tenant-schema';
 
 @Injectable()
 export class TenantProvisioningService {
@@ -9,7 +10,7 @@ export class TenantProvisioningService {
   constructor(private readonly dataSource: DataSource) {}
 
   async provisionTenant(tenantId: string): Promise<string> {
-    const schemaName = `tenant_${tenantId.replace(/-/g, '_')}`;
+    const schemaName = tenantSchema(tenantId);
     this.logger.log(`Provisioning schema ${schemaName}`);
 
     await this.dataSource.transaction(async (manager) => {
