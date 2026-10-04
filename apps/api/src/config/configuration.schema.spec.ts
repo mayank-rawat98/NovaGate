@@ -119,3 +119,36 @@ describe('gRPC listener startup validation', () => {
     ).toBeDefined();
   });
 });
+
+describe('WebSocket upgrade startup validation', () => {
+  it('disables query credentials and supplies finite resource bounds', () => {
+    expect(configSchema.validate(required).value).toMatchObject({
+      WS_ALLOW_QUERY_TOKEN: 'false',
+      WS_MAX_CONNECTIONS: 256,
+      WS_HANDSHAKE_TIMEOUT_MS: 5000,
+      WS_MAX_HEADER_BYTES: 16384,
+      WS_MAX_BUFFERED_HEAD_BYTES: 65536,
+      WS_IDLE_TIMEOUT_MS: 300000,
+      WS_SHUTDOWN_GRACE_MS: 5000,
+    });
+  });
+  it.each([
+    ['WS_ALLOW_QUERY_TOKEN', 'yes'],
+    ['WS_MAX_CONNECTIONS', 0],
+    ['WS_MAX_CONNECTIONS', 10001],
+    ['WS_HANDSHAKE_TIMEOUT_MS', 99],
+    ['WS_HANDSHAKE_TIMEOUT_MS', 60001],
+    ['WS_MAX_HEADER_BYTES', 1023],
+    ['WS_MAX_HEADER_BYTES', 65537],
+    ['WS_MAX_BUFFERED_HEAD_BYTES', -1],
+    ['WS_MAX_BUFFERED_HEAD_BYTES', 1048577],
+    ['WS_IDLE_TIMEOUT_MS', 999],
+    ['WS_IDLE_TIMEOUT_MS', 3600001],
+    ['WS_SHUTDOWN_GRACE_MS', -1],
+    ['WS_SHUTDOWN_GRACE_MS', 60001],
+  ])('rejects unsafe %s=%s', (name, value) => {
+    expect(
+      configSchema.validate({ ...required, [name]: value }).error,
+    ).toBeDefined();
+  });
+});

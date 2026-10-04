@@ -512,6 +512,7 @@ export class GrpcProxyService
         res: response as unknown as PluginContext['res'],
         route,
         service,
+        signal: call.abort.signal,
         tenantId: call.tenantId ?? '',
         requestId: randomUUID(),
         logger: {

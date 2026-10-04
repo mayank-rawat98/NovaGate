@@ -10,10 +10,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import * as http2 from 'node:http2';
+import * as https from 'node:https';
 import { resolve } from 'node:path';
 import { once } from 'node:events';
 import { promisify } from 'node:util';
-import { WebSocketServer } from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
 
 // Run after building docker/Dockerfile.api. The gateway and Redis are isolated
 // on a disposable network without PostgreSQL. Existing resources are untouched.
@@ -40,6 +41,10 @@ let plane;
 let networkCreated = false;
 let trustedCalls = 0;
 let untrustedCalls = 0;
+let trustedWsCalls = 0;
+let untrustedWsCalls = 0;
+const websocketClients = new Set();
+const receivedWsUrls = [];
 const trustedHealthRequests = [];
 let acknowledged = 0;
 let config;
@@ -162,6 +167,54 @@ async function call(port, ca, authorization = `Bearer ${consumerKey}`) {
     session.destroy();
   }
 }
+async function websocketUpstream(tls, count) {
+  const server = https.createServer(tls, (_req, res) => res.end('healthy'));
+  servers.push(server);
+  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: true });
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('error', () => socket.destroy());
+    socket.once('close', () => sockets.delete(socket));
+  });
+  server.on('upgrade', (req, socket, head) => {
+    count();
+    receivedWsUrls.push(req.url);
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      ws.on('error', () => ws.terminate());
+      ws.on('message', (data, binary) => ws.send(data, { binary }));
+    });
+  });
+  await new Promise((done) => server.listen(0, '0.0.0.0', done));
+  return `https://host.docker.internal:${server.address().port}`;
+}
+function connectWebsocket(port, path = '/socket', headers = {}) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, ['chat'], {
+    headers,
+    perMessageDeflate: true,
+    handshakeTimeout: 5000,
+  });
+  websocketClients.add(ws);
+  ws.on('error', () => {
+    /* Rejections are asserted separately. */
+  });
+  return ws;
+}
+async function rejectedWebsocket(port, path = '/socket', headers = {}) {
+  const ws = connectWebsocket(port, path, headers);
+  return new Promise((done, fail) => {
+    ws.once('open', () => fail(new Error('Unexpected accepted WebSocket')));
+    ws.once('unexpected-response', (_req, response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.once('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString());
+        ws.terminate();
+        done({ status: response.statusCode, body });
+      });
+    });
+    ws.once('error', fail);
+  });
+}
 try {
   assert.equal(
     docker('context', 'show'),
@@ -178,6 +231,14 @@ try {
     trustedHealthRequests,
   );
   const untrustedTarget = await upstream(untrusted, () => untrustedCalls++);
+  const trustedWsTarget = await websocketUpstream(
+    trusted,
+    () => trustedWsCalls++,
+  );
+  const untrustedWsTarget = await websocketUpstream(
+    untrusted,
+    () => untrustedWsCalls++,
+  );
   config = {
     routes: [
       {
@@ -268,6 +329,10 @@ try {
     'GATEWAY_API_KEY=container-verification-api-key',
     '-e',
     'GRPC_ENABLED=true',
+    '-e',
+    'WS_ALLOW_QUERY_TOKEN=true',
+    '-e',
+    'WS_MAX_CONNECTIONS=2',
     '-e',
     'GRPC_HOST=0.0.0.0',
     '-e',
@@ -386,6 +451,32 @@ try {
     authRequired: true,
     enabled: true,
   });
+  config.routes.push({
+    id: 'limited-ws-route',
+    method: 'GET',
+    pathPattern: '/limited-socket',
+    serviceId: 'ws-service',
+    authRequired: true,
+    enabled: true,
+    rateLimitOverride: 1,
+  });
+  config.routes.push({
+    id: 'ws-route',
+    method: 'GET',
+    pathPattern: '/socket',
+    serviceId: 'ws-service',
+    authRequired: true,
+    enabled: true,
+  });
+  config.services.push({
+    id: 'ws-service',
+    name: 'secure-ws',
+    targets: [{ url: trustedWsTarget, weight: 1 }],
+    timeoutMs: 5000,
+    healthCheckPath: '/health',
+    supportsWebSocket: true,
+    unhealthyFallback: true,
+  });
   for (const socket of plane.clients)
     socket.send(
       JSON.stringify({ type: 'config.update', version: 2, payload: config }),
@@ -404,10 +495,83 @@ try {
     frame(replyMessage),
   );
   assert.equal(trustedCalls, 3);
+  assert.equal((await rejectedWebsocket(httpPort)).status, 401);
+  const malformed = await rejectedWebsocket(httpPort, '/socket?token=%QQ');
+  assert.equal(malformed.status, 400);
+  assert.equal(malformed.body.error, 'TOKEN_INVALID');
+  assert.equal(
+    docker('inspect', gatewayName, '--format', '{{.State.Running}}'),
+    'true',
+  );
+  assert.equal(
+    (await fetch(`http://127.0.0.1:${httpPort}/health`)).status,
+    200,
+  );
+  assert.equal(trustedWsCalls, 0);
+  const limited = connectWebsocket(httpPort, '/limited-socket', {
+    authorization: `Bearer ${consumerKey}`,
+  });
+  await once(limited, 'open');
+  const quotaDenied = await rejectedWebsocket(httpPort, '/limited-socket', {
+    authorization: `Bearer ${consumerKey}`,
+  });
+  assert.equal(quotaDenied.status, 429);
+  assert.equal(quotaDenied.body.error, 'RATE_LIMIT_EXCEEDED');
+  const limitedClosed = once(limited, 'close');
+  limited.close(1000);
+  await limitedClosed;
+  await until(
+    async () =>
+      /gateway_ws_active_connections 0(?:\n|$)/.test(
+        await (await fetch(`http://127.0.0.1:${httpPort}/metrics`)).text(),
+      ),
+    'limited WebSocket metric cleanup',
+  );
+  const websocket = connectWebsocket(
+    httpPort,
+    `/socket?room=a%2fb&token=${consumerKey}`,
+  );
+  await once(websocket, 'open');
+  assert.equal(websocket.protocol, 'chat');
+  assert.match(websocket.extensions, /permessage-deflate/);
+  assert.equal(receivedWsUrls.at(-1), '/socket?room=a%2fb');
+  let reply = once(websocket, 'message');
+  websocket.send('packaged websocket');
+  assert.equal((await reply)[0].toString(), 'packaged websocket');
+  const binary = Buffer.from([0, 255, 128, 1]);
+  reply = once(websocket, 'message');
+  websocket.send(binary);
+  const binaryReply = await reply;
+  assert.deepEqual(binaryReply[0], binary);
+  assert.equal(binaryReply[1], true);
+  const pong = once(websocket, 'pong');
+  websocket.ping('verification');
+  assert.equal((await pong)[0].toString(), 'verification');
+  const secondWs = connectWebsocket(httpPort, '/socket', {
+    authorization: `Bearer ${consumerKey}`,
+  });
+  await once(secondWs, 'open');
+  const capacity = await rejectedWebsocket(httpPort, '/socket', {
+    authorization: `Bearer ${consumerKey}`,
+  });
+  assert.equal(capacity.status, 503);
+  assert.equal(capacity.body.error, 'WS_CAPACITY_EXHAUSTED');
+  const secondClosed = once(secondWs, 'close');
+  secondWs.close(1000);
+  await secondClosed;
+  await until(
+    async () =>
+      /gateway_ws_active_connections 1(?:\n|$)/.test(
+        await (await fetch(`http://127.0.0.1:${httpPort}/metrics`)).text(),
+      ),
+    'accepted WebSocket metrics',
+  );
   // Explicit fallback reaches the transport even if the untrusted health probe
   // fails first, so this proves certificate validation in the forwarding path.
   config.services[0].targets = [{ url: untrustedTarget, weight: 1 }];
   config.services[0].unhealthyFallback = true;
+  config.services[1].targets = [{ url: untrustedWsTarget, weight: 1 }];
+  const removedWs = once(websocket, 'close');
   for (const socket of plane.clients)
     socket.send(
       JSON.stringify({ type: 'config.update', version: 3, payload: config }),
@@ -415,6 +579,23 @@ try {
   await until(() => acknowledged === 3, 'updated target ACK');
   assert.equal((await call(grpcPort, trusted.cert)).status, '14');
   assert.equal(untrustedCalls, 0);
+  await removedWs;
+  assert.equal(
+    (
+      await rejectedWebsocket(httpPort, '/socket', {
+        authorization: `Bearer ${consumerKey}`,
+      })
+    ).status,
+    502,
+  );
+  assert.equal(untrustedWsCalls, 0);
+  await until(
+    async () =>
+      /gateway_ws_active_connections 0(?:\n|$)/.test(
+        await (await fetch(`http://127.0.0.1:${httpPort}/metrics`)).text(),
+      ),
+    'released WebSocket metrics',
+  );
   const environment = JSON.parse(
     docker('inspect', gatewayName, '--format', '{{json .Config.Env}}'),
   );
@@ -432,10 +613,12 @@ try {
     JSON.stringify(
       {
         image,
-        imageId: docker('image', 'inspect', image, '--format', '{{.Id}}'),
+        imageId: docker('inspect', gatewayName, '--format', '{{.Image}}'),
         databaseRequired: false,
         runtime: JSON.parse(runtime),
         trustedCalls,
+        trustedWsCalls,
+        untrustedWsCalls,
         trustedHealthChecks: trustedHealthRequests.length,
         grpcurlImage,
         untrustedCalls,
@@ -452,22 +635,35 @@ try {
           'postgres-free-startup',
           'legacy-admin-CRUD-absent',
           'authenticated-tenant-HTTP-prefix-route',
+          'websocket-malformed-query-does-not-crash',
+          'websocket-verified-consumer-TLS-upstream',
+          'websocket-text-binary-compression-subprotocol-ping-close',
+          'websocket-capacity-and-active-metrics',
+          'websocket-live-Redis-route-quota',
+          'websocket-target-removal',
+          'websocket-untrusted-upstream-denied',
         ],
       },
       null,
       2,
     ),
   );
-  console.log('Packaged gRPC TLS/auth/config/trailers checks passed.');
+  console.log(
+    'Packaged HTTP/gRPC/WebSocket TLS/auth/config/streaming checks passed.',
+  );
 } finally {
   try {
     writeFileSync(
       resolve(artifacts, 'grpc-container.log'),
-      docker('logs', gatewayName),
+      await promisify(execFile)('docker', ['logs', gatewayName], {
+        encoding: 'utf8',
+        timeout: 15000,
+      }).then(({ stdout, stderr }) => stdout + stderr),
     );
   } catch {
     /* Startup may fail before creation. */
   }
+  for (const client of websocketClients) client.terminate();
   for (const name of [grpcurlName, gatewayName, redisName]) {
     try {
       docker('rm', '-f', name);

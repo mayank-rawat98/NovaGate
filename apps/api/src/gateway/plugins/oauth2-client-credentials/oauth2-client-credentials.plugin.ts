@@ -33,7 +33,7 @@ const CACHE_PREFIX = 'oauth2:introspect:';
 @Injectable()
 export class OAuth2ClientCredentialsPlugin implements GatewayPlugin {
   readonly name = 'oauth2-client-credentials';
-  readonly protocols = ['http', 'grpc'] as const;
+  readonly protocols = ['http', 'grpc', 'websocket'] as const;
   private readonly logger = new Logger(OAuth2ClientCredentialsPlugin.name);
 
   // Keyed by tokenEndpoint+clientId+scopes so routes with different configs don't share tokens
@@ -106,7 +106,7 @@ export class OAuth2ClientCredentialsPlugin implements GatewayPlugin {
 
     if (!result) {
       try {
-        result = await this.introspect(token, config);
+        result = await this.introspect(token, config, ctx.signal);
         if (result.active && result.exp) {
           const ttl = Math.max(0, result.exp - Math.floor(Date.now() / 1000));
           if (ttl > 0) {
@@ -115,10 +115,8 @@ export class OAuth2ClientCredentialsPlugin implements GatewayPlugin {
               .catch(() => undefined);
           }
         }
-      } catch (err) {
-        this.logger.error(
-          `Token introspection failed: ${(err as Error).message}`,
-        );
+      } catch {
+        this.logger.error('Token introspection failed');
         return this.unauthorized(
           ctx.requestId,
           'OAUTH2_INTROSPECTION_FAILED',
@@ -142,12 +140,15 @@ export class OAuth2ClientCredentialsPlugin implements GatewayPlugin {
     ctx: PluginContext,
     config: OAuth2Config,
   ): Promise<void> {
-    const token = await this.getOutboundToken(config);
+    const token = await this.getOutboundToken(config, ctx.signal);
     const headerName = config.headerName ?? 'Authorization';
     ctx.req.headers[headerName.toLowerCase()] = `Bearer ${token}`;
   }
 
-  private async getOutboundToken(config: OAuth2Config): Promise<string> {
+  private async getOutboundToken(
+    config: OAuth2Config,
+    signal?: AbortSignal,
+  ): Promise<string> {
     const cacheKey = `${config.tokenEndpoint}:${config.clientId}:${(config.scopes ?? []).join(',')}`;
     const cached = this.outboundTokenCache.get(cacheKey);
     if (cached && Date.now() < cached.expiresAt - 30_000) {
@@ -164,6 +165,8 @@ export class OAuth2ClientCredentialsPlugin implements GatewayPlugin {
     const response = await this.postForm(
       config.tokenEndpoint!,
       body.toString(),
+      {},
+      signal,
     );
     const data = response as { access_token: string; expires_in?: number };
 
@@ -178,20 +181,27 @@ export class OAuth2ClientCredentialsPlugin implements GatewayPlugin {
   private introspect(
     token: string,
     config: OAuth2Config,
+    signal?: AbortSignal,
   ): Promise<IntrospectionResponse> {
     const credentials = Buffer.from(
       `${config.clientId}:${config.clientSecret}`,
     ).toString('base64');
     const body = `token=${encodeURIComponent(token)}`;
-    return this.postForm(config.introspectionEndpoint!, body, {
-      Authorization: `Basic ${credentials}`,
-    }) as Promise<IntrospectionResponse>;
+    return this.postForm(
+      config.introspectionEndpoint!,
+      body,
+      {
+        Authorization: `Basic ${credentials}`,
+      },
+      signal,
+    ) as Promise<IntrospectionResponse>;
   }
 
   private postForm(
     url: string,
     body: string,
     extraHeaders: Record<string, string> = {},
+    signal?: AbortSignal,
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const parsedUrl = new URL(url);
@@ -207,9 +217,14 @@ export class OAuth2ClientCredentialsPlugin implements GatewayPlugin {
           ...extraHeaders,
         },
         timeout: 5000,
+        signal,
       };
 
       const req = client.request(options, (res) => {
+        res.on('error', reject);
+        res.once('aborted', () =>
+          reject(new Error('Identity provider response aborted')),
+        );
         let data = '';
         res.on('data', (chunk: Buffer) => (data += chunk.toString()));
         res.on('end', () => {

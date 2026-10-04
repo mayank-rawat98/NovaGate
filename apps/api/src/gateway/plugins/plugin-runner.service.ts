@@ -15,6 +15,15 @@ export class PluginRunnerService {
     ctx: PluginContext,
   ): Promise<PluginShortCircuit | void> {
     for (const plugin of plugins) {
+      if (ctx.signal?.aborted)
+        return {
+          status: 503,
+          body: JSON.stringify({
+            error: 'ADMISSION_CANCELLED',
+            message: 'Request cancelled',
+            requestId: ctx.requestId,
+          }),
+        };
       if (!plugin.onRequest) continue;
       try {
         const result = await plugin.onRequest(ctx);
@@ -44,6 +53,7 @@ export class PluginRunnerService {
     ctx: PluginContext & { statusCode: number; headers: OutgoingHttpHeaders },
   ): Promise<void> {
     for (const plugin of plugins) {
+      if (ctx.signal?.aborted) return;
       if (!plugin.onResponse) continue;
       try {
         await plugin.onResponse(ctx);

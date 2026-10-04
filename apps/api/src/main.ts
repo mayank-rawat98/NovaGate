@@ -21,14 +21,14 @@ async function bootstrap() {
       configService.get('trustedProxies', { infer: true }) ?? false,
     );
 
-  await app.listen(port);
-
-  // Wire WebSocket upgrade events to WsProxyService after the server is listening
+  // Attach the upgrade boundary before accepting traffic.
   const httpServer = app.getHttpServer() as http.Server;
   const wsProxy = app.get(WsProxyService);
   httpServer.on('upgrade', (req, socket, head) => {
-    wsProxy.handleUpgrade(req, socket as import('net').Socket, head);
+    void wsProxy.handleUpgrade(req, socket as import('net').Socket, head);
   });
+
+  await app.listen(port);
 
   Logger.log(`Application is running on: http://localhost:${port}`);
 }
