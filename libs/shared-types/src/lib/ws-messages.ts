@@ -137,6 +137,8 @@ export interface ServiceConfig {
   targets: ServiceTarget[];
   healthCheckPath: string;
   healthCheckIntervalMs?: number;
+  healthCheckProtocol?: 'http' | 'grpc';
+  healthCheckService?: string;
   unhealthyFallback?: boolean;
   timeoutMs: number;
   supportsWebSocket?: boolean;

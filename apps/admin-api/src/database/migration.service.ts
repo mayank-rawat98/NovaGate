@@ -38,7 +38,7 @@ export class MigrationService implements OnModuleInit {
       for (const tenant of tenants) {
         const schema = tenantSchema(tenant.id);
         await manager.query(
-          `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "healthCheckIntervalMs" INTEGER NOT NULL DEFAULT 10000, ADD COLUMN IF NOT EXISTS "unhealthyFallback" BOOLEAN NOT NULL DEFAULT false`,
+          `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "healthCheckIntervalMs" INTEGER NOT NULL DEFAULT 10000, ADD COLUMN IF NOT EXISTS "unhealthyFallback" BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS "healthCheckProtocol" VARCHAR NOT NULL DEFAULT 'http', ADD COLUMN IF NOT EXISTS "healthCheckService" VARCHAR NOT NULL DEFAULT ''`,
         );
         await manager.query(
           `CREATE INDEX IF NOT EXISTS request_logs_export_cursor ON ${schema}.request_logs (timestamp, id)`,

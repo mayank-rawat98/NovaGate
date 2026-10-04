@@ -52,6 +52,8 @@ apps/api/src/
       health.controller.spec.ts
       upstream-health.service.ts    -- bounded per-service probes and eviction/recovery
       upstream-health.service.spec.ts -- real HTTP/HTTP2/IPv6 lifecycle checks
+      grpc-health-wire.ts           -- bounded standard gRPC health request/response
+      grpc-health-wire.spec.ts
     config-manager/
       gateway-config-manager.service.ts
     connector/

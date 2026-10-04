@@ -39,6 +39,10 @@ interface FormState {
   healthCheckPath: string;
   timeoutMs: string;
   healthCheckIntervalMs: string;
+  healthCheckProtocol: 'http' | 'grpc';
+  healthCheckService: string;
+  h2: boolean;
+  supportsWebSocket: boolean;
   unhealthyFallback: boolean;
 }
 
@@ -50,6 +54,10 @@ const EMPTY_FORM: FormState = {
   healthCheckPath: '/health',
   timeoutMs: '10000',
   healthCheckIntervalMs: '10000',
+  healthCheckProtocol: 'http',
+  healthCheckService: '',
+  h2: false,
+  supportsWebSocket: false,
   unhealthyFallback: false,
 };
 
@@ -57,6 +65,11 @@ function formToDto(form: FormState): CreateServiceDto {
   return {
     name: form.name,
     healthCheckIntervalMs: Number(form.healthCheckIntervalMs),
+    healthCheckProtocol: form.healthCheckProtocol,
+    healthCheckService:
+      form.healthCheckProtocol === 'grpc' ? form.healthCheckService.trim() : '',
+    h2: form.h2,
+    supportsWebSocket: form.supportsWebSocket,
     unhealthyFallback: form.unhealthyFallback,
     targets: form.targets
       .filter((t) => t.url.trim())
@@ -115,6 +128,10 @@ export default function ServicesPage() {
       healthCheckPath: service.healthCheckPath,
       timeoutMs: String(service.timeoutMs),
       healthCheckIntervalMs: String(service.healthCheckIntervalMs ?? 10000),
+      healthCheckProtocol: service.healthCheckProtocol ?? 'http',
+      healthCheckService: service.healthCheckService ?? '',
+      h2: service.h2 ?? false,
+      supportsWebSocket: service.supportsWebSocket ?? false,
       unhealthyFallback: service.unhealthyFallback ?? false,
     });
     setFormError(null);
@@ -302,7 +319,9 @@ export default function ServicesPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-500">
-                      {service.healthCheckPath}
+                      {service.healthCheckProtocol === 'grpc'
+                        ? `gRPC: ${service.healthCheckService || 'overall server'}`
+                        : service.healthCheckPath}
                     </td>
                     <td className="px-4 py-3">
                       <span
@@ -501,29 +520,120 @@ export default function ServicesPage() {
                 )}
               </div>
 
-              {/* Health Check Path */}
+              <fieldset className="flex flex-col gap-3 rounded-lg border border-gray-200 p-3">
+                <legend className="px-1 text-sm font-medium text-gray-700">
+                  Upstream protocols
+                </legend>
+                <label className="flex items-start gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={form.h2}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, h2: e.target.checked }))
+                    }
+                  />
+                  <span>
+                    Use HTTP/2 for upstream connections
+                    <span className="block text-xs text-gray-500">
+                      Native gRPC calls use HTTP/2 through the gateway’s
+                      separate gRPC endpoint. Choose gRPC health checks below
+                      for native gRPC servers.
+                    </span>
+                  </span>
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={form.supportsWebSocket}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        supportsWebSocket: e.target.checked,
+                      }))
+                    }
+                  />
+                  Allow WebSocket upgrades
+                </label>
+              </fieldset>
               <div className="flex flex-col gap-1">
                 <label
-                  htmlFor="services-health-path"
+                  htmlFor="services-health-protocol"
                   className="text-sm font-medium text-gray-700"
                 >
-                  Health Check Path
+                  Health check protocol
                 </label>
-                <input
-                  type="text"
-                  id="services-health-path"
-                  placeholder="/health"
-                  value={form.healthCheckPath}
+                <select
+                  id="services-health-protocol"
+                  value={form.healthCheckProtocol}
                   onChange={(e) =>
-                    setForm((f) => ({ ...f, healthCheckPath: e.target.value }))
+                    setForm((f) => ({
+                      ...f,
+                      healthCheckProtocol: e.target.value as 'http' | 'grpc',
+                    }))
                   }
-                  className="rounded-md border border-gray-300 px-3 py-2 font-mono text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                />
-                <p className="text-xs text-gray-400">
-                  Only successful (2xx) responses count as healthy. Failure and
-                  recovery thresholds are controlled by the gateway operator.
-                </p>
+                  className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+                >
+                  <option value="http">HTTP endpoint</option>
+                  <option value="grpc">Native gRPC health service</option>
+                </select>
               </div>
+              {form.healthCheckProtocol === 'grpc' && (
+                <div className="flex flex-col gap-1">
+                  <label
+                    htmlFor="services-grpc-health-service"
+                    className="text-sm font-medium text-gray-700"
+                  >
+                    gRPC health service name
+                  </label>
+                  <input
+                    id="services-grpc-health-service"
+                    value={form.healthCheckService}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        healthCheckService: e.target.value,
+                      }))
+                    }
+                    placeholder="Leave empty for overall server health"
+                    className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  />
+                  <p className="text-xs text-gray-500">
+                    Calls the standard health Check RPC. Only a successful
+                    SERVING response counts as healthy. Your upstream must
+                    implement grpc.health.v1.Health.
+                  </p>
+                </div>
+              )}
+
+              {/* Health Check Path */}
+              {form.healthCheckProtocol === 'http' && (
+                <div className="flex flex-col gap-1">
+                  <label
+                    htmlFor="services-health-path"
+                    className="text-sm font-medium text-gray-700"
+                  >
+                    Health Check Path
+                  </label>
+                  <input
+                    type="text"
+                    id="services-health-path"
+                    placeholder="/health"
+                    value={form.healthCheckPath}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        healthCheckPath: e.target.value,
+                      }))
+                    }
+                    className="rounded-md border border-gray-300 px-3 py-2 font-mono text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-400">
+                    Only successful (2xx) responses count as healthy. Failure
+                    and recovery thresholds are controlled by the gateway
+                    operator.
+                  </p>
+                </div>
+              )}
 
               <div className="flex flex-col gap-1">
                 <label
@@ -586,6 +696,8 @@ export default function ServicesPage() {
                   id="services-field-3"
                   type="number"
                   min={100}
+                  max={3600000}
+                  required
                   placeholder="10000"
                   value={form.timeoutMs}
                   onChange={(e) =>

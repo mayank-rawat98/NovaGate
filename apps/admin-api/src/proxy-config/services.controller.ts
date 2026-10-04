@@ -20,6 +20,8 @@ interface ServiceBody {
   healthCheckPath?: string;
   timeoutMs?: number;
   healthCheckIntervalMs?: number;
+  healthCheckProtocol?: 'http' | 'grpc';
+  healthCheckService?: string;
   unhealthyFallback?: boolean;
   h2?: boolean;
   supportsWebSocket?: boolean;
@@ -50,6 +52,34 @@ function validateTargets(targets: unknown): ServiceTarget[] {
 }
 
 function validateHealthSettings(body: ServiceBody) {
+  if (
+    body.healthCheckProtocol !== undefined &&
+    !['http', 'grpc'].includes(body.healthCheckProtocol)
+  )
+    throw new BadRequestException('Health check protocol must be http or grpc');
+  if (
+    body.healthCheckService !== undefined &&
+    (typeof body.healthCheckService !== 'string' ||
+      Buffer.byteLength(body.healthCheckService, 'utf8') > 256 ||
+      [...body.healthCheckService].some(
+        (char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127,
+      ))
+  )
+    throw new BadRequestException(
+      'gRPC health service name must be at most 256 UTF-8 bytes without control characters',
+    );
+  for (const flag of ['h2', 'supportsWebSocket'] as const)
+    if (body[flag] !== undefined && typeof body[flag] !== 'boolean')
+      throw new BadRequestException(`${flag} must be a boolean`);
+  if (
+    body.timeoutMs !== undefined &&
+    (!Number.isSafeInteger(body.timeoutMs) ||
+      body.timeoutMs < 100 ||
+      body.timeoutMs > 3600000)
+  )
+    throw new BadRequestException(
+      'Timeout must be an integer between 100 and 3600000 ms',
+    );
   if (
     body.healthCheckIntervalMs !== undefined &&
     (!Number.isSafeInteger(body.healthCheckIntervalMs) ||
@@ -104,8 +134,8 @@ export class ServicesController {
     validateHealthSettings(body);
     const targets = validateTargets(body.targets);
     const rows = await this.dataSource.query(
-      `INSERT INTO ${schema}.services (name, targets, "healthCheckPath", "timeoutMs", h2, "supportsWebSocket", "healthCheckIntervalMs", "unhealthyFallback")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      `INSERT INTO ${schema}.services (name, targets, "healthCheckPath", "timeoutMs", h2, "supportsWebSocket", "healthCheckIntervalMs", "unhealthyFallback", "healthCheckProtocol", "healthCheckService")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
       [
         body.name,
         JSON.stringify(targets),
@@ -115,6 +145,8 @@ export class ServicesController {
         body.supportsWebSocket ?? false,
         body.healthCheckIntervalMs ?? 10000,
         body.unhealthyFallback ?? false,
+        body.healthCheckProtocol ?? 'http',
+        body.healthCheckService ?? '',
       ],
     );
     await this.configPush.triggerUpdate(tenantId);
@@ -142,7 +174,9 @@ export class ServicesController {
             h2 = COALESCE($6, h2),
             "supportsWebSocket" = COALESCE($7, "supportsWebSocket"),
             "healthCheckIntervalMs" = COALESCE($8, "healthCheckIntervalMs"),
-            "unhealthyFallback" = COALESCE($9, "unhealthyFallback")
+            "unhealthyFallback" = COALESCE($9, "unhealthyFallback"),
+            "healthCheckProtocol" = COALESCE($10, "healthCheckProtocol"),
+            "healthCheckService" = COALESCE($11, "healthCheckService")
        WHERE id = $1 AND "deletedAt" IS NULL RETURNING *) SELECT * FROM updated`,
       [
         id,
@@ -154,6 +188,8 @@ export class ServicesController {
         body.supportsWebSocket ?? null,
         body.healthCheckIntervalMs ?? null,
         body.unhealthyFallback ?? null,
+        body.healthCheckProtocol ?? null,
+        body.healthCheckService ?? null,
       ],
     );
     if (!rows.length)

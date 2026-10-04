@@ -260,6 +260,10 @@ TLS and routing: the VPS is shared with squadup.in, whose Caddy owns ports 80/44
 | `RATE_LIMIT_UNAUTH_MAX`        | `100`       | Requests/window for unauthenticated clients                                                |
 | `RATE_LIMIT_AUTH_MAX`          | `500`       | Requests/window for authenticated consumers                                                |
 
+For native gRPC upstreams, choose **Native gRPC health service** in the Services form. Leave the health service name empty to check overall server health, or enter the name registered by the upstream. The gateway calls the standard `grpc.health.v1.Health/Check` RPC and accepts only a successful `SERVING` response; it caps the encoded health response at 4096 bytes and applies the gateway probe deadline and failure/recovery thresholds. Your upstream must implement that RPC. See the [official health service schema](https://github.com/grpc/grpc-proto/blob/master/grpc/health/v1/health.proto). HTTP health checks continue to use the configured path, with HTTP/2 when that service setting is enabled.
+
+The Services form also exposes HTTP/2 upstream connections and WebSocket upgrades. Native gRPC client traffic uses the separate opt-in gRPC endpoint; the HTTP/2 setting controls ordinary HTTP proxy connections and HTTP health probes. The service timeout and caller `grpc-timeout` can shorten the gateway's maximum gRPC deadline. TLS/container and capacity acceptance for this transport remains in progress under issue #41.
+
 Use `docker/gateway.env.example` as a non-secret gateway configuration template. Only list reverse proxies you control in `TRUSTED_PROXY_CIDRS`; do not use a broad network to make client IP detection appear to work. Route IP restrictions support IPv4 and IPv6.
 
 ## Local regression verification

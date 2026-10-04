@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import type { ServiceConfig, TenantConfig } from '@api-gateway/shared-types';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 import { UpstreamHealthService } from './upstream-health.service';
+import { grpcHealthRequest } from './grpc-health-wire';
 import { DEFAULT_UPSTREAM_HEALTH } from '../../config/configuration';
 
 async function until(predicate: () => boolean, timeout = 5000) {
@@ -214,6 +215,104 @@ describe('active upstream health with real network peers', () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it('checks named gRPC health services separately and switches from HTTP probes', async () => {
+    const requests: Buffer[] = [];
+    const server = http2.createServer();
+    server.on('stream', (stream, headers) => {
+      stream.on('error', () => {
+        /* Cancellation is observed by the probe worker. */
+      });
+      if (headers[':method'] !== 'POST') {
+        stream.respond({ ':status': 404 });
+        stream.end();
+        return;
+      }
+      expect(headers[':path']).toBe('/grpc.health.v1.Health/Check');
+      const chunks: Buffer[] = [];
+      stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+      stream.on('end', () => {
+        const request = Buffer.concat(chunks);
+        requests.push(request);
+        const status = request.equals(grpcHealthRequest('Echo')) ? 1 : 2;
+        stream.respond(
+          { ':status': 200, 'content-type': 'application/grpc' },
+          { waitForTrailers: true },
+        );
+        stream.on('wantTrailers', () =>
+          stream.sendTrailers({ 'grpc-status': '0' }),
+        );
+        stream.end(Buffer.from([0, 0, 0, 0, 2, 8, status]));
+      });
+    });
+    const url = await listen(server);
+    const initial = { ...service(url), h2: true };
+    await install([initial]);
+    const health = start({ failureThreshold: 1 });
+    await until(() => health.getSnapshots([initial])[0].status === 'unhealthy');
+    const good = {
+      ...initial,
+      healthCheckProtocol: 'grpc' as const,
+      healthCheckService: 'Echo',
+    };
+    const bad = { ...good, id: 'bad', healthCheckService: 'Other' };
+    await install([good, bad]);
+    await until(() => {
+      const states = health.getSnapshots([good, bad]);
+      return states[0].status === 'healthy' && states[1].status === 'unhealthy';
+    });
+    expect(requests).toEqual(
+      expect.arrayContaining([
+        grpcHealthRequest('Echo'),
+        grpcHealthRequest('Other'),
+      ]),
+    );
+    expect(health.getHealthyUrls(good.targets, good.id)).toEqual(
+      new Set([url]),
+    );
+    expect(health.getHealthyUrls(bad.targets, bad.id)).toEqual(new Set());
+  });
+
+  it.each([
+    'not-serving',
+    'missing-status',
+    'rpc-error',
+    'oversize',
+    'malformed',
+    'stall',
+  ])('rejects gRPC health failure %s', async (mode) => {
+    const server = http2.createServer();
+    server.on('stream', (stream) => {
+      stream.on('error', () => {
+        /* Deliberately invalid/stalled peer. */
+      });
+      stream.resume();
+      if (mode === 'stall') return;
+      stream.respond(
+        { ':status': 200, 'content-type': 'application/grpc' },
+        { waitForTrailers: true },
+      );
+      stream.on('wantTrailers', () =>
+        stream.sendTrailers(
+          mode === 'missing-status'
+            ? {}
+            : { 'grpc-status': mode === 'rpc-error' ? '7' : '0' },
+        ),
+      );
+      stream.end(
+        mode === 'oversize'
+          ? Buffer.alloc(4097)
+          : mode === 'malformed'
+            ? Buffer.from([0, 0])
+            : Buffer.from([0, 0, 0, 0, 2, 8, mode === 'not-serving' ? 2 : 1]),
+      );
+    });
+    const url = await listen(server);
+    const svc = { ...service(url), healthCheckProtocol: 'grpc' as const };
+    await install([svc]);
+    const health = start({ failureThreshold: 1 });
+    await until(() => health.getSnapshots([svc])[0].status === 'unhealthy');
   });
 
   it('supports IPv6 HTTP and HTTP/2 checks', async () => {

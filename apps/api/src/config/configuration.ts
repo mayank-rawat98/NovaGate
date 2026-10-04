@@ -6,6 +6,7 @@ export const DEFAULT_UPSTREAM_HEALTH = {
   concurrency: 8,
   schedulerIntervalMs: 250,
   telemetryIntervalMs: 5000,
+  grpcMaxResponseBytes: 4096,
 };
 export type UpstreamHealthSettings = typeof DEFAULT_UPSTREAM_HEALTH;
 
@@ -142,6 +143,7 @@ export default (): GatewayConfig => ({
     ),
     schedulerIntervalMs: DEFAULT_UPSTREAM_HEALTH.schedulerIntervalMs,
     telemetryIntervalMs: DEFAULT_UPSTREAM_HEALTH.telemetryIntervalMs,
+    grpcMaxResponseBytes: DEFAULT_UPSTREAM_HEALTH.grpcMaxResponseBytes,
   },
   rateLimit: {
     windowMs:

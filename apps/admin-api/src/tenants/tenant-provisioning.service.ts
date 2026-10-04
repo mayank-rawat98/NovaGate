@@ -42,6 +42,8 @@ export class TenantProvisioningService {
           "healthCheckPath" VARCHAR NOT NULL DEFAULT '/health',
           "timeoutMs" INTEGER DEFAULT 10000,
           "healthCheckIntervalMs" INTEGER NOT NULL DEFAULT 10000,
+          "healthCheckProtocol" VARCHAR NOT NULL DEFAULT 'http',
+          "healthCheckService" VARCHAR NOT NULL DEFAULT '',
           "unhealthyFallback" BOOLEAN NOT NULL DEFAULT false,
           h2 BOOLEAN DEFAULT false,
           "supportsWebSocket" BOOLEAN DEFAULT false,

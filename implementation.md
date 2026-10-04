@@ -14,9 +14,11 @@ This implements manual private archives, not all phase 4 criteria. Scheduled/per
 
 ## Streaming gRPC work in progress — issue #41
 
-The branch replaces the previously unwired buffered helper with an opt-in native HTTP/2 listener, streaming frame validation, metadata/trailers, absolute deadlines, cancellation, health-aware selection and verified JWT/consumer authentication. Header-based plugin capabilities are explicit; incompatible body-based plugins fail closed. Live-network tests cover unary/bidirectional data, authentication, Basic/ACL/IP enforcement, quotas, message bounds, cancellation and all-down behavior. Listener settings and encoded-frame limits are documented in the gateway environment template. The current checkpoint passes all five projects’ uncached test/lint/typecheck/build gates (349 tests) against OrbStack PostgreSQL, Redis and RustFS. Gateway typecheck artifacts are isolated from Webpack output to prevent concurrent build/typecheck races.
+The branch replaces the previously unwired buffered helper with an opt-in native HTTP/2 listener, streaming frame validation, metadata/trailers, absolute deadlines, cancellation, health-aware selection and verified JWT/consumer authentication. Header-based plugin capabilities are explicit; incompatible body-based plugins fail closed. Live-network tests cover unary/bidirectional data, authentication, Basic/ACL/IP enforcement, quotas, message bounds, cancellation and all-down behavior. Listener settings and encoded-frame limits are documented in the gateway environment template. The current checkpoint passes all five projects’ uncached test/lint/typecheck/build gates (381 tests) against OrbStack PostgreSQL, Redis and RustFS. Gateway typecheck artifacts are isolated from Webpack output to prevent concurrent build/typecheck races.
 
-This issue remains open. TLS and packaged-container verification, capacity/slow-client acceptance, native gRPC health-check integration, dashboard protocol controls and the full workspace/CI gates are still required before merge. Do not count this as phase 3 acceptance yet.
+Native health checks now call the standard Health/Check RPC with an optional registered service name, a bounded response and strict SERVING plus successful RPC status semantics. Service protocol fields survive provisioning, legacy upgrades, CRUD and configuration snapshots. Accessible dashboard controls choose health protocol/service name and HTTP/2/WebSocket flags; browser checks verify submitted values and mobile form accessibility.
+
+This issue remains open. TLS and packaged-container verification, capacity/slow-client acceptance, the final full workspace/CI gates are still required before merge. Do not count this as phase 3 acceptance yet.
 
 ## Code audit — 4 October 2026
 

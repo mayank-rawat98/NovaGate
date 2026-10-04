@@ -81,7 +81,7 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
         `CREATE TABLE ${schema}.routes (id UUID, enabled BOOLEAN, "deletedAt" TIMESTAMP)`,
       );
       await ds.query(
-        `CREATE TABLE ${schema}.services (id UUID, name TEXT, "healthCheckIntervalMs" INTEGER DEFAULT 1500, "unhealthyFallback" BOOLEAN DEFAULT true, "deletedAt" TIMESTAMP)`,
+        `CREATE TABLE ${schema}.services (id UUID, name TEXT, "healthCheckIntervalMs" INTEGER DEFAULT 1500, "unhealthyFallback" BOOLEAN DEFAULT true, "healthCheckProtocol" TEXT DEFAULT 'grpc', "healthCheckService" TEXT DEFAULT 'test.Echo', "deletedAt" TIMESTAMP)`,
       );
       await ds.query(
         `CREATE TABLE ${schema}.consumers (id UUID, "revokedAt" TIMESTAMP)`,
@@ -162,6 +162,8 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
     expect(message.payload.config.services[0]).toMatchObject({
       name: 'persisted-service',
       healthCheckIntervalMs: 1500,
+      healthCheckProtocol: 'grpc',
+      healthCheckService: 'test.Echo',
       unhealthyFallback: true,
     });
     expect(message.payload.configVersion).toBe(8);
@@ -210,6 +212,8 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
     expect(update.payload.services[0]).toMatchObject({
       name: 'persisted-service',
       healthCheckIntervalMs: 1500,
+      healthCheckProtocol: 'grpc',
+      healthCheckService: 'test.Echo',
       unhealthyFallback: true,
     });
     expect(

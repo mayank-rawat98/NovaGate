@@ -152,6 +152,10 @@ await context.route('**/api/**', async (route) => {
     const submitted = route.request().postDataJSON();
     assert.equal(submitted.healthCheckIntervalMs, 1500);
     assert.equal(submitted.unhealthyFallback, true);
+    assert.equal(submitted.healthCheckProtocol, 'grpc');
+    assert.equal(submitted.healthCheckService, 'test.Echo');
+    assert.equal(submitted.h2, true);
+    assert.equal(submitted.supportsWebSocket, true);
     await route.fulfill({
       status: 503,
       contentType: 'application/json',
@@ -402,6 +406,19 @@ try {
       await serviceDialog
         .getByRole('checkbox', { name: /Try failed targets/ })
         .check();
+      await serviceDialog
+        .getByLabel('Health check protocol', { exact: true })
+        .selectOption('grpc');
+      await serviceDialog
+        .getByLabel('gRPC health service name', { exact: true })
+        .fill('test.Echo');
+      await serviceDialog
+        .getByRole('checkbox', { name: /Use HTTP\/2 for upstream/ })
+        .check();
+      await serviceDialog
+        .getByRole('checkbox', { name: 'Allow WebSocket upgrades' })
+        .check();
+      await audit('Services native gRPC form mobile');
       await serviceDialog
         .getByRole('button', { name: 'Add Service', exact: true })
         .click();
