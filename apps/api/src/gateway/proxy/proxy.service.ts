@@ -133,6 +133,10 @@ export class ProxyService {
     }
 
     response.locals.downstreamService = service.name;
+    // Certificate assertions are not downstream identity. mTLS reads original rawHeaders only after source verification.
+    for (const name of Object.keys(request.headers))
+      if (name.startsWith('ssl_client_') || name.startsWith('x-ssl-client-'))
+        delete request.headers[name];
 
     // Run plugin onRequest hooks before proxying
     let pluginEntries = route.plugins ?? [];

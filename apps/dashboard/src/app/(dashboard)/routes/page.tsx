@@ -1366,7 +1366,7 @@ function PluginsTab({
 
       <PluginSection
         title="mTLS"
-        description="Require a client certificate signed by the tenant CA"
+        description="Require a verified TLS client certificate trusted by the CA bundle in Settings"
         enabled={pf.mtls}
         onToggle={(v) => setPf({ mtls: v })}
       >

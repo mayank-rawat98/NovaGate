@@ -4,6 +4,8 @@ import {
   DEFAULT_GRPC,
   DEFAULT_WEBSOCKET,
   DEFAULT_IDENTITY_PROVIDER,
+  DEFAULT_MTLS,
+  DEFAULT_TLS,
 } from './configuration';
 import { BlockList, isIP } from 'net';
 
@@ -26,6 +28,33 @@ export const configSchema = Joi.object({
           const list = new BlockList();
           if (prefix === undefined) list.addAddress(address, type);
           else {
+            if (!/^\d+$/.test(prefix)) return helpers.error('any.invalid');
+            list.addSubnet(address, Number(prefix), type);
+          }
+        }
+        return value;
+      } catch {
+        return helpers.error('any.invalid');
+      }
+    }),
+  MTLS_TRUSTED_PROXY_CIDRS: Joi.string()
+    .allow('')
+    .default('')
+    .custom((value: string, helpers) => {
+      try {
+        for (const cidr of value
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter(Boolean)) {
+          const [address, prefix] = cidr.split('/');
+          const version = isIP(address);
+          if (!version || cidr.split('/').length > 2)
+            return helpers.error('any.invalid');
+          const type = version === 4 ? 'ipv4' : 'ipv6';
+          const list = new BlockList();
+          if (prefix === undefined) list.addAddress(address, type);
+          else {
+            if (Number(prefix) === 0) return helpers.error('any.invalid');
             if (!/^\d+$/.test(prefix)) return helpers.error('any.invalid');
             list.addSubnet(address, Number(prefix), type);
           }
@@ -206,6 +235,42 @@ export const configSchema = Joi.object({
     .min(0)
     .max(86400000)
     .default(DEFAULT_IDENTITY_PROVIDER.outboundCacheTtlMs),
+  TLS_HANDSHAKE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(60000)
+    .default(DEFAULT_TLS.handshakeTimeoutMs),
+  HTTP_TLS_MAX_CONNECTIONS: Joi.number()
+    .integer()
+    .min(1)
+    .max(100000)
+    .default(DEFAULT_TLS.maxConnections),
+  HTTP_TLS_CERT_FILE: Joi.string(),
+  HTTP_TLS_KEY_FILE: Joi.string(),
+  HTTP_TLS_CLIENT_CA_FILE: Joi.string(),
+  HTTP_TLS_CRL_FILE: Joi.string(),
+  GRPC_TLS_CLIENT_CA_FILE: Joi.string(),
+  GRPC_TLS_CRL_FILE: Joi.string(),
+  MTLS_MAX_CERTIFICATE_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(65536)
+    .default(DEFAULT_MTLS.maxCertificateBytes),
+  MTLS_MAX_CA_BUNDLE_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(DEFAULT_MTLS.maxCaBundleBytes)
+    .default(DEFAULT_MTLS.maxCaBundleBytes),
+  MTLS_MAX_CHAIN_DEPTH: Joi.number()
+    .integer()
+    .min(1)
+    .max(16)
+    .default(DEFAULT_MTLS.maxChainDepth),
+  MTLS_MAX_IDENTITY_BYTES: Joi.number()
+    .integer()
+    .min(128)
+    .max(16384)
+    .default(DEFAULT_MTLS.maxIdentityBytes),
   REDIS_URL: Joi.string().uri().required(),
   JWT_SECRET: Joi.string().min(32).required(),
   PROXY_TIMEOUT_MS: Joi.number().default(10000),
@@ -215,6 +280,11 @@ export const configSchema = Joi.object({
   RATE_LIMIT_AUTH_MAX: Joi.number().default(500),
 })
   .and('GRPC_TLS_CERT_FILE', 'GRPC_TLS_KEY_FILE')
+  .and('HTTP_TLS_CERT_FILE', 'HTTP_TLS_KEY_FILE')
+  .with('HTTP_TLS_CLIENT_CA_FILE', ['HTTP_TLS_CERT_FILE', 'HTTP_TLS_KEY_FILE'])
+  .with('HTTP_TLS_CRL_FILE', 'HTTP_TLS_CLIENT_CA_FILE')
+  .with('GRPC_TLS_CLIENT_CA_FILE', ['GRPC_TLS_CERT_FILE', 'GRPC_TLS_KEY_FILE'])
+  .with('GRPC_TLS_CRL_FILE', 'GRPC_TLS_CLIENT_CA_FILE')
   .custom((value, helpers) => {
     if (
       value.GRPC_ENABLED === 'true' &&

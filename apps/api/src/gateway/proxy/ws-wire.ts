@@ -124,7 +124,7 @@ export function wsHandshake(
       name === 'forwarded' ||
       name.startsWith('x-forwarded-') ||
       name === 'x-real-ip' ||
-      name === 'ssl_client_cert' ||
+      name.startsWith('ssl_client_') ||
       name.startsWith('x-ssl-client-')
     )
       delete req.headers[name];

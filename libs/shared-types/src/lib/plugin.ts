@@ -79,3 +79,10 @@ export interface OAuth2PluginConfig {
   issuer?: string;
   audience?: string;
 }
+
+/** Tenant CA upload contract; private keys never belong in this field. */
+export const MAX_TENANT_CA_BUNDLE_BYTES = 65536;
+export const MAX_TENANT_CA_CERTIFICATES = 8;
+export interface MtlsPluginConfig {
+  required: boolean;
+}

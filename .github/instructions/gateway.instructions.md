@@ -41,6 +41,9 @@ apps/api/src/
       plugins.module.ts
       plugin-registry.service.ts
       plugin-runner.service.ts
+      mtls/
+        mtls-fixture.ts              -- real temporary test certificates under .local-work
+        mtls.integration.spec.ts    -- real TLS/proxy certificate trust tests
       <plugin-name>/
         <plugin-name>.plugin.ts
         <plugin-name>.plugin.spec.ts
@@ -70,11 +73,14 @@ apps/api/src/
       gateway-exception.filter.ts
       redis.tokens.ts
       request-context.ts
+      tls-client-trust.ts           -- update native listener trust from validated tenant CA changes
       route-matcher.ts              -- shared path+method matching used by middleware
     gateway.module.ts
   config/
     configuration.ts
     configuration.schema.ts
+    tls-options.ts                 -- bounded native listener certificate/trust loading
+    certificate-trust.ts           -- bounded PEM bundles and current tenant anchors
   main.ts
   app/
     app.module.ts                  -- configuration and gateway; no database connection

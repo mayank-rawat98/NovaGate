@@ -101,6 +101,12 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
       .update(
         JSON.stringify({
           route,
+          certificateTrust: route.plugins?.some(
+            (plugin) =>
+              plugin.name === 'mtls' && plugin.config.required === true,
+          )
+            ? this.configManager.getConfig()?.caCertPem
+            : undefined,
           supportsWebSocket: service.supportsWebSocket,
           consumer: principal
             ? this.configManager

@@ -183,3 +183,41 @@ describe('identity-provider resource limits', () => {
     ).toBeDefined(),
   );
 });
+
+describe('native TLS and mTLS trust policy startup', () => {
+  it('trusts no certificate assertion proxy by default', () =>
+    expect(configSchema.validate(required).value.MTLS_TRUSTED_PROXY_CIDRS).toBe(
+      '',
+    ));
+  it.each([
+    { HTTP_TLS_CERT_FILE: '/cert' },
+    { HTTP_TLS_CLIENT_CA_FILE: '/ca' },
+    { HTTP_TLS_CRL_FILE: '/crl' },
+    { GRPC_TLS_CLIENT_CA_FILE: '/ca' },
+    { GRPC_TLS_CRL_FILE: '/crl' },
+    { MTLS_TRUSTED_PROXY_CIDRS: '0.0.0.0/0' },
+    { MTLS_TRUSTED_PROXY_CIDRS: '::/0' },
+    { MTLS_TRUSTED_PROXY_CIDRS: '*' },
+    { TLS_HANDSHAKE_TIMEOUT_MS: 99 },
+    { HTTP_TLS_MAX_CONNECTIONS: 0 },
+    { MTLS_MAX_CERTIFICATE_BYTES: 65537 },
+    { MTLS_MAX_CA_BUNDLE_BYTES: 65537 },
+    { MTLS_MAX_CHAIN_DEPTH: 0 },
+    { MTLS_MAX_IDENTITY_BYTES: 127 },
+  ])('rejects incomplete or unsafe listener/trust settings %j', (settings) =>
+    expect(
+      configSchema.validate({ ...required, ...settings }).error,
+    ).toBeDefined(),
+  );
+  it('accepts native TLS plus client trust and CRL with an explicit certificate-proxy CIDR', () =>
+    expect(
+      configSchema.validate({
+        ...required,
+        HTTP_TLS_CERT_FILE: '/cert',
+        HTTP_TLS_KEY_FILE: '/key',
+        HTTP_TLS_CLIENT_CA_FILE: '/ca',
+        HTTP_TLS_CRL_FILE: '/crl',
+        MTLS_TRUSTED_PROXY_CIDRS: '127.0.0.1/32,::1/128',
+      }).error,
+    ).toBeUndefined());
+});

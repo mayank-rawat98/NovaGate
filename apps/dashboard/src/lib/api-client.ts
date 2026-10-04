@@ -126,7 +126,22 @@ async function authorizedFetch(
 
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
-    throw new Error(text || `HTTP ${res.status}`);
+    let message = text;
+    try {
+      const error = JSON.parse(text) as { message?: unknown };
+      if (typeof error.message === 'string') message = error.message;
+      else if (
+        Array.isArray(error.message) &&
+        error.message.every((item) => typeof item === 'string')
+      )
+        message = error.message.join('. ');
+      else message = `Request failed (HTTP ${res.status}). Please try again.`;
+    } catch {
+      /* Plain-text API errors remain readable. */
+    }
+    throw new Error(
+      message || `Request failed (HTTP ${res.status}). Please try again.`,
+    );
   }
 
   return res;
@@ -397,3 +412,5 @@ export type {
   OidcPluginConfig,
   OAuth2PluginConfig,
 } from '@api-gateway/shared-types';
+
+export type { MtlsPluginConfig } from '@api-gateway/shared-types';

@@ -72,7 +72,7 @@ enabled toggle, rate limit override.
 - `oidc` — jwksUri, issuer, audience (optional), claimsToForward (comma-sep, optional)
 - `hmac-auth` — header name, algorithm (sha256/sha512), secrets (one per line for rotation), timestampHeader + maxClockSkewSeconds (optional)
 - `acl` — allow/deny group lists (comma-sep); groups assigned per consumer
-- `mtls` — required toggle; CA cert uploaded in Settings
+- `mtls` — require a verified TLS client certificate; public CA trust bundle uploaded in Settings. Explain native listener/operator setup and explicit proxy trust. Save failure preserves input; blank input cannot remove trust, and removal uses a named explicit control.
 
 Only enabled plugins are serialized to `route.plugins[]`. If no plugins are enabled, the field is omitted.
 

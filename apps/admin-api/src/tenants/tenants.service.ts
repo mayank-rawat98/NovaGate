@@ -1,4 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import {
+  MAX_TENANT_CA_BUNDLE_BYTES,
+  MAX_TENANT_CA_CERTIFICATES,
+} from '@api-gateway/shared-types';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as crypto from 'crypto';
@@ -69,6 +73,38 @@ export class TenantsService {
   }
 
   async setCaCert(tenantId: string, caCertPem: string | null) {
+    if (caCertPem !== null) {
+      try {
+        if (
+          typeof caCertPem !== 'string' ||
+          Buffer.byteLength(caCertPem) > MAX_TENANT_CA_BUNDLE_BYTES
+        )
+          throw new Error();
+        const pattern =
+          /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+        const blocks = caCertPem.match(pattern);
+        if (
+          !blocks?.length ||
+          blocks.length > MAX_TENANT_CA_CERTIFICATES ||
+          caCertPem.replace(pattern, '').trim()
+        )
+          throw new Error();
+        for (const block of blocks) {
+          const ca = new crypto.X509Certificate(block);
+          if (
+            !ca.ca ||
+            Date.now() < Date.parse(ca.validFrom) ||
+            Date.now() >= Date.parse(ca.validTo)
+          )
+            throw new Error();
+        }
+        caCertPem = blocks.join('\n');
+      } catch {
+        throw new BadRequestException(
+          'Provide a valid, currently active CA certificate bundle (up to eight certificates, 64 KiB). Private keys and leaf certificates are not accepted.',
+        );
+      }
+    }
     await this.tenantRepo.update({ id: tenantId }, { caCertPem });
     await this.configPush.triggerUpdate(tenantId);
     return { success: true };

@@ -1,3 +1,5 @@
+import { bindTenantClientTrust } from '../shared/tls-client-trust';
+import { listenerTlsOptions } from '../../config/tls-options';
 import {
   Injectable,
   Logger,
@@ -7,7 +9,6 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as http2 from 'node:http2';
-import { readFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import jwt, { TokenExpiredError } from 'jsonwebtoken';
 import type { PluginContext } from '@api-gateway/shared-types';
@@ -45,6 +46,7 @@ interface SessionEntry {
 interface Call {
   tenantId: string | null;
   serviceId: string;
+  certificateTrust?: string;
   target?: string;
   upstream?: http2.ClientHttp2Stream;
   request: http2.Http2ServerRequest;
@@ -85,6 +87,7 @@ export class GrpcProxyService
   private server?: http2.Http2Server | http2.Http2SecureServer;
   private sweep?: NodeJS.Timeout;
   private unsubscribe?: () => void;
+  private unsubscribeTrust?: () => void;
   private stopping = false;
 
   constructor(
@@ -119,12 +122,25 @@ export class GrpcProxyService
       maxHeaderListPairs: Math.floor(this.settings.maxHeaderBytes / 32),
     };
     if (this.settings.tlsCertFile && this.settings.tlsKeyFile) {
-      this.server = http2.createSecureServer({
+      const tlsOptions = listenerTlsOptions({
+        keyFile: this.settings.tlsKeyFile,
+        certFile: this.settings.tlsCertFile,
+        clientCaFile: this.settings.clientCaFile,
+        crlFile: this.settings.crlFile,
+        handshakeTimeoutMs: this.settings.handshakeTimeoutMs,
+      });
+      const secureServer = http2.createSecureServer({
         ...options,
-        key: readFileSync(this.settings.tlsKeyFile),
-        cert: readFileSync(this.settings.tlsCertFile),
+        ...tlsOptions,
         allowHTTP1: false,
       });
+      this.server = secureServer;
+      if (tlsOptions)
+        this.unsubscribeTrust = bindTenantClientTrust(
+          secureServer,
+          tlsOptions,
+          this.configManager,
+        );
     } else {
       if (!this.settings.allowInsecure)
         throw new Error(
@@ -132,6 +148,7 @@ export class GrpcProxyService
         );
       this.server = http2.createServer(options);
     }
+    this.server.maxConnections = this.settings.maxActiveCalls;
     this.server.on('session', (session) => {
       if (this.stopping || this.clients.size >= this.settings.maxActiveCalls) {
         session.destroy();
@@ -167,6 +184,7 @@ export class GrpcProxyService
     this.stopping = true;
     clearInterval(this.sweep);
     this.unsubscribe?.();
+    this.unsubscribeTrust?.();
     const closed = this.server
       ? new Promise<void>((resolve) => this.server?.close(() => resolve()))
       : Promise.resolve();
@@ -196,6 +214,11 @@ export class GrpcProxyService
     );
     for (const call of this.calls)
       if (
+        (call.certificateTrust !== undefined &&
+          call.certificateTrust !==
+            createHash('sha256')
+              .update(config?.caCertPem ?? '')
+              .digest('hex')) ||
         call.tenantId !== tenantId ||
         !retained.has(call.serviceId) ||
         (call.target && !retained.get(call.serviceId)?.has(call.target))
@@ -439,6 +462,15 @@ export class GrpcProxyService
     const call: Call = {
       tenantId: this.configManager.getTenantId(),
       serviceId: service.id,
+      ...(route.plugins?.some(
+        (plugin) => plugin.name === 'mtls' && plugin.config.required === true,
+      )
+        ? {
+            certificateTrust: createHash('sha256')
+              .update(this.configManager.getConfig()?.caCertPem ?? '')
+              .digest('hex'),
+          }
+        : {}),
       request,
       response,
       done: false,
@@ -500,6 +532,9 @@ export class GrpcProxyService
         'x-forwarded-for',
         'x-real-ip',
         'ssl_client_cert',
+        'ssl_client_verify',
+        'x-ssl-client-verify',
+        'x-ssl-client-fingerprint',
         'x-ssl-client-cert',
         'x-ssl-client-subject',
         'x-ssl-client-san',
