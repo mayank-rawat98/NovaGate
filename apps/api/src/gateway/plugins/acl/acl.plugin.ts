@@ -14,7 +14,7 @@ interface AclConfig {
 @Injectable()
 export class AclPlugin implements GatewayPlugin {
   readonly name = 'acl';
-  readonly protocols = ['http', 'grpc'] as const;
+  readonly protocols = ['http', 'grpc', 'websocket'] as const;
 
   constructor(private readonly configManager: GatewayConfigManagerService) {}
 

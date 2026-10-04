@@ -544,6 +544,7 @@ export default function ServicesPage() {
                 <label className="flex items-center gap-2 text-sm text-gray-700">
                   <input
                     type="checkbox"
+                    aria-describedby="services-websocket-help"
                     checked={form.supportsWebSocket}
                     onChange={(e) =>
                       setForm((f) => ({
@@ -554,6 +555,17 @@ export default function ServicesPage() {
                   />
                   Allow WebSocket upgrades
                 </label>
+                <p
+                  id="services-websocket-help"
+                  className="text-xs text-gray-500"
+                >
+                  Add a GET route for your WebSocket endpoint. Authentication
+                  and connection limits apply before connecting. Basic Auth,
+                  OIDC, OAuth introspection, ACL and IP rules support upgrades;
+                  use a separate route for plugins that inspect HTTP bodies.
+                  Prefer credentials in headers; query tokens need operator
+                  opt-in.
+                </p>
               </fieldset>
               <div className="flex flex-col gap-1">
                 <label

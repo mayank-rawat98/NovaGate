@@ -27,7 +27,9 @@ apps/api/src/
       proxy.integration.spec.ts     -- real HTTP/HTTP2 upstream regression tests
       load-balancer.service.ts      -- weighted round-robin target selection
       http2-session-pool.service.ts
-      ws-proxy.service.ts
+      ws-proxy.service.ts          -- bounded authenticated native upgrades
+      ws-wire.ts                   -- handshake and credential/header validation
+      ws-proxy.integration.spec.ts -- real WebSocket transport/lifecycle checks
       grpc-proxy.service.ts        -- HTTP/2 listener and authenticated streaming
       grpc-wire.ts                 -- frame validation, deadlines and metadata
       grpc-wire.spec.ts

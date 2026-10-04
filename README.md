@@ -216,11 +216,13 @@ Full setup guide: [novagate.dev/docker](https://novagate.dev/docker)
 
 GitHub Actions pipeline on push to `main`:
 
-1. Build Docker images for `api`, `control-plane`, `admin-api`, `dashboard`
-2. Push to GitHub Container Registry (`ghcr.io/mayank-rawat98/novagate/*`)
-3. SSH into VPS → `docker compose pull && docker compose up -d`
+1. Run reusable CI: lint, typecheck, test, build and dashboard browser checks.
+2. After CI succeeds, build and push Docker images for `api`, `control-plane`, `admin-api` and `dashboard` to GitHub Container Registry.
+3. After every image build succeeds, SSH into the VPS and deploy the tested SHA, waiting for container health.
 
-Zero-downtime: Docker Compose restarts containers one at a time; the reverse proxy keeps serving during image pulls.
+CI runs only within this deployment workflow on pushes to `main`. Pull requests and pushes to `dev`, tags and manual dispatch do not trigger CI or deployment. A failed verification job prevents all image publishing and the deployment script. Continue running feature and regression checks locally while implementation stays on `dev`.
+
+Deployment uses images tagged with the tested commit SHA and waits for Docker Compose health checks before finishing.
 
 TLS and routing: the VPS is shared with squadup.in, whose Caddy owns ports 80/443 and serves `novagate.dev`, `api.novagate.dev` and `ws.novagate.dev` (see `caddy/Caddyfile` in that repo). Caddy reaches `dashboard`, `admin-api` and `control-plane` over the `novagate-edge` network defined here, and issues and renews the certificates itself.
 
@@ -228,39 +230,50 @@ TLS and routing: the VPS is shared with squadup.in, whose Caddy owns ports 80/44
 
 ## Gateway Environment Variables
 
-| Variable                       | Default     | Notes                                                                                         |
-| ------------------------------ | ----------- | --------------------------------------------------------------------------------------------- |
-| `GATEWAY_API_KEY`              | required    | Authenticates gateway with control plane                                                      |
-| `CONTROL_PLANE_URL`            | required    | `wss://ws.novagate.dev/gateway-ws`                                                            |
-| `REDIS_URL`                    | required    | Local Redis for config cache and rate limiting                                                |
-| `JWT_SECRET`                   | required    | Min 32 chars — validates consumer tokens                                                      |
-| `TRUSTED_PROXY_CIDRS`          | empty       | Comma-separated trusted reverse-proxy IPs/CIDRs; forwarding headers are ignored by default    |
-| `PORT`                         | `3000`      | HTTP port                                                                                     |
-| `HEALTH_DEFAULT_INTERVAL_MS`   | `10000`     | Legacy service probe interval; integer 1000–60000 ms, overridden by service settings          |
-| `HEALTH_FAILURE_THRESHOLD`     | `3`         | Consecutive failures before eviction; integer 1–10                                            |
-| `HEALTH_RECOVERY_THRESHOLD`    | `2`         | Consecutive successes before a failed target recovers; integer 1–10                           |
-| `HEALTH_PROBE_TIMEOUT_MS`      | `3000`      | Absolute probe deadline including connection and headers; integer 100–10000 ms                |
-| `HEALTH_PROBE_CONCURRENCY`     | `8`         | Maximum simultaneous probes per gateway; integer 1–64                                         |
-| `GRPC_ENABLED`                 | `false`     | Enable the separate native HTTP/2 gRPC listener                                               |
-| `GRPC_ALLOW_INSECURE`          | `false`     | Explicit private cleartext operation behind a trusted TLS-terminating proxy                   |
-| `GRPC_HOST`                    | `127.0.0.1` | Listener address; container deployments need an appropriate private interface                 |
-| `GRPC_PORT`                    | `50051`     | Listener port, 1–65535                                                                        |
-| `GRPC_TLS_CERT_FILE`           | unset       | Read-only PEM server certificate file; pair with key                                          |
-| `GRPC_TLS_KEY_FILE`            | unset       | Read-only PEM private key file; pair with certificate                                         |
-| `GRPC_MAX_MESSAGE_BYTES`       | `4194304`   | Maximum encoded frame payload, 1–64 MiB; compressed payloads remain opaque                    |
-| `GRPC_MAX_HEADER_BYTES`        | `16384`     | Request/response metadata bound, 1024–65536 bytes                                             |
-| `GRPC_MAX_CONCURRENT_STREAMS`  | `100`       | Per-session stream cap, 1–1000, also capped by upstream settings                              |
-| `GRPC_MAX_SESSIONS_PER_TARGET` | `4`         | Per-service/target upstream session cap, 1–32                                                 |
-| `GRPC_MAX_ACTIVE_CALLS`        | `256`       | Admission cap (including pending cancelled auth/quota work) and incoming-session cap, 1–10000 |
-| `GRPC_DEADLINE_MS`             | `30000`     | Absolute maximum call duration, 100–3600000 ms; caller/service deadlines can shorten it       |
-| `GRPC_IDLE_TIMEOUT_MS`         | `30000`     | Unused upstream session expiry, 1000–3600000 ms                                               |
-| `GRPC_SHUTDOWN_GRACE_MS`       | `5000`      | Drain existing calls before cancellation, 0–60000 ms                                          |
-| `PROXY_TIMEOUT_MS`             | `10000`     | Downstream request timeout                                                                    |
-| `RATE_LIMIT_WINDOW_MS`         | `60000`     | Sliding window duration                                                                       |
-| `RATE_LIMIT_UNAUTH_MAX`        | `100`       | Requests/window for unauthenticated clients                                                   |
-| `RATE_LIMIT_AUTH_MAX`          | `500`       | Requests/window for authenticated consumers                                                   |
+| Variable                       | Default     | Notes                                                                                            |
+| ------------------------------ | ----------- | ------------------------------------------------------------------------------------------------ |
+| `GATEWAY_API_KEY`              | required    | Authenticates gateway with control plane                                                         |
+| `CONTROL_PLANE_URL`            | required    | `wss://ws.novagate.dev/gateway-ws`                                                               |
+| `REDIS_URL`                    | required    | Local Redis for config cache and rate limiting                                                   |
+| `JWT_SECRET`                   | required    | Min 32 chars — validates consumer tokens                                                         |
+| `TRUSTED_PROXY_CIDRS`          | empty       | Comma-separated trusted reverse-proxy IPs/CIDRs; forwarding headers are ignored by default       |
+| `PORT`                         | `3000`      | HTTP port                                                                                        |
+| `HEALTH_DEFAULT_INTERVAL_MS`   | `10000`     | Legacy service probe interval; integer 1000–60000 ms, overridden by service settings             |
+| `HEALTH_FAILURE_THRESHOLD`     | `3`         | Consecutive failures before eviction; integer 1–10                                               |
+| `HEALTH_RECOVERY_THRESHOLD`    | `2`         | Consecutive successes before a failed target recovers; integer 1–10                              |
+| `HEALTH_PROBE_TIMEOUT_MS`      | `3000`      | Absolute probe deadline including connection and headers; integer 100–10000 ms                   |
+| `HEALTH_PROBE_CONCURRENCY`     | `8`         | Maximum simultaneous probes per gateway; integer 1–64                                            |
+| `WS_ALLOW_QUERY_TOKEN`         | `false`     | Explicit legacy query-token opt-in; credentials are stripped from the upstream URL               |
+| `WS_HANDSHAKE_TIMEOUT_MS`      | `5000`      | Absolute auth, quota and upstream upgrade deadline, 100–60000 ms; service timeout can shorten it |
+| `WS_MAX_CONNECTIONS`           | `256`       | Cap including pending admission, accepted connections and cancelled provider work, 1–10000       |
+| `WS_MAX_HEADER_BYTES`          | `16384`     | Request and upstream handshake header limit, 1024–65536 bytes                                    |
+| `WS_MAX_BUFFERED_HEAD_BYTES`   | `65536`     | Bound on data coalesced with upgrade headers, 0–1048576 bytes                                    |
+| `WS_IDLE_TIMEOUT_MS`           | `300000`    | Inactive tunnel expiry, 1000–3600000 ms                                                          |
+| `WS_SHUTDOWN_GRACE_MS`         | `5000`      | Drain accepted tunnels before closing sockets, 0–60000 ms                                        |
+| `GRPC_ENABLED`                 | `false`     | Enable the separate native HTTP/2 gRPC listener                                                  |
+| `GRPC_ALLOW_INSECURE`          | `false`     | Explicit private cleartext operation behind a trusted TLS-terminating proxy                      |
+| `GRPC_HOST`                    | `127.0.0.1` | Listener address; container deployments need an appropriate private interface                    |
+| `GRPC_PORT`                    | `50051`     | Listener port, 1–65535                                                                           |
+| `GRPC_TLS_CERT_FILE`           | unset       | Read-only PEM server certificate file; pair with key                                             |
+| `GRPC_TLS_KEY_FILE`            | unset       | Read-only PEM private key file; pair with certificate                                            |
+| `GRPC_MAX_MESSAGE_BYTES`       | `4194304`   | Maximum encoded frame payload, 1–64 MiB; compressed payloads remain opaque                       |
+| `GRPC_MAX_HEADER_BYTES`        | `16384`     | Request/response metadata bound, 1024–65536 bytes                                                |
+| `GRPC_MAX_CONCURRENT_STREAMS`  | `100`       | Per-session stream cap, 1–1000, also capped by upstream settings                                 |
+| `GRPC_MAX_SESSIONS_PER_TARGET` | `4`         | Per-service/target upstream session cap, 1–32                                                    |
+| `GRPC_MAX_ACTIVE_CALLS`        | `256`       | Admission cap (including pending cancelled auth/quota work) and incoming-session cap, 1–10000    |
+| `GRPC_DEADLINE_MS`             | `30000`     | Absolute maximum call duration, 100–3600000 ms; caller/service deadlines can shorten it          |
+| `GRPC_IDLE_TIMEOUT_MS`         | `30000`     | Unused upstream session expiry, 1000–3600000 ms                                                  |
+| `GRPC_SHUTDOWN_GRACE_MS`       | `5000`      | Drain existing calls before cancellation, 0–60000 ms                                             |
+| `PROXY_TIMEOUT_MS`             | `10000`     | Downstream request timeout                                                                       |
+| `RATE_LIMIT_WINDOW_MS`         | `60000`     | Sliding window duration                                                                          |
+| `RATE_LIMIT_UNAUTH_MAX`        | `100`       | Requests/window for unauthenticated clients                                                      |
+| `RATE_LIMIT_AUTH_MAX`          | `500`       | Requests/window for authenticated consumers                                                      |
 
 For native gRPC upstreams, choose **Native gRPC health service** in the Services form. Leave the health service name empty to check overall server health, or enter the name registered by the upstream. The gateway calls the standard `grpc.health.v1.Health/Check` RPC and accepts only a successful `SERVING` response; it caps the encoded health response at 4096 bytes and applies the gateway probe deadline and failure/recovery thresholds. Your upstream must implement that RPC. See the [official health service schema](https://github.com/grpc/grpc-proto/blob/master/grpc/health/v1/health.proto). HTTP health checks continue to use the configured path, with HTTP/2 when that service setting is enabled.
+
+WebSocket clients use the HTTP listener and a GET route pointing to a service with **WebSocket upgrades** enabled. Header Bearer credentials accept consumer API keys or HS256 gateway JWTs. Basic Auth, OIDC, OAuth introspection, ACL and IP restriction are compatible handshake plugins; unsupported plugins reject the upgrade explicitly. Outbound OAuth credential injection does not authenticate an inbound client. Upgrade quotas apply after verified authentication, and forwarding/certificate assertions are stripped before authorization. Prefer Authorization headers; browser clients that need `?token=` must use the explicit operator opt-in. Query credentials never reach the upstream URL or gateway connection logs.
+
+Accepted tunnels preserve text, binary, fragmentation, ping/pong, close frames, negotiated subprotocols and compression bytes with stream backpressure. The handshake follows [RFC 6455](https://datatracker.ietf.org/doc/html/rfc6455#section-4); the transport uses [Node HTTP upgrade sockets](https://nodejs.org/docs/latest-v24.x/api/http.html#event-upgrade). HTTPS upstreams verify certificates using Node’s trust store. Tenant, route policy, consumer, service or target removal closes affected connections. Handshake deadlines include provider and quota work, and disconnected requests retain admission capacity until that work settles. Active connections and traffic bytes are counted only after successful upstream acceptance. Shutdown rejects new upgrades and permits accepted tunnels to drain for the configured grace before terminating remaining sockets; it does not inject frames into an opaque partial frame. WebSocket authentication happens during the handshake; continuous message authorization is outside this transport’s contract.
 
 The Services form also exposes HTTP/2 upstream connections and WebSocket upgrades. Native gRPC client traffic uses the separate opt-in gRPC endpoint; the HTTP/2 setting controls ordinary HTTP proxy connections and HTTP health probes. The service timeout and caller `grpc-timeout` can shorten the gateway's maximum gRPC deadline. Live-network verification covers listener/upstream TLS, call/session admission limits, cancellation reuse, slow-client backpressure and shutdown grace. Upstreams use Node’s certificate trust store; mount a private CA and set `NODE_EXTRA_CA_CERTS` before startup when your upstream uses a private PKI. Certificate/key mounts must be readable by the image’s non-root UID 1000. Publish the gRPC port explicitly on your private network when enabling the listener.
 
@@ -280,7 +293,7 @@ NX_DAEMON=false NX_NO_CLOUD=true \
 npm exec nx run-many -- -t test lint typecheck build --skipNxCache
 ```
 
-The test credentials are for the isolated local stack only. Integration suites run when both TEST variables are set. CI supplies the same dependencies and runs integration suites on PRs targeting `dev`. Formal acceptance testing follows the remaining implementation phases.
+The test credentials are for the isolated local stack only. Integration suites run when both TEST variables are set. Release CI supplies the same dependencies before deployment on a push to `main`; development PRs use local verification. Formal acceptance testing follows the remaining implementation phases.
 
 Fresh PostgreSQL volumes are initialized with `docker/postgres-init.sql`; admin-api performs idempotent schema upgrades for existing volumes. The control plane uses `synchronize: false` to preserve admin authentication columns. Admin-api requires `PLATFORM_JWT_SECRET` with at least 32 characters; tenant operations require a signed bearer token whose subject matches the tenant ID. Signup goes through email verification, and tenant responses exclude password and recovery tokens.
 
@@ -291,7 +304,7 @@ docker build -f docker/Dockerfile.api -t novagate-api:verification .
 NOVAGATE_GRPC_IMAGE=novagate-api:verification npm exec nx run api:grpc-container-smoke
 ```
 
-It requires OrbStack, OpenSSL and access to the pinned grpcurl image. It generates short-lived fixture certificates inside `.local-work`, checks authenticated protobuf calls with grpcurl and writes evidence to `.local-work/grpc-container-evidence.json`. It verifies absent local admin CRUD and an authenticated tenant proxy route on the same prefix, then removes its containers, network and certificate directory. Existing storage and cache contents are preserved.
+It requires OrbStack, OpenSSL and access to the pinned grpcurl image. It generates short-lived fixture certificates inside `.local-work`, checks authenticated protobuf calls with grpcurl and real WebSocket traffic through trusted/untrusted TLS upstreams, and writes evidence to `.local-work/grpc-container-evidence.json`. WebSocket checks cover malformed-token survival, negotiated compression/subprotocols, binary/text/control traffic, actual Redis route quota, connection capacity, live metrics and target removal. It verifies absent local admin CRUD and an authenticated tenant proxy route on the same prefix, then removes its containers, network and certificate directory. Existing storage and cache contents are preserved.
 
 ## Release and developer checks
 
@@ -299,7 +312,7 @@ Use Node 24 (`.nvmrc`) and `npm ci`. `npm run check` runs lint, typecheck, tests
 
 The pre-commit hook checks formatting of the staged content without writing files or adding unrelated edits. Format and stage the files you intend to commit.
 
-The production workflow calls the same CI checks before building all release images. It queues releases, builds from the tested revision, deploys full SHA image tags, checks out that revision on the server and waits for container health. Pull requests into `dev` continue to run CI. Production secrets remain in GitHub environment secrets; this workflow change does not initiate a production release.
+The production workflow calls the same CI checks before building all release images. It queues releases, builds from the tested revision, deploys full SHA image tags, checks out that revision on the server and waits for container health. Pull requests and pushes to `dev` do not run CI; verification is a prerequisite within the `main` deployment workflow. Production secrets remain in GitHub environment secrets; this workflow change does not initiate a production release.
 
 Tenant schema upgrades run in a transaction under a database migration lock. Legacy route CORS, IP restriction and body-limit fields are converted to plugins before their columns are removed; explicitly configured plugins take precedence. A failed migration rolls back and prevents admin API startup. An existing installation whose old migration already removed those fields needs its lost settings restored from a backup or re-entered; this repair cannot recover previously deleted values.
 

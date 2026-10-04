@@ -22,13 +22,25 @@ Live-network checks now verify a trusted TLS listener and rejection of its certi
 
 The slow-client regression streams over 8 MB while a paused client holds the producer below 1 MB, then verifies complete delivery and successful trailers after resuming. Normal upstream closure no longer cancels response bytes waiting to drain. Shutdown checks cover successful calls during grace and unavailable responses after grace. The repeatable `api:grpc-container-smoke` Nx task verifies the non-root Node 24 production image through trusted listener/upstream TLS, the actual registered native health RPC, authenticated protobuf unary calls with pinned grpcurl, configuration ACKs, metadata/trailers and rejection of an untrusted upstream certificate. Its current verifier removes disposable containers, its private network and certificates afterward; issue #44 removes the data-plane database requirement.
 
-These are issue-level implementation and regression results. Full phase 3 acceptance, WebSocket runtime acceptance, least-connections/GraphQL work and the final all-phase campaign remain required.
+These are issue-level implementation and regression results. Full phase 3 acceptance, formal WebSocket runtime acceptance, least-connections/GraphQL work and the final all-phase campaign remain required.
 
 ## Data-plane administration boundary — issue #44
 
 The gateway no longer imports the legacy local service registry, connects to PostgreSQL or runs TypeORM schema synchronization. Tenant administration stays in the authenticated admin API. A packaged baseline showed that the previous catch-all proxy already shadowed the unguarded legacy controller; anonymous CRUD access was not demonstrated in that runtime. Removing the dormant controller eliminates the route-order dependency and unused database requirement.
 
 Real application startup checks exercise health/metrics and all legacy CRUD methods without a database setting. The packaged verifier uses an isolated gateway/Redis network with no PostgreSQL, checks normalized errors for absent local CRUD, and then installs an authenticated tenant route on the same prefix to verify ordinary proxying remains available. All five workspace projects pass their checks with 399 tests, including retained admin/control-plane database regressions; dashboard browser/accessibility and packaged transport checks pass. Existing database tables are not altered or dropped. Deployment templates and gateway configuration no longer require `DATABASE_URL`; admin/control-plane persistence and migration contracts remain in place.
+
+## Authenticated bounded WebSocket upgrades — issue #43
+
+A packaged baseline reproduced an uncaught URIError that terminated the gateway on malformed query credentials. Native HTTP/HTTPS upgrades now verify consumer keys or HS256 JWTs, run explicitly compatible Basic/OIDC/OAuth/ACL/IP plugins, apply tenant/route/identity handshake quotas and reject unsupported plugins. Raw socket peers are authoritative, forwarding/certificate assertions are removed, query tokens default off and opt-in credentials are stripped from the upstream URL. Connections are counted only after verified upstream acceptance; both traffic directions and exact closure accounting are covered.
+
+Headers, early frame bytes, pending/accepted connections, authentication/upgrade deadlines, idle time and shutdown drain have validated operator bounds. Disconnected or expired callers retain admission capacity until pending quota/plugin work settles. Identity-provider requests receive cancellation signals for WebSocket and gRPC admission. Live tests verify negotiated compression/subprotocols, text/binary/fragmented/control traffic, credentials and real OIDC/OAuth providers, quota failure, stalled request/response hooks, configuration/consumer revocation, all-down fallback, idle expiry, shutdown and complete delivery of more than 16 MiB after backpressure from a paused receiver.
+
+All five projects passed test/lint/typecheck/build; final gateway checks pass 320 tests, and retained admin/control-plane/dashboard regressions pass with OrbStack PostgreSQL, Redis and RustFS (446 tests total). Dashboard standalone desktop/mobile/keyboard/accessibility checks pass. The packaged non-root Node 24 gateway verifies malformed-token survival, trusted WebSocket upstream TLS, text/binary/compression/subprotocol/ping/close traffic, actual Redis route quota, connection caps, live metrics and target removal; an untrusted TLS upstream receives no application request. The same fixture retains HTTP/gRPC/native-health/grpcurl regressions and removes its own containers/network/certificates.
+
+Per the 5 October 2026 workflow instruction, CI is reusable only and runs before publication/deployment on a push to `main`. PR/dev/tag/manual triggers are removed; each image build depends on verification, and deployment depends on verification plus every image build. YAML trigger/dependency checks pass locally; this development PR intentionally runs no GitHub CI or production release. Local feature/regression gates remain required for each issue.
+
+Authentication applies to the handshake. Opaque tunnels drain during shutdown grace, then remaining sockets are terminated without injecting frames into partially streamed messages. Formal protocol/phase acceptance, least-connections, GraphQL analysis, remaining phases and comparative benchmarks are still pending.
 
 ## Code audit — 4 October 2026
 
@@ -39,7 +51,7 @@ The code contains substantial work for phases 0–3, but file presence does not 
 | 0     | Weighted balancer, active health probes, HTTP retry loop, size/CORS/IP plugins                 | Issue #29 repairs peer-IP trust/IPv6, bounded binary body replay, browser preflight and HTTP retry termination; issue #39 adds configurable service probes, bounded lifecycle and explicit all-down routing; whole-phase load/chaos acceptance remains |
 | 1     | Plugin contracts, runner, registry, thirteen first-party plugins, dashboard route plugin forms | Plugin aggregate registration and fail-closed name resolution repaired in issue #27, verified through the real Nest module; broader runtime plugin acceptance remains                                                                                  |
 | 2     | OIDC, client credentials, HMAC, ACL, mTLS implementations and unit tests                       | Verify real providers and TLS handshakes; Tenant-bound REST authorization and new-schema consumer groups repaired in issue #27; live provider/TLS acceptance remains                                                                                   |
-| 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                      | Issue #29 verifies real HTTP/2 response hooks before sending the body and automatic GraphQL guard activation; WebSocket/gRPC protocol acceptance and least-connections remain                                                                          |
+| 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                      | Issue #29 verifies real HTTP/2 response hooks before sending the body and automatic GraphQL guard activation; Native gRPC/WebSocket runtime checks now exist (#41/#43); formal protocol acceptance and least-connections remain                        |
 | 4     | Logs/health/metrics REST views and private RustFS manual NDJSON archives (#37)                 | Tracing, live metrics, alert delivery/history, scheduled/external exports, privacy controls and consumer aggregates remain to implement                                                                                                                |
 | 5     | Existing REST configuration primitives                                                         | Declarative reconciliation, CLI, portal, Terraform, plugin SDK and third-party loading remain to implement                                                                                                                                             |
 | 6     | No verified implementations                                                                    | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                              |
@@ -52,7 +64,7 @@ The code contains substantial work for phases 0–3, but file presence does not 
 - Load persisted tenant configuration at gateway authentication; preserve monotonic config versions and acknowledge persisted updates. Reject revoked gateway keys and never log keys.
 - Register all first-party plugins through an explicit aggregate factory and fail closed for unknown configured plugins.
 - Validate existing features with the actual Nest module and live PostgreSQL/Redis in OrbStack before building on them.
-- Run CI on PRs targeting `dev`, with least-privilege permissions, reproducible installs and regression gates before merging. Every implementation issue gets a branch from `dev`, a PR with `Closes #<issue>`, and verification evidence.
+- Run local feature/regression gates before merging development PRs. Per the 5 October 2026 workflow instruction, CI runs only as a deployment prerequisite on pushes to `main`; PRs/dev pushes, tags and manual dispatch do not trigger it. CI failure blocks image publication and the deployment script. Every implementation issue gets a branch from `dev`, a PR with `Closes #<issue>`, and verification evidence.
 
 ### Additional product requirements
 
@@ -551,9 +563,11 @@ acl?: {
 `apps/api/src/gateway/proxy/ws-proxy.service.ts`:
 
 - Detect `Connection: Upgrade` + `Upgrade: websocket` in request
-- Apply auth plugin chain and rate-limit **before** upgrading (rate-limit by active connection count for WS, not by request)
-- Upgrade pass-through to target URL via `http-proxy` WebSocket support
-- Telemetry: log connection open/close events; count bytes transferred (not per-message — too expensive)
+- Verify consumer JWT/API key or compatible auth plugins and apply handshake quota **before** upgrading. Bound pending and accepted connections together, including cancelled provider work until it settles.
+- Native HTTP/HTTPS upgrade pass-through with verified upstream handshake/TLS, preserved negotiated subprotocols/extensions, bounded early bytes and socket stream backpressure.
+- Telemetry: count only accepted active connections, reconcile exactly once on closure and count both traffic directions without logging credential-bearing URLs.
+- Default query credentials off; opt-in tokens are validated and stripped. Raw socket peers are authoritative for IP policy; strip forwarding/certificate assertions before plugins.
+- Absolute auth/quota/upgrade deadline, idle expiry, configuration/consumer revocation and bounded shutdown drain are required. Reject unsupported plugins explicitly. Do not inject synthetic close frames into opaque partial frames.
 
 `libs/shared-types` — add to `ServiceConfig`:
 

@@ -50,7 +50,11 @@ export class RateLimitService implements OnModuleDestroy {
     pipeline.expire(key, Math.ceil(this.windowMs / 1000));
 
     const results = await pipeline.exec();
-    const count = Number(results?.[2]?.[1] ?? 0);
+    if (!results || results.length !== 5 || results.some(([error]) => error))
+      throw new Error('Quota storage returned an incomplete or failed result');
+    const count = Number(results[2][1]);
+    if (!Number.isSafeInteger(count) || count < 1)
+      throw new Error('Quota storage returned an invalid count');
     const oldest = results?.[3]?.[1] as string[] | undefined;
 
     const allowed = count <= limit;

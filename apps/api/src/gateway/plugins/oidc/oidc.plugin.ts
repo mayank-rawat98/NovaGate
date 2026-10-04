@@ -43,7 +43,7 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 @Injectable()
 export class OidcPlugin implements GatewayPlugin {
   readonly name = 'oidc';
-  readonly protocols = ['http', 'grpc'] as const;
+  readonly protocols = ['http', 'grpc', 'websocket'] as const;
   private readonly logger = new Logger(OidcPlugin.name);
 
   // In-memory JWKS cache keyed by jwksUri
@@ -83,9 +83,9 @@ export class OidcPlugin implements GatewayPlugin {
 
     let keys: JwkKey[];
     try {
-      keys = await this.getKeys(config.jwksUri, kid);
-    } catch (err) {
-      this.logger.error(`JWKS fetch failed: ${(err as Error).message}`);
+      keys = await this.getKeys(config.jwksUri, kid, ctx.signal);
+    } catch {
+      this.logger.error('JWKS fetch failed');
       return this.unauthorized(
         ctx.requestId,
         'OIDC_JWKS_UNAVAILABLE',
@@ -98,7 +98,7 @@ export class OidcPlugin implements GatewayPlugin {
       // On kid miss, refresh cache once and retry
       if (verifyResult.reason === 'KID_MISS') {
         try {
-          keys = await this.fetchAndCache(config.jwksUri);
+          keys = await this.fetchAndCache(config.jwksUri, ctx.signal);
           const retried = this.verifyWithKeys(token, keys, config, kid);
           if (!retried.ok) {
             return this.unauthorized(
@@ -188,7 +188,11 @@ export class OidcPlugin implements GatewayPlugin {
     }
   }
 
-  private async getKeys(jwksUri: string, kid?: string): Promise<JwkKey[]> {
+  private async getKeys(
+    jwksUri: string,
+    kid?: string,
+    signal?: AbortSignal,
+  ): Promise<JwkKey[]> {
     const cached = this.cache.get(jwksUri);
     if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
       // If we have a kid and it's in the cache, return; otherwise force refresh below
@@ -196,11 +200,14 @@ export class OidcPlugin implements GatewayPlugin {
         return cached.keys;
       }
     }
-    return this.fetchAndCache(jwksUri);
+    return this.fetchAndCache(jwksUri, signal);
   }
 
-  private async fetchAndCache(jwksUri: string): Promise<JwkKey[]> {
-    const body = await this.fetchJson(jwksUri);
+  private async fetchAndCache(
+    jwksUri: string,
+    signal?: AbortSignal,
+  ): Promise<JwkKey[]> {
+    const body = await this.fetchJson(jwksUri, signal);
     const jwks = body as JwksResponse;
     if (!Array.isArray(jwks?.keys)) {
       throw new Error(
@@ -211,10 +218,14 @@ export class OidcPlugin implements GatewayPlugin {
     return jwks.keys;
   }
 
-  private fetchJson(url: string): Promise<unknown> {
+  private fetchJson(url: string, signal?: AbortSignal): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const client = url.startsWith('https://') ? https : http;
-      const req = client.get(url, { timeout: 5000 }, (res) => {
+      const req = client.get(url, { timeout: 5000, signal }, (res) => {
+        res.on('error', reject);
+        res.once('aborted', () =>
+          reject(new Error('Identity provider response aborted')),
+        );
         let data = '';
         res.on('data', (chunk: Buffer) => (data += chunk.toString()));
         res.on('end', () => {

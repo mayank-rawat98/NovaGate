@@ -29,6 +29,17 @@ export type GrpcSettings = typeof DEFAULT_GRPC & {
   tlsKeyFile?: string;
 };
 
+export const DEFAULT_WEBSOCKET = {
+  allowQueryToken: false,
+  handshakeTimeoutMs: 5000,
+  maxConnections: 256,
+  maxHeaderBytes: 16384,
+  maxBufferedHeadBytes: 65536,
+  idleTimeoutMs: 300000,
+  shutdownGraceMs: 5000,
+};
+export type WebSocketSettings = typeof DEFAULT_WEBSOCKET;
+
 export interface ProxyServiceConfig {
   name: string;
   targetUrl: string;
@@ -50,6 +61,7 @@ export interface GatewayConfig {
   };
   upstreamHealth: UpstreamHealthSettings;
   grpc: GrpcSettings;
+  websocket: WebSocketSettings;
   rateLimit: {
     windowMs: number;
     unauthMax: number;
@@ -112,6 +124,29 @@ export default (): GatewayConfig => ({
     ),
     shutdownGraceMs: Number(
       process.env.GRPC_SHUTDOWN_GRACE_MS ?? DEFAULT_GRPC.shutdownGraceMs,
+    ),
+  },
+  websocket: {
+    allowQueryToken: process.env.WS_ALLOW_QUERY_TOKEN === 'true',
+    handshakeTimeoutMs: Number(
+      process.env.WS_HANDSHAKE_TIMEOUT_MS ??
+        DEFAULT_WEBSOCKET.handshakeTimeoutMs,
+    ),
+    maxConnections: Number(
+      process.env.WS_MAX_CONNECTIONS ?? DEFAULT_WEBSOCKET.maxConnections,
+    ),
+    maxHeaderBytes: Number(
+      process.env.WS_MAX_HEADER_BYTES ?? DEFAULT_WEBSOCKET.maxHeaderBytes,
+    ),
+    maxBufferedHeadBytes: Number(
+      process.env.WS_MAX_BUFFERED_HEAD_BYTES ??
+        DEFAULT_WEBSOCKET.maxBufferedHeadBytes,
+    ),
+    idleTimeoutMs: Number(
+      process.env.WS_IDLE_TIMEOUT_MS ?? DEFAULT_WEBSOCKET.idleTimeoutMs,
+    ),
+    shutdownGraceMs: Number(
+      process.env.WS_SHUTDOWN_GRACE_MS ?? DEFAULT_WEBSOCKET.shutdownGraceMs,
     ),
   },
   upstreamHealth: {

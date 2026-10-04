@@ -1,5 +1,9 @@
 import Joi from 'joi';
-import { DEFAULT_UPSTREAM_HEALTH, DEFAULT_GRPC } from './configuration';
+import {
+  DEFAULT_UPSTREAM_HEALTH,
+  DEFAULT_GRPC,
+  DEFAULT_WEBSOCKET,
+} from './configuration';
 import { BlockList, isIP } from 'net';
 
 export const configSchema = Joi.object({
@@ -107,6 +111,37 @@ export const configSchema = Joi.object({
     .min(0)
     .max(60000)
     .default(DEFAULT_GRPC.shutdownGraceMs),
+  WS_ALLOW_QUERY_TOKEN: Joi.string().valid('true', 'false').default('false'),
+  WS_HANDSHAKE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(60000)
+    .default(DEFAULT_WEBSOCKET.handshakeTimeoutMs),
+  WS_MAX_CONNECTIONS: Joi.number()
+    .integer()
+    .min(1)
+    .max(10000)
+    .default(DEFAULT_WEBSOCKET.maxConnections),
+  WS_MAX_HEADER_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(65536)
+    .default(DEFAULT_WEBSOCKET.maxHeaderBytes),
+  WS_MAX_BUFFERED_HEAD_BYTES: Joi.number()
+    .integer()
+    .min(0)
+    .max(1048576)
+    .default(DEFAULT_WEBSOCKET.maxBufferedHeadBytes),
+  WS_IDLE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(3600000)
+    .default(DEFAULT_WEBSOCKET.idleTimeoutMs),
+  WS_SHUTDOWN_GRACE_MS: Joi.number()
+    .integer()
+    .min(0)
+    .max(60000)
+    .default(DEFAULT_WEBSOCKET.shutdownGraceMs),
   REDIS_URL: Joi.string().uri().required(),
   JWT_SECRET: Joi.string().min(32).required(),
   PROXY_TIMEOUT_MS: Joi.number().default(10000),
