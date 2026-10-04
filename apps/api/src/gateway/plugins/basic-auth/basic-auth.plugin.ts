@@ -50,6 +50,7 @@ export class BasicAuthPlugin implements GatewayPlugin {
     const valid = config.credentials.some(
       (c) =>
         c.username === username &&
+        /^[a-f\d]{64}$/i.test(c.passwordHash) &&
         crypto.timingSafeEqual(
           Buffer.from(c.passwordHash, 'hex'),
           Buffer.from(passwordHash, 'hex'),
@@ -57,6 +58,7 @@ export class BasicAuthPlugin implements GatewayPlugin {
     );
 
     if (!valid) return this.unauthorized(realm, ctx.requestId);
+    ctx.authentication = { method: this.name, subject: username };
   }
 
   private unauthorized(realm: string, requestId: string): PluginShortCircuit {

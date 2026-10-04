@@ -228,17 +228,20 @@ TLS and routing: the VPS is shared with squadup.in, whose Caddy owns ports 80/44
 
 ## Gateway Environment Variables
 
-| Variable                | Default  | Notes                                          |
-| ----------------------- | -------- | ---------------------------------------------- |
-| `GATEWAY_API_KEY`       | required | Authenticates gateway with control plane       |
-| `CONTROL_PLANE_URL`     | required | `wss://ws.novagate.dev/gateway-ws`             |
-| `REDIS_URL`             | required | Local Redis for config cache and rate limiting |
-| `JWT_SECRET`            | required | Min 32 chars — validates consumer tokens       |
-| `PORT`                  | `3000`   | HTTP port                                      |
-| `PROXY_TIMEOUT_MS`      | `10000`  | Downstream request timeout                     |
-| `RATE_LIMIT_WINDOW_MS`  | `60000`  | Sliding window duration                        |
-| `RATE_LIMIT_UNAUTH_MAX` | `100`    | Requests/window for unauthenticated clients    |
-| `RATE_LIMIT_AUTH_MAX`   | `500`    | Requests/window for authenticated consumers    |
+| Variable                | Default  | Notes                                                                                      |
+| ----------------------- | -------- | ------------------------------------------------------------------------------------------ |
+| `GATEWAY_API_KEY`       | required | Authenticates gateway with control plane                                                   |
+| `CONTROL_PLANE_URL`     | required | `wss://ws.novagate.dev/gateway-ws`                                                         |
+| `REDIS_URL`             | required | Local Redis for config cache and rate limiting                                             |
+| `JWT_SECRET`            | required | Min 32 chars — validates consumer tokens                                                   |
+| `TRUSTED_PROXY_CIDRS`   | empty    | Comma-separated trusted reverse-proxy IPs/CIDRs; forwarding headers are ignored by default |
+| `PORT`                  | `3000`   | HTTP port                                                                                  |
+| `PROXY_TIMEOUT_MS`      | `10000`  | Downstream request timeout                                                                 |
+| `RATE_LIMIT_WINDOW_MS`  | `60000`  | Sliding window duration                                                                    |
+| `RATE_LIMIT_UNAUTH_MAX` | `100`    | Requests/window for unauthenticated clients                                                |
+| `RATE_LIMIT_AUTH_MAX`   | `500`    | Requests/window for authenticated consumers                                                |
+
+Use `docker/gateway.env.example` as a non-secret gateway configuration template. Only list reverse proxies you control in `TRUSTED_PROXY_CIDRS`; do not use a broad network to make client IP detection appear to work. Route IP restrictions support IPv4 and IPv6.
 
 ## Local regression verification
 

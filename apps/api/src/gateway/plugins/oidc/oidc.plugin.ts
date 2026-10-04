@@ -173,6 +173,10 @@ export class OidcPlugin implements GatewayPlugin {
     payload: Record<string, unknown>,
     claimsToForward?: string[],
   ): void {
+    ctx.authentication = {
+      method: this.name,
+      subject: typeof payload.sub === 'string' ? payload.sub : undefined,
+    };
     if (!claimsToForward?.length) return;
     const req = ctx.req;
     for (const claim of claimsToForward) {

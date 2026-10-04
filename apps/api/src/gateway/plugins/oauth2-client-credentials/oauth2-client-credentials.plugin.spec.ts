@@ -95,7 +95,7 @@ describe('OAuth2ClientCredentialsPlugin', () => {
       await new Promise<void>((r) => server.close(() => r()));
 
       expect(result).toBeUndefined();
-      expect(ctx.req.user?.id).toBe('user-42');
+      expect(ctx.authentication?.subject).toBe('user-42');
     });
 
     it('rejects inactive token', async () => {
@@ -136,7 +136,7 @@ describe('OAuth2ClientCredentialsPlugin', () => {
 
       const result = await plugin.onRequest(ctx);
       expect(result).toBeUndefined();
-      expect(ctx.req.user?.id).toBe('cached-user');
+      expect(ctx.authentication?.subject).toBe('cached-user');
     });
 
     it('caches introspection result in Redis with TTL', async () => {

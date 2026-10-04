@@ -134,9 +134,7 @@ export class OAuth2ClientCredentialsPlugin implements GatewayPlugin {
       );
     }
 
-    if (result.sub) {
-      ctx.req.user = { id: result.sub };
-    }
+    ctx.authentication = { method: this.name, subject: result.sub };
   }
 
   private async injectOutbound(

@@ -93,6 +93,7 @@ export class HmacAuthPlugin implements GatewayPlugin {
         'HMAC signature verification failed',
       );
     }
+    ctx.authentication = { method: this.name };
   }
 
   private readBody(

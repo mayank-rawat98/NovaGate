@@ -28,6 +28,14 @@ export class RateLimitGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<RequestWithUser>();
     const response = context.switchToHttp().getResponse<ResponseWithLocals>();
+    // Browser preflight is resolved and terminated by the CORS plugin. It
+    // must work even when the caller has exhausted its actual-request budget.
+    if (
+      request.method === 'OPTIONS' &&
+      request.headers.origin &&
+      request.headers['access-control-request-method']
+    )
+      return true;
     const clientIp = this.getClientIp(request);
     const userId = request.user?.id;
     const tier = userId ? 'authenticated' : 'unauthenticated';

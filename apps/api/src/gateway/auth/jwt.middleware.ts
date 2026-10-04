@@ -35,6 +35,11 @@ export class JwtMiddleware implements NestMiddleware {
     }
 
     const [scheme, token] = authHeader.split(' ');
+    if (scheme?.toLowerCase() === 'basic') {
+      // Basic credentials are verified by the configured route plugin.
+      next();
+      return;
+    }
     if (scheme?.toLowerCase() !== 'bearer' || !token) {
       this.respondUnauthorized(
         req,
