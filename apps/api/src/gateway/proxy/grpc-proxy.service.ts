@@ -597,7 +597,9 @@ export class GrpcProxyService
         entry.active = Math.max(0, entry.active - 1);
         entry.lastUsed = Date.now();
         if (entry.retiring && !entry.active) entry.session.destroy();
-        if (!call.done)
+        // A normal upstream END_STREAM can precede draining the validator
+        // into a slow downstream. Keep those buffered bytes and trailers alive.
+        if (!call.done && !upstream.readableEnded)
           call.fail(new GrpcFailure(14, 'Upstream stream closed'));
       });
       upstream.on('error', () =>

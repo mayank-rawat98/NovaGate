@@ -43,8 +43,13 @@ describe('native gRPC through a real listener and upstream', () => {
   let config: TenantConfig;
   let version: number;
   let received: http2.IncomingHttpHeaders[];
-  let mode: 'echo' | 'stall' | 'oversize' | 'early' | 'trailers-only';
+  let mode: 'echo' | 'stall' | 'oversize' | 'early' | 'trailers-only' | 'flood';
   let closures: number;
+  let floodProduced: number;
+  const floodPacket = Buffer.concat(
+    Array.from({ length: 256 }, () => frame('x'.repeat(60))),
+  );
+  const floodPackets = 512;
   let healthy: boolean;
   const quota = { check: jest.fn() };
   const metrics = {
@@ -145,6 +150,7 @@ describe('native gRPC through a real listener and upstream', () => {
     version = 0;
     received = [];
     closures = 0;
+    floodProduced = 0;
     healthy = true;
     mode = 'echo';
     quota.check
@@ -193,6 +199,24 @@ describe('native gRPC through a real listener and upstream', () => {
           'custom-result-bin': 'AQID',
         }),
       );
+      if (mode === 'flood') {
+        stream.resume();
+        const produce = () => {
+          while (
+            !stream.destroyed &&
+            floodProduced < floodPacket.length * floodPackets
+          ) {
+            floodProduced += floodPacket.length;
+            if (!stream.write(floodPacket)) {
+              stream.once('drain', produce);
+              return;
+            }
+          }
+          if (!stream.destroyed) stream.end();
+        };
+        produce();
+        return;
+      }
       if (mode === 'oversize') {
         stream.end(frame('x'.repeat(65)));
         return;
@@ -451,6 +475,46 @@ describe('native gRPC through a real listener and upstream', () => {
     next.stream.end(frame('test'));
     expect((await next.finished).status).toBe('0');
     expect(received).toHaveLength(1);
+  });
+  it('drains an active bidirectional call during shutdown grace', async () => {
+    await restart({ shutdownGraceMs: 500 });
+    const call = request();
+    call.stream.write(frame('first'));
+    await until(() => received.length === 1);
+    const stopping = gateway.onModuleDestroy();
+    call.stream.end(frame('last'));
+    expect((await call.finished).status).toBe('0');
+    await stopping;
+    await until(() => upstreamSessions.size === 0);
+  });
+  it('sends unavailable before terminating calls beyond shutdown grace', async () => {
+    mode = 'stall';
+    const call = request();
+    call.stream.end(frame('test'));
+    await until(() => received.length === 1);
+    const stopping = gateway.onModuleDestroy();
+    expect((await call.finished).status).toBe('14');
+    await stopping;
+    await until(() => upstreamSessions.size === 0);
+  });
+  it('propagates slow-client backpressure instead of buffering the full response', async () => {
+    mode = 'flood';
+    config.services[0].timeoutMs = 5000;
+    await install();
+    const call = request();
+    call.stream.pause();
+    call.stream.end(frame('test'));
+    await until(() => floodProduced > 0);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const held = floodProduced;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(floodProduced).toBe(held);
+    expect(held).toBeLessThan(1024 * 1024);
+    call.stream.resume();
+    const result = await call.finished;
+    expect(result.status).toBe('0');
+    expect(result.body.length).toBe(floodPacket.length * floodPackets);
+    expect(floodProduced).toBe(result.body.length);
   });
   it('preserves binary unary frames, metadata and trailers and records bounded route labels', async () => {
     const { stream, finished } = request({

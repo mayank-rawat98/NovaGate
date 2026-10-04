@@ -262,7 +262,7 @@ TLS and routing: the VPS is shared with squadup.in, whose Caddy owns ports 80/44
 
 For native gRPC upstreams, choose **Native gRPC health service** in the Services form. Leave the health service name empty to check overall server health, or enter the name registered by the upstream. The gateway calls the standard `grpc.health.v1.Health/Check` RPC and accepts only a successful `SERVING` response; it caps the encoded health response at 4096 bytes and applies the gateway probe deadline and failure/recovery thresholds. Your upstream must implement that RPC. See the [official health service schema](https://github.com/grpc/grpc-proto/blob/master/grpc/health/v1/health.proto). HTTP health checks continue to use the configured path, with HTTP/2 when that service setting is enabled.
 
-The Services form also exposes HTTP/2 upstream connections and WebSocket upgrades. Native gRPC client traffic uses the separate opt-in gRPC endpoint; the HTTP/2 setting controls ordinary HTTP proxy connections and HTTP health probes. The service timeout and caller `grpc-timeout` can shorten the gateway's maximum gRPC deadline. Live-network verification covers listener TLS, call/session admission limits and cancellation reuse. Upstream TLS, packaged-container, slow-client/backpressure and shutdown acceptance remain in progress under issue #41.
+The Services form also exposes HTTP/2 upstream connections and WebSocket upgrades. Native gRPC client traffic uses the separate opt-in gRPC endpoint; the HTTP/2 setting controls ordinary HTTP proxy connections and HTTP health probes. The service timeout and caller `grpc-timeout` can shorten the gateway's maximum gRPC deadline. Live-network verification covers listener/upstream TLS, call/session admission limits, cancellation reuse, slow-client backpressure and shutdown grace. Upstreams use Node’s certificate trust store; mount a private CA and set `NODE_EXTRA_CA_CERTS` before startup when your upstream uses a private PKI. Certificate/key mounts must be readable by the image’s non-root UID 1000. Publish the gRPC port explicitly on your private network when enabling the listener.
 
 Use `docker/gateway.env.example` as a non-secret gateway configuration template. Only list reverse proxies you control in `TRUSTED_PROXY_CIDRS`; do not use a broad network to make client IP detection appear to work. Route IP restrictions support IPv4 and IPv6.
 
@@ -281,6 +281,15 @@ npm exec nx run-many -- -t test lint typecheck build --skipNxCache
 The test credentials are for the isolated local stack only. Integration suites run when both TEST variables are set. CI supplies the same dependencies and runs integration suites on PRs targeting `dev`. Formal acceptance testing follows the remaining implementation phases.
 
 Fresh PostgreSQL volumes are initialized with `docker/postgres-init.sql`; admin-api performs idempotent schema upgrades for existing volumes. The control plane uses `synchronize: false` to preserve admin authentication columns. Admin-api requires `PLATFORM_JWT_SECRET` with at least 32 characters; tenant operations require a signed bearer token whose subject matches the tenant ID. Signup goes through email verification, and tenant responses exclude password and recovery tokens.
+
+The packaged gRPC verifier runs against a disposable database and Redis container on that verification network. Build the image, then run the task:
+
+```sh
+docker build -f docker/Dockerfile.api -t novagate-api:issue41 .
+NOVAGATE_GRPC_IMAGE=novagate-api:issue41 npm exec nx run api:grpc-container-smoke
+```
+
+It requires OrbStack, OpenSSL, the verification stack and access to the pinned grpcurl image. It generates short-lived fixture certificates inside `.local-work`, checks authenticated protobuf calls with grpcurl and writes evidence to `.local-work/issue41-container-evidence.json`. It removes its own database, containers and certificate directory after running. Existing storage and cache contents are preserved.
 
 ## Release and developer checks
 
