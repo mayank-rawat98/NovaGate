@@ -34,7 +34,7 @@ services:
       - gateway-net
 
   control-plane:
-    image: ghcr.io/mayank-rawat98/control-plane:latest
+    image: ghcr.io/${NOVAGATE_IMAGE_OWNER:-mayank-rawat98}/control-plane:${NOVAGATE_IMAGE_TAG:-latest}
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
@@ -56,7 +56,7 @@ services:
       - edge # reached by the shared Caddy in the squadup stack
 
   admin-api:
-    image: ghcr.io/mayank-rawat98/admin-api:latest
+    image: ghcr.io/${NOVAGATE_IMAGE_OWNER:-mayank-rawat98}/admin-api:${NOVAGATE_IMAGE_TAG:-latest}
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
@@ -86,7 +86,7 @@ services:
       - edge # reached by the shared Caddy in the squadup stack
 
   dashboard:
-    image: ghcr.io/mayank-rawat98/dashboard:latest
+    image: ghcr.io/${NOVAGATE_IMAGE_OWNER:-mayank-rawat98}/dashboard:${NOVAGATE_IMAGE_TAG:-latest}
     environment:
       ADMIN_API_URL: http://admin-api:3001
       PORT: 3003

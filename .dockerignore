@@ -7,3 +7,9 @@ dist
 .vscode
 apps/*/node_modules
 libs/*/node_modules
+
+.env.*
+.local-work
+apps/*/dist
+libs/*/dist
+apps/*/.next

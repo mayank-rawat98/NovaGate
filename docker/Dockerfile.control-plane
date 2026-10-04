@@ -1,14 +1,21 @@
-FROM node:22-alpine AS builder
+FROM node:24-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY libs/shared-types/package.json ./libs/shared-types/package.json
-RUN npm install
+COPY apps/api/package.json ./apps/api/package.json
+COPY apps/admin-api/package.json ./apps/admin-api/package.json
+COPY apps/control-plane/package.json ./apps/control-plane/package.json
+COPY apps/dashboard/package.json ./apps/dashboard/package.json
+ENV NX_DAEMON=false NX_NO_CLOUD=true
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund --ignore-scripts
 COPY . .
-RUN npx nx sync
-RUN npx nx build control-plane
+RUN npm exec nx build control-plane
 
-FROM node:22-alpine
+RUN --mount=type=cache,target=/root/.npm npm prune --omit=dev --ignore-scripts --no-audit --no-fund --offline
+
+FROM node:24-alpine
 WORKDIR /app
+ENV NODE_ENV=production
 COPY --from=builder /app/apps/control-plane/dist ./dist/apps/control-plane
 COPY --from=builder /app/node_modules ./node_modules
 USER node
