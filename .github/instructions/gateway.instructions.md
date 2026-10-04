@@ -66,13 +66,14 @@ apps/api/src/
       redis.tokens.ts
       request-context.ts
       route-matcher.ts              -- shared path+method matching used by middleware
-    services/                       -- legacy local service registry (unused by main flow)
     gateway.module.ts
   config/
     configuration.ts
     configuration.schema.ts
   main.ts
-  app.module.ts
+  app/
+    app.module.ts                  -- configuration and gateway; no database connection
+    app.module.integration.spec.ts -- real startup/admin-boundary checks
 ```
 
 Never create files outside this structure without updating this document first.
@@ -82,6 +83,8 @@ do not dump files in the `gateway/` root.
 ---
 
 ## Module Rules
+
+The data plane uses tenant configuration from the control plane and Redis. It must not connect to PostgreSQL, synchronize schemas, or expose local administrative CRUD. Tenant administration belongs to the authenticated admin API.
 
 - `GatewayModule` is the single NestJS module that imports all gateway concerns
 - Each subfolder (auth, rate-limit, proxy, logging, metrics, health) exports
