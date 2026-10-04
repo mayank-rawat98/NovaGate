@@ -32,6 +32,8 @@ export interface PluginShortCircuit {
 
 export interface GatewayPlugin {
   name: string;
+  /** Missing capability declarations default to HTTP only. */
+  protocols?: readonly ('http' | 'websocket' | 'grpc')[];
 
   /**
    * Called before the request reaches the proxy.

@@ -12,6 +12,12 @@ RustFS 1.0.1 is pinned by digest in verification/production Compose. Production 
 
 This implements manual private archives, not all phase 4 criteria. Scheduled/per-tenant destination configuration, webhook/Datadog exporters, privacy/redaction controls, distributed storage and documented restore drills still require implementation and acceptance evidence.
 
+## Streaming gRPC work in progress — issue #41
+
+The branch replaces the previously unwired buffered helper with an opt-in native HTTP/2 listener, streaming frame validation, metadata/trailers, absolute deadlines, cancellation, health-aware selection and verified JWT/consumer authentication. Header-based plugin capabilities are explicit; incompatible body-based plugins fail closed. Live-network tests cover unary/bidirectional data, authentication, Basic/ACL/IP enforcement, quotas, message bounds, cancellation and all-down behavior. Listener settings and encoded-frame limits are documented in the gateway environment template. The current checkpoint passes all five projects’ uncached test/lint/typecheck/build gates (349 tests) against OrbStack PostgreSQL, Redis and RustFS. Gateway typecheck artifacts are isolated from Webpack output to prevent concurrent build/typecheck races.
+
+This issue remains open. TLS and packaged-container verification, capacity/slow-client acceptance, native gRPC health-check integration, dashboard protocol controls and the full workspace/CI gates are still required before merge. Do not count this as phase 3 acceptance yet.
+
 ## Code audit — 4 October 2026
 
 The code contains substantial work for phases 0–3, but file presence does not prove production acceptance. No phase is marked complete by this audit.

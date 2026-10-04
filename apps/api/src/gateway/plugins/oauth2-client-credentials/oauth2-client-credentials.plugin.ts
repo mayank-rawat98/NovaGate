@@ -33,6 +33,7 @@ const CACHE_PREFIX = 'oauth2:introspect:';
 @Injectable()
 export class OAuth2ClientCredentialsPlugin implements GatewayPlugin {
   readonly name = 'oauth2-client-credentials';
+  readonly protocols = ['http', 'grpc'] as const;
   private readonly logger = new Logger(OAuth2ClientCredentialsPlugin.name);
 
   // Keyed by tokenEndpoint+clientId+scopes so routes with different configs don't share tokens

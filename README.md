@@ -228,23 +228,37 @@ TLS and routing: the VPS is shared with squadup.in, whose Caddy owns ports 80/44
 
 ## Gateway Environment Variables
 
-| Variable                     | Default  | Notes                                                                                      |
-| ---------------------------- | -------- | ------------------------------------------------------------------------------------------ |
-| `GATEWAY_API_KEY`            | required | Authenticates gateway with control plane                                                   |
-| `CONTROL_PLANE_URL`          | required | `wss://ws.novagate.dev/gateway-ws`                                                         |
-| `REDIS_URL`                  | required | Local Redis for config cache and rate limiting                                             |
-| `JWT_SECRET`                 | required | Min 32 chars — validates consumer tokens                                                   |
-| `TRUSTED_PROXY_CIDRS`        | empty    | Comma-separated trusted reverse-proxy IPs/CIDRs; forwarding headers are ignored by default |
-| `PORT`                       | `3000`   | HTTP port                                                                                  |
-| `HEALTH_DEFAULT_INTERVAL_MS` | `10000`  | Legacy service probe interval; integer 1000–60000 ms, overridden by service settings       |
-| `HEALTH_FAILURE_THRESHOLD`   | `3`      | Consecutive failures before eviction; integer 1–10                                         |
-| `HEALTH_RECOVERY_THRESHOLD`  | `2`      | Consecutive successes before a failed target recovers; integer 1–10                        |
-| `HEALTH_PROBE_TIMEOUT_MS`    | `3000`   | Absolute probe deadline including connection and headers; integer 100–10000 ms             |
-| `HEALTH_PROBE_CONCURRENCY`   | `8`      | Maximum simultaneous probes per gateway; integer 1–64                                      |
-| `PROXY_TIMEOUT_MS`           | `10000`  | Downstream request timeout                                                                 |
-| `RATE_LIMIT_WINDOW_MS`       | `60000`  | Sliding window duration                                                                    |
-| `RATE_LIMIT_UNAUTH_MAX`      | `100`    | Requests/window for unauthenticated clients                                                |
-| `RATE_LIMIT_AUTH_MAX`        | `500`    | Requests/window for authenticated consumers                                                |
+| Variable                       | Default     | Notes                                                                                      |
+| ------------------------------ | ----------- | ------------------------------------------------------------------------------------------ |
+| `GATEWAY_API_KEY`              | required    | Authenticates gateway with control plane                                                   |
+| `CONTROL_PLANE_URL`            | required    | `wss://ws.novagate.dev/gateway-ws`                                                         |
+| `REDIS_URL`                    | required    | Local Redis for config cache and rate limiting                                             |
+| `JWT_SECRET`                   | required    | Min 32 chars — validates consumer tokens                                                   |
+| `TRUSTED_PROXY_CIDRS`          | empty       | Comma-separated trusted reverse-proxy IPs/CIDRs; forwarding headers are ignored by default |
+| `PORT`                         | `3000`      | HTTP port                                                                                  |
+| `HEALTH_DEFAULT_INTERVAL_MS`   | `10000`     | Legacy service probe interval; integer 1000–60000 ms, overridden by service settings       |
+| `HEALTH_FAILURE_THRESHOLD`     | `3`         | Consecutive failures before eviction; integer 1–10                                         |
+| `HEALTH_RECOVERY_THRESHOLD`    | `2`         | Consecutive successes before a failed target recovers; integer 1–10                        |
+| `HEALTH_PROBE_TIMEOUT_MS`      | `3000`      | Absolute probe deadline including connection and headers; integer 100–10000 ms             |
+| `HEALTH_PROBE_CONCURRENCY`     | `8`         | Maximum simultaneous probes per gateway; integer 1–64                                      |
+| `GRPC_ENABLED`                 | `false`     | Enable the separate native HTTP/2 gRPC listener                                            |
+| `GRPC_ALLOW_INSECURE`          | `false`     | Explicit private cleartext operation behind a trusted TLS-terminating proxy                |
+| `GRPC_HOST`                    | `127.0.0.1` | Listener address; container deployments need an appropriate private interface              |
+| `GRPC_PORT`                    | `50051`     | Listener port, 1–65535                                                                     |
+| `GRPC_TLS_CERT_FILE`           | unset       | Read-only PEM server certificate file; pair with key                                       |
+| `GRPC_TLS_KEY_FILE`            | unset       | Read-only PEM private key file; pair with certificate                                      |
+| `GRPC_MAX_MESSAGE_BYTES`       | `4194304`   | Maximum encoded frame payload, 1–64 MiB; compressed payloads remain opaque                 |
+| `GRPC_MAX_HEADER_BYTES`        | `16384`     | Request/response metadata bound, 1024–65536 bytes                                          |
+| `GRPC_MAX_CONCURRENT_STREAMS`  | `100`       | Per-session stream cap, 1–1000, also capped by upstream settings                           |
+| `GRPC_MAX_SESSIONS_PER_TARGET` | `4`         | Per-service/target upstream session cap, 1–32                                              |
+| `GRPC_MAX_ACTIVE_CALLS`        | `256`       | Gateway admission cap and incoming-session cap, 1–10000                                    |
+| `GRPC_DEADLINE_MS`             | `30000`     | Absolute maximum call duration, 100–3600000 ms; caller/service deadlines can shorten it    |
+| `GRPC_IDLE_TIMEOUT_MS`         | `30000`     | Unused upstream session expiry, 1000–3600000 ms                                            |
+| `GRPC_SHUTDOWN_GRACE_MS`       | `5000`      | Drain existing calls before cancellation, 0–60000 ms                                       |
+| `PROXY_TIMEOUT_MS`             | `10000`     | Downstream request timeout                                                                 |
+| `RATE_LIMIT_WINDOW_MS`         | `60000`     | Sliding window duration                                                                    |
+| `RATE_LIMIT_UNAUTH_MAX`        | `100`       | Requests/window for unauthenticated clients                                                |
+| `RATE_LIMIT_AUTH_MAX`          | `500`       | Requests/window for authenticated consumers                                                |
 
 Use `docker/gateway.env.example` as a non-secret gateway configuration template. Only list reverse proxies you control in `TRUSTED_PROXY_CIDRS`; do not use a broad network to make client IP detection appear to work. Route IP restrictions support IPv4 and IPv6.
 

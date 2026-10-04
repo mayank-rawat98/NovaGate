@@ -28,7 +28,10 @@ apps/api/src/
       load-balancer.service.ts      -- weighted round-robin target selection
       http2-session-pool.service.ts
       ws-proxy.service.ts
-      grpc-proxy.service.ts
+      grpc-proxy.service.ts        -- HTTP/2 listener and authenticated streaming
+      grpc-wire.ts                 -- frame validation, deadlines and metadata
+      grpc-wire.spec.ts
+      grpc-proxy.integration.spec.ts
     plugins/                        -- registry, ordered runner, first-party plugins
       plugins.module.ts
       plugin-registry.service.ts

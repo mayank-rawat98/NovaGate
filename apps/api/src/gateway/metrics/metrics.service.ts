@@ -56,6 +56,14 @@ export class MetricsService {
     labelNames: ['direction'],
     registers: [this.registry],
   });
+  private readonly grpcActiveCalls = new Gauge({
+    name: 'gateway_grpc_active_calls',
+    help: 'Active gRPC calls including authentication and quota admission',
+    registers: [this.registry],
+  });
+  setGrpcActiveCalls(count: number): void {
+    this.grpcActiveCalls.set(count);
+  }
   private readonly grpcRequestsTotal = new Counter({
     name: 'gateway_grpc_requests_total',
     help: 'Total gRPC requests proxied',
