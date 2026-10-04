@@ -1,264 +1,346 @@
-import { Injectable, Inject, Logger } from '@nestjs/common';
-import * as crypto from 'crypto';
-import * as https from 'https';
-import * as http from 'http';
+import { Injectable, Inject } from '@nestjs/common';
+import * as http from 'node:http';
 import type { Redis } from 'ioredis';
 import type {
   GatewayPlugin,
+  OAuth2PluginConfig,
   PluginContext,
   PluginShortCircuit,
 } from '@api-gateway/shared-types';
 import { REDIS_CLIENT } from '../../shared/redis.tokens.js';
+import { IdentityProviderService } from '../identity-provider/identity-provider.service';
 
-interface OAuth2Config {
-  // Mode A: validate inbound Bearer tokens via introspection
-  introspectionEndpoint?: string;
-  clientId?: string;
-  clientSecret?: string;
-  // Mode B: inject outbound Bearer token via client credentials grant
-  tokenEndpoint?: string;
-  scopes?: string[];
-  headerName?: string; // header to inject upstream token into, default 'Authorization'
-}
-
-interface IntrospectionResponse {
+interface Introspection {
   active: boolean;
   sub?: string;
   exp?: number;
-  [key: string]: unknown;
+  nbf?: number;
+  iss?: string;
+  aud?: string | string[];
 }
-
-const CACHE_PREFIX = 'oauth2:introspect:';
-
+interface CacheEnvelope {
+  version: 2;
+  scope: string;
+  expiresAt: number;
+  result: Introspection;
+}
 @Injectable()
 export class OAuth2ClientCredentialsPlugin implements GatewayPlugin {
   readonly name = 'oauth2-client-credentials';
   readonly protocols = ['http', 'grpc', 'websocket'] as const;
-  private readonly logger = new Logger(OAuth2ClientCredentialsPlugin.name);
-
-  // Keyed by tokenEndpoint+clientId+scopes so routes with different configs don't share tokens
-  private readonly outboundTokenCache = new Map<
-    string,
-    { token: string; expiresAt: number }
-  >();
-
-  constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
-
+  constructor(
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly provider: IdentityProviderService,
+  ) {}
   async onRequest(ctx: PluginContext): Promise<PluginShortCircuit | void> {
     const entry = ctx.route.plugins?.find(
-      (p) => p.name === 'oauth2-client-credentials',
+      (plugin) => plugin.name === this.name,
     );
     if (!entry) return;
-
-    const config = entry.config as unknown as OAuth2Config;
-
-    // Mode A: validate inbound token via introspection
-    if (config.introspectionEndpoint) {
-      return this.validateInbound(ctx, config);
+    const config = entry.config as unknown as OAuth2PluginConfig;
+    try {
+      this.validateConfig(config);
+    } catch {
+      return this.failure(
+        ctx,
+        500,
+        'OAUTH2_MISCONFIGURED',
+        'Invalid OAuth configuration',
+      );
     }
-
-    // Mode B: inject outbound client credentials token
-    if (config.tokenEndpoint && config.clientId && config.clientSecret) {
-      return this.injectOutbound(ctx, config);
+    if (config.introspectionEndpoint) return this.inbound(ctx, config);
+    try {
+      const scope = this.scope(ctx, config, 'oauth2:outbound');
+      const result = await this.provider.coalesce(
+        scope,
+        async (signal) => {
+          const cached = this.provider.getCached<string>(scope);
+          if (cached) return cached;
+          const body = new URLSearchParams({
+            grant_type: 'client_credentials',
+            client_id: config.clientId,
+            client_secret: config.clientSecret,
+            ...(config.scopes?.length
+              ? { scope: config.scopes.join(' ') }
+              : {}),
+          }).toString();
+          const requestedAt = Date.now();
+          const response = (await this.provider.requestJson(
+            config.tokenEndpoint as string,
+            { body, signal },
+          )) as Record<string, unknown>;
+          if (
+            !this.provider.validToken(response.access_token) ||
+            typeof response.token_type !== 'string' ||
+            response.token_type.toLowerCase() !== 'bearer' ||
+            (response.expires_in !== undefined &&
+              (!Number.isSafeInteger(response.expires_in) ||
+                Number(response.expires_in) <= 0))
+          )
+            throw new Error('Invalid token response');
+          if (typeof response.expires_in === 'number') {
+            // Cache for at most the declared lifetime; unknown lifetimes are never invented.
+            const ttl = Math.min(
+              Math.max(
+                0,
+                response.expires_in * 1000 -
+                  (Date.now() - requestedAt) -
+                  this.provider.settings.timeoutMs,
+              ),
+              this.provider.settings.outboundCacheTtlMs,
+            );
+            this.provider.putCached(scope, response.access_token, ttl, signal);
+          }
+          return response.access_token;
+        },
+        ctx.signal,
+      );
+      ctx.signal?.throwIfAborted();
+      ctx.req.headers[(config.headerName ?? 'authorization').toLowerCase()] =
+        `Bearer ${result}`;
+      // Outbound credential injection does not establish inbound authentication.
+    } catch {
+      return this.failure(
+        ctx,
+        503,
+        'OAUTH2_PROVIDER_UNAVAILABLE',
+        'Unable to obtain upstream credentials',
+      );
     }
   }
-
-  private async validateInbound(
+  private scope(
     ctx: PluginContext,
-    config: OAuth2Config,
+    config: OAuth2PluginConfig,
+    kind: string,
+    token?: string,
+  ) {
+    return this.provider.scope(
+      kind,
+      ctx.tenantId,
+      [
+        config.introspectionEndpoint ?? null,
+        config.tokenEndpoint ?? null,
+        config.clientId,
+        config.clientSecret,
+        [...(config.scopes ?? [])].sort(),
+        config.headerName ?? 'authorization',
+        config.issuer ?? null,
+        config.audience ?? null,
+      ],
+      token,
+    );
+  }
+  private validateConfig(config: OAuth2PluginConfig) {
+    if (
+      !config ||
+      !this.provider.validToken(config.clientId) ||
+      typeof config.clientSecret !== 'string' ||
+      !config.clientSecret ||
+      Buffer.byteLength(config.clientSecret) >
+        this.provider.settings.maxTokenBytes ||
+      !!config.introspectionEndpoint === !!config.tokenEndpoint
+    )
+      throw new Error();
+    this.provider.endpoint(
+      config.introspectionEndpoint ?? config.tokenEndpoint ?? '',
+    );
+    if (
+      config.scopes !== undefined &&
+      (!Array.isArray(config.scopes) ||
+        config.scopes.some(
+          (scope) => typeof scope !== 'string' || !scope || /\s/.test(scope),
+        ))
+    )
+      throw new Error();
+    if (
+      config.issuer !== undefined &&
+      (typeof config.issuer !== 'string' || !config.issuer)
+    )
+      throw new Error();
+    if (
+      config.audience !== undefined &&
+      (typeof config.audience !== 'string' || !config.audience)
+    )
+      throw new Error();
+    const header = config.headerName ?? 'authorization';
+    http.validateHeaderName(header);
+    if (
+      [
+        'host',
+        'content-length',
+        'transfer-encoding',
+        'connection',
+        'upgrade',
+        'proxy-authorization',
+      ].includes(header.toLowerCase()) ||
+      header.toLowerCase().startsWith('sec-websocket-')
+    )
+      throw new Error();
+  }
+  private introspection(
+    value: unknown,
+    config: OAuth2PluginConfig,
+  ): Introspection {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw new Error();
+    const result = value as Record<string, unknown>;
+    if (typeof result.active !== 'boolean') throw new Error();
+    if (!result.active) return { active: false };
+    for (const name of ['exp', 'nbf'])
+      if (result[name] !== undefined && !Number.isSafeInteger(result[name]))
+        throw new Error();
+    if (
+      (typeof result.exp === 'number' && result.exp <= Date.now() / 1000) ||
+      (typeof result.nbf === 'number' && result.nbf > Date.now() / 1000)
+    )
+      return { active: false };
+    if (
+      result.sub !== undefined &&
+      (typeof result.sub !== 'string' ||
+        !result.sub ||
+        Buffer.byteLength(result.sub) > this.provider.settings.maxTokenBytes)
+    )
+      throw new Error();
+    if (config.issuer && result.iss !== config.issuer) return { active: false };
+    if (
+      config.audience &&
+      !(typeof result.aud === 'string'
+        ? result.aud === config.audience
+        : Array.isArray(result.aud) && result.aud.includes(config.audience))
+    )
+      return { active: false };
+    return {
+      active: true,
+      ...(typeof result.sub === 'string' ? { sub: result.sub } : {}),
+      ...(typeof result.exp === 'number' ? { exp: result.exp } : {}),
+      ...(typeof result.nbf === 'number' ? { nbf: result.nbf } : {}),
+      ...(typeof result.iss === 'string' ? { iss: result.iss } : {}),
+      ...(typeof result.aud === 'string' ||
+      (Array.isArray(result.aud) &&
+        result.aud.every((item) => typeof item === 'string'))
+        ? { aud: result.aud as string | string[] }
+        : {}),
+    };
+  }
+  private async inbound(
+    ctx: PluginContext,
+    config: OAuth2PluginConfig,
   ): Promise<PluginShortCircuit | void> {
-    if (!config.clientId || !config.clientSecret) {
-      ctx.logger.error(
-        'oauth2-client-credentials plugin misconfigured: clientId and clientSecret are required for introspection',
-      );
-      return this.unauthorized(
-        ctx.requestId,
-        'OAUTH2_MISCONFIGURED',
-        'Plugin configuration error: clientId and clientSecret are required',
-      );
-    }
-
-    const authHeader = ctx.req.headers['authorization'];
-    const header = Array.isArray(authHeader) ? authHeader[0] : authHeader;
-
-    if (!header?.startsWith('Bearer ')) {
-      return this.unauthorized(
-        ctx.requestId,
+    const match =
+      typeof ctx.req.headers.authorization === 'string'
+        ? /^Bearer ([^\s]+)$/i.exec(ctx.req.headers.authorization)
+        : null;
+    if (!match || !this.provider.validToken(match[1]))
+      return this.failure(
+        ctx,
+        401,
         'OAUTH2_TOKEN_MISSING',
-        'Bearer token required',
+        'Valid Bearer token required',
       );
-    }
-
-    const token = header.slice(7);
-
-    // Check Redis cache first
-    const cacheKey = `${CACHE_PREFIX}${crypto.createHash('sha256').update(token).digest('hex')}`;
-    let result: IntrospectionResponse | null = null;
-
+    const token = match[1];
+    const scope = this.scope(ctx, config, 'oauth2:introspect', token);
     try {
-      const cached = await this.redis.get(cacheKey);
-      if (cached) {
-        result = JSON.parse(cached) as IntrospectionResponse;
-      }
-    } catch {
-      // Redis failure — fail open, proceed to introspect
-    }
-
-    if (!result) {
-      try {
-        result = await this.introspect(token, config, ctx.signal);
-        if (result.active && result.exp) {
-          const ttl = Math.max(0, result.exp - Math.floor(Date.now() / 1000));
+      const result = await this.provider.coalesce(
+        scope,
+        async (signal) => {
+          // Cache failure falls back to the provider; it never grants authentication by itself.
+          let raw: string | null = null;
+          try {
+            raw = await this.redis.get(scope);
+          } catch {
+            /* Verify remotely. */
+          }
+          signal.throwIfAborted();
+          if (
+            raw &&
+            Buffer.byteLength(raw) <= this.provider.settings.maxResponseBytes
+          ) {
+            try {
+              const envelope = JSON.parse(raw) as CacheEnvelope;
+              if (
+                envelope.version === 2 &&
+                envelope.scope === scope &&
+                Number.isSafeInteger(envelope.expiresAt) &&
+                envelope.expiresAt > Date.now() &&
+                envelope.expiresAt <=
+                  Date.now() + this.provider.settings.introspectionCacheTtlMs
+              ) {
+                const cached = this.introspection(envelope.result, config);
+                if (cached.active && cached.exp !== undefined) return cached;
+              }
+            } catch {
+              /* Malformed cache entries never establish trust. */
+            }
+          }
+          const response = await this.provider.requestJson(
+            config.introspectionEndpoint as string,
+            {
+              body: new URLSearchParams({ token }).toString(),
+              signal,
+              headers: {
+                authorization: `Basic ${Buffer.from(`${new URLSearchParams({ value: config.clientId }).toString().slice('value='.length)}:${new URLSearchParams({ value: config.clientSecret }).toString().slice('value='.length)}`).toString('base64')}`,
+              },
+            },
+          );
+          const validated = this.introspection(response, config);
+          const ttl =
+            validated.active && validated.exp !== undefined
+              ? Math.min(
+                  this.provider.settings.introspectionCacheTtlMs,
+                  validated.exp * 1000 - Date.now(),
+                )
+              : 0;
           if (ttl > 0) {
+            signal.throwIfAborted();
+            const envelope: CacheEnvelope = {
+              version: 2,
+              scope,
+              expiresAt: Math.floor(Date.now() + ttl),
+              result: validated,
+            };
             await this.redis
-              .set(cacheKey, JSON.stringify(result), 'EX', ttl)
+              .set(scope, JSON.stringify(envelope), 'PX', Math.floor(ttl))
               .catch(() => undefined);
           }
-        }
-      } catch {
-        this.logger.error('Token introspection failed');
-        return this.unauthorized(
-          ctx.requestId,
-          'OAUTH2_INTROSPECTION_FAILED',
-          'Could not validate token',
+          signal.throwIfAborted();
+          return validated;
+        },
+        ctx.signal,
+      );
+      if (!result.active)
+        return this.failure(
+          ctx,
+          401,
+          'OAUTH2_TOKEN_INACTIVE',
+          'Token is not active for this resource',
         );
-      }
-    }
-
-    if (!result.active) {
-      return this.unauthorized(
-        ctx.requestId,
-        'OAUTH2_TOKEN_INACTIVE',
-        'Token is not active',
+      ctx.signal?.throwIfAborted();
+      ctx.authentication = {
+        method: this.name,
+        ...(result.sub ? { subject: result.sub } : {}),
+      };
+    } catch {
+      return this.failure(
+        ctx,
+        503,
+        'OAUTH2_INTROSPECTION_FAILED',
+        'Unable to validate credentials',
       );
     }
-
-    ctx.authentication = { method: this.name, subject: result.sub };
   }
-
-  private async injectOutbound(
+  private failure(
     ctx: PluginContext,
-    config: OAuth2Config,
-  ): Promise<void> {
-    const token = await this.getOutboundToken(config, ctx.signal);
-    const headerName = config.headerName ?? 'Authorization';
-    ctx.req.headers[headerName.toLowerCase()] = `Bearer ${token}`;
-  }
-
-  private async getOutboundToken(
-    config: OAuth2Config,
-    signal?: AbortSignal,
-  ): Promise<string> {
-    const cacheKey = `${config.tokenEndpoint}:${config.clientId}:${(config.scopes ?? []).join(',')}`;
-    const cached = this.outboundTokenCache.get(cacheKey);
-    if (cached && Date.now() < cached.expiresAt - 30_000) {
-      return cached.token;
-    }
-
-    const body = new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_id: config.clientId!,
-      client_secret: config.clientSecret!,
-      ...(config.scopes?.length ? { scope: config.scopes.join(' ') } : {}),
-    });
-
-    const response = await this.postForm(
-      config.tokenEndpoint!,
-      body.toString(),
-      {},
-      signal,
-    );
-    const data = response as { access_token: string; expires_in?: number };
-
-    const expiresIn = (data.expires_in ?? 3600) * 1000;
-    this.outboundTokenCache.set(cacheKey, {
-      token: data.access_token,
-      expiresAt: Date.now() + expiresIn,
-    });
-    return data.access_token;
-  }
-
-  private introspect(
-    token: string,
-    config: OAuth2Config,
-    signal?: AbortSignal,
-  ): Promise<IntrospectionResponse> {
-    const credentials = Buffer.from(
-      `${config.clientId}:${config.clientSecret}`,
-    ).toString('base64');
-    const body = `token=${encodeURIComponent(token)}`;
-    return this.postForm(
-      config.introspectionEndpoint!,
-      body,
-      {
-        Authorization: `Basic ${credentials}`,
-      },
-      signal,
-    ) as Promise<IntrospectionResponse>;
-  }
-
-  private postForm(
-    url: string,
-    body: string,
-    extraHeaders: Record<string, string> = {},
-    signal?: AbortSignal,
-  ): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const parsedUrl = new URL(url);
-      const client = url.startsWith('https://') ? https : http;
-      const options = {
-        hostname: parsedUrl.hostname,
-        port: parsedUrl.port || (url.startsWith('https://') ? 443 : 80),
-        path: parsedUrl.pathname + parsedUrl.search,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Content-Length': Buffer.byteLength(body),
-          ...extraHeaders,
-        },
-        timeout: 5000,
-        signal,
-      };
-
-      const req = client.request(options, (res) => {
-        res.on('error', reject);
-        res.once('aborted', () =>
-          reject(new Error('Identity provider response aborted')),
-        );
-        let data = '';
-        res.on('data', (chunk: Buffer) => (data += chunk.toString()));
-        res.on('end', () => {
-          try {
-            resolve(JSON.parse(data));
-          } catch {
-            reject(new Error('Invalid JSON from token endpoint'));
-          }
-        });
-      });
-
-      req.on('error', reject);
-      req.on('timeout', () => {
-        req.destroy();
-        reject(new Error('Token endpoint timeout'));
-      });
-
-      req.write(body);
-      req.end();
-    });
-  }
-
-  private unauthorized(
-    requestId: string,
-    code: string,
+    status: number,
+    error: string,
     message: string,
   ): PluginShortCircuit {
     return {
-      status: 401,
+      status,
       headers: {
         'WWW-Authenticate': 'Bearer realm="Gateway"',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ error: code, message, requestId }),
+      body: JSON.stringify({ error, message, requestId: ctx.requestId }),
     };
   }
 }

@@ -59,7 +59,10 @@ try {
   if (err instanceof TooManyRequestsException) throw err;
   // Redis is down — fail open, increment error counter
   this.metricsService.increment('gateway_rate_limit_redis_errors_total');
-  this.logger.warn({ msg: 'Redis unavailable, failing open', error: err.message });
+  this.logger.warn({
+    msg: 'Redis unavailable, failing open',
+    error: err.message,
+  });
   // Allow request to continue
 }
 ```
@@ -326,3 +329,11 @@ return req.ip ?? null;
 Why: `req.ip` is the IP of the last hop (the load balancer), not the
 client. Using it would block the load balancer or allow all clients.
 Only use `req.ip` as a fallback for local/direct deployments.
+
+---
+
+## Rule 16 — Authentication caches cannot transfer trust
+
+Cache keys must hash tenant identity, the effective provider endpoint/trust configuration, credentials and token identity. Credential rotation or a different tenant must require fresh verification. Raw credentials never appear in keys or logs. A Redis error or malformed cache entry cannot establish authentication; verify remotely or reject. Bound active introspection caching by both token expiration and the operator revocation-staleness limit. Outbound OAuth injection never authenticates an inbound client.
+
+Remote verification uses verified HTTPS by default, no redirects, an absolute deadline, byte/header/token limits and bounded concurrent admission. Retain capacity for cancelled operations until they actually settle. Shared work may survive one caller cancelling, but aborts when its last caller leaves. Unknown signing-key refreshes are throttled, and public keys must explicitly match permitted algorithms and signing use. Remove client-asserted claim headers before forwarding verified claims.

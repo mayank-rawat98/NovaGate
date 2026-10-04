@@ -40,6 +40,16 @@ const routes = [
     authRequired: true,
     enabled: true,
     plugins: [
+      {
+        name: 'oauth2-client-credentials',
+        config: {
+          introspectionEndpoint: 'https://identity.example.test/introspect',
+          clientId: 'browser-client',
+          clientSecret: 'verification-only-secret',
+          audience: 'catalog',
+        },
+      },
+      { name: 'graphql-guard', config: { maxDepth: 7 } },
       { name: 'cors', config: { origins: ['https://app.example.test'] } },
     ],
     createdAt,
@@ -106,6 +116,26 @@ await context.route('**/api/**', async (route) => {
     'Dashboard must use its configured API origin',
   );
   const resource = url.pathname.split('/').at(-1);
+  if (url.pathname.includes('/routes/') && route.request().method() === 'PUT') {
+    const dto = route.request().postDataJSON();
+    assert.deepEqual(
+      dto.plugins.map((entry) => entry.name),
+      ['oauth2-client-credentials', 'graphql-guard', 'cors'],
+    );
+    assert.deepEqual(dto.plugins[1].config, { maxDepth: 7 });
+    const oauth = dto.plugins[0].config;
+    assert.equal(oauth.tokenEndpoint, 'https://identity.example.test/token');
+    assert.equal(oauth.introspectionEndpoint, undefined);
+    assert.equal(oauth.clientSecret, 'verification-only-secret');
+    assert.deepEqual(oauth.scopes, ['read', 'write']);
+    routes[0] = { ...routes[0], ...dto };
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(routes[0]),
+    });
+    return;
+  }
   let body = [];
   let status = 200;
   if (url.pathname.includes('/log-exports/') && resource === 'download') {
@@ -338,6 +368,43 @@ try {
     page.getByRole('heading', { name: 'Routes', exact: true }),
   ).toBeVisible();
   await expect(menu).not.toBeVisible();
+  await page
+    .getByRole('button', { name: 'Edit GET /v1/products', exact: true })
+    .click();
+  const oauthDrawer = page.getByRole('dialog', {
+    name: 'Routes form',
+    exact: true,
+  });
+  await oauthDrawer.getByRole('button', { name: /^plugins/i }).click();
+  await expect(
+    oauthDrawer.getByLabel('OAuth client ID', { exact: true }),
+  ).toHaveValue('browser-client');
+  await expect(
+    oauthDrawer.getByLabel('OAuth client secret', { exact: true }),
+  ).toHaveAttribute('type', 'password');
+  await expect(
+    oauthDrawer.getByLabel('OAuth expected audience (optional)', {
+      exact: true,
+    }),
+  ).toHaveValue('catalog');
+  await audit('OAuth introspection form mobile');
+  await oauthDrawer
+    .getByLabel('OAuth purpose', { exact: true })
+    .selectOption('outbound');
+  await expect(
+    oauthDrawer.getByText(/does not authenticate your clients/),
+  ).toBeVisible();
+  await oauthDrawer
+    .getByLabel('Token endpoint', { exact: true })
+    .fill('https://identity.example.test/token');
+  await oauthDrawer
+    .getByLabel('OAuth scopes (comma separated)', { exact: true })
+    .fill('read, write');
+  await audit('OAuth outbound form mobile');
+  await oauthDrawer
+    .getByRole('button', { name: 'Save Changes', exact: true })
+    .click();
+  await expect(oauthDrawer).not.toBeVisible();
   const addRoute = page.getByRole('button', { name: 'Add Route', exact: true });
   await addRoute.click();
   const drawer = page.getByRole('dialog', { name: 'Routes form', exact: true });

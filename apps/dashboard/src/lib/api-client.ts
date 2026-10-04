@@ -392,3 +392,8 @@ export async function downloadLogExport(
   // Allow the browser to begin the download before releasing the blob URL.
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+export type {
+  OidcPluginConfig,
+  OAuth2PluginConfig,
+} from '@api-gateway/shared-types';

@@ -165,6 +165,7 @@ export class ProxyService {
         activePlugins,
         pluginCtx,
       );
+      if (pluginCtx.signal?.aborted) return;
       if (shortCircuit) {
         this.sendShortCircuit(response, shortCircuit);
         return;
@@ -646,6 +647,21 @@ export class ProxyService {
     service: ServiceConfig,
     requestId: string,
   ): PluginContext {
+    const abort = new AbortController();
+    const cancelled = () => abort.abort();
+    const cleanup = () => {
+      request.off?.('aborted', cancelled);
+      response.off?.('close', closed);
+      response.off?.('finish', cleanup);
+    };
+    const closed = () => {
+      if (!response.writableFinished) abort.abort();
+      cleanup();
+    };
+    request.once?.('aborted', cancelled);
+    response.once?.('close', closed);
+    response.once?.('finish', cleanup);
+    if (request.aborted || response.destroyed) abort.abort();
     const tenantId = this.configManager.getTenantId() ?? 'unknown';
     const user = (request as RequestWithUser).user;
     return {
@@ -655,6 +671,7 @@ export class ProxyService {
       service,
       tenantId,
       requestId,
+      signal: abort.signal,
       logger: {
         info: (msg, meta) => this.logger.log(JSON.stringify({ msg, ...meta })),
         warn: (msg, meta) => this.logger.warn(JSON.stringify({ msg, ...meta })),

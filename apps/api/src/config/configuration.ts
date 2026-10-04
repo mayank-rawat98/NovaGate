@@ -40,6 +40,23 @@ export const DEFAULT_WEBSOCKET = {
 };
 export type WebSocketSettings = typeof DEFAULT_WEBSOCKET;
 
+export const DEFAULT_IDENTITY_PROVIDER = {
+  allowInsecureHttp: false,
+  timeoutMs: 5000,
+  maxResponseBytes: 262144,
+  maxHeaderBytes: 16384,
+  maxTokenBytes: 16384,
+  maxPendingRequests: 128,
+  maxConcurrentFetches: 16,
+  maxCacheEntries: 128,
+  maxJwksKeys: 64,
+  jwksCacheTtlMs: 300000,
+  jwksRefreshCooldownMs: 30000,
+  introspectionCacheTtlMs: 30000,
+  outboundCacheTtlMs: 3600000,
+};
+export type IdentityProviderSettings = typeof DEFAULT_IDENTITY_PROVIDER;
+
 export interface ProxyServiceConfig {
   name: string;
   targetUrl: string;
@@ -62,6 +79,7 @@ export interface GatewayConfig {
   upstreamHealth: UpstreamHealthSettings;
   grpc: GrpcSettings;
   websocket: WebSocketSettings;
+  identityProvider: IdentityProviderSettings;
   rateLimit: {
     windowMs: number;
     unauthMax: number;
@@ -147,6 +165,58 @@ export default (): GatewayConfig => ({
     ),
     shutdownGraceMs: Number(
       process.env.WS_SHUTDOWN_GRACE_MS ?? DEFAULT_WEBSOCKET.shutdownGraceMs,
+    ),
+  },
+  identityProvider: {
+    allowInsecureHttp:
+      process.env.IDENTITY_PROVIDER_ALLOW_INSECURE_HTTP === 'true',
+    timeoutMs: Number(
+      process.env.IDENTITY_PROVIDER_TIMEOUT_MS ??
+        DEFAULT_IDENTITY_PROVIDER.timeoutMs,
+    ),
+    maxResponseBytes: Number(
+      process.env.IDENTITY_PROVIDER_MAX_RESPONSE_BYTES ??
+        DEFAULT_IDENTITY_PROVIDER.maxResponseBytes,
+    ),
+    maxHeaderBytes: Number(
+      process.env.IDENTITY_PROVIDER_MAX_HEADER_BYTES ??
+        DEFAULT_IDENTITY_PROVIDER.maxHeaderBytes,
+    ),
+    maxTokenBytes: Number(
+      process.env.IDENTITY_PROVIDER_MAX_TOKEN_BYTES ??
+        DEFAULT_IDENTITY_PROVIDER.maxTokenBytes,
+    ),
+    maxPendingRequests: Number(
+      process.env.IDENTITY_PROVIDER_MAX_PENDING_REQUESTS ??
+        DEFAULT_IDENTITY_PROVIDER.maxPendingRequests,
+    ),
+    maxConcurrentFetches: Number(
+      process.env.IDENTITY_PROVIDER_MAX_CONCURRENT_FETCHES ??
+        DEFAULT_IDENTITY_PROVIDER.maxConcurrentFetches,
+    ),
+    maxCacheEntries: Number(
+      process.env.IDENTITY_PROVIDER_MAX_CACHE_ENTRIES ??
+        DEFAULT_IDENTITY_PROVIDER.maxCacheEntries,
+    ),
+    maxJwksKeys: Number(
+      process.env.IDENTITY_PROVIDER_MAX_JWKS_KEYS ??
+        DEFAULT_IDENTITY_PROVIDER.maxJwksKeys,
+    ),
+    jwksCacheTtlMs: Number(
+      process.env.IDENTITY_PROVIDER_JWKS_CACHE_TTL_MS ??
+        DEFAULT_IDENTITY_PROVIDER.jwksCacheTtlMs,
+    ),
+    jwksRefreshCooldownMs: Number(
+      process.env.IDENTITY_PROVIDER_JWKS_REFRESH_COOLDOWN_MS ??
+        DEFAULT_IDENTITY_PROVIDER.jwksRefreshCooldownMs,
+    ),
+    introspectionCacheTtlMs: Number(
+      process.env.IDENTITY_PROVIDER_INTROSPECTION_CACHE_TTL_MS ??
+        DEFAULT_IDENTITY_PROVIDER.introspectionCacheTtlMs,
+    ),
+    outboundCacheTtlMs: Number(
+      process.env.IDENTITY_PROVIDER_OUTBOUND_CACHE_TTL_MS ??
+        DEFAULT_IDENTITY_PROVIDER.outboundCacheTtlMs,
     ),
   },
   upstreamHealth: {

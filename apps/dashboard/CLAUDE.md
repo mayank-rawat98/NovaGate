@@ -68,6 +68,7 @@ enabled toggle, rate limit override.
 - `request-transform` — addHeaders (JSON), removeHeaders (comma-list), addQueryParams (JSON), removeQueryParams (comma-list)
 - `response-transform` — addHeaders (JSON), removeHeaders (comma-list), statusOverride
 - `basic-auth` — realm, credentials (username:password pairs, one per line; stored as SHA-256 hashes)
+- `oauth2-client-credentials` — explicit inbound introspection or outbound service-token mode; endpoint, client ID and password-masked client secret; optional issuer/audience or scopes/header. Outbound mode must explain that it does not authenticate clients. Preserve original plugin order and unmodeled configurations on edit.
 - `oidc` — jwksUri, issuer, audience (optional), claimsToForward (comma-sep, optional)
 - `hmac-auth` — header name, algorithm (sha256/sha512), secrets (one per line for rotation), timestampHeader + maxClockSkewSeconds (optional)
 - `acl` — allow/deny group lists (comma-sep); groups assigned per consumer

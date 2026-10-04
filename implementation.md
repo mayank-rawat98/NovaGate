@@ -439,13 +439,15 @@ Returns `WWW-Authenticate: Basic realm="..."` on missing/invalid credentials.
 
 ### 2.1 OAuth 2.0 — Client Credentials Flow
 
+Issue #47 hardening: reproduced token-only introspection cache trust transfer and stale outbound credential reuse on secret rotation. Provider/cache scopes now bind tenant, endpoint, credentials and trust settings; versioned active introspection entries are bounded by expiration and the operator revocation limit. Absolute deadlines, admission/fetch/cache/key/byte limits, coalescing and cancellation protect all protocol entry points. Production HTTPS verification remains enabled and redirects are refused. Local feature/regression checks pass 505 tests (gateway 371, admin 123, control-plane 10, dashboard 1), all five-project lint/typecheck/build gates, and desktop/mobile keyboard/axe checks. The non-root Node 24 OrbStack production image verifies a real HTTPS provider plus scoped private Redis across HTTP/gRPC/WebSocket, an inactive alternate provider for the identical token, a 30-second-or-less Redis cache lifetime, untrusted provider certificate rejection before any application request, and the distinction between outbound injection and inbound authentication. HTTP disconnects now cancel pending verification, matching the gRPC/WebSocket cancellation contract. Fixtures remove their disposable resources; formal all-phase acceptance remains deferred.
+
 **Who needs it:** Machine-to-machine APIs (microservices calling other microservices through the gateway).
 
 `apps/api/src/gateway/plugins/oauth2-client-credentials/`:
 
 - Per-route config: `{ tokenEndpoint, clientId, clientSecret, scopes }` (for upstream auth injection — gateway acts as OAuth client)
 - OR: validate inbound `Bearer` tokens by calling the token introspection endpoint
-- Token introspection result cached in Redis with TTL = token `expires_in`
+- Active introspection results with a known future `exp` are cached in a versioned tenant/provider/credential/token scope; TTL is capped by `exp` and the operator revocation-staleness limit (30 seconds by default)
 - On cache hit: no round-trip to auth server; latency impact < 1ms
 
 ---
@@ -465,9 +467,9 @@ config: {
 }
 ```
 
-- JWKS fetched on first request, cached with 24h TTL, refreshed on `kid` miss (handles key rotation)
+- JWKS fetched on first request, held in a bounded tenant/provider/trust cache for five minutes by default; an unknown `kid` refresh is subject to the configured cooldown. Providers overlap signing keys during rotation.
 - Validates `exp`, `iss`, `aud`, `nbf`
-- Compatible with existing `JwtMiddleware` — OIDC plugin runs after and enriches `req.user`
+- Compatible with existing `JwtMiddleware` — OIDC plugin runs after and sets verified `ctx.authentication`; external subjects never become gateway consumer UUIDs
 
 ---
 

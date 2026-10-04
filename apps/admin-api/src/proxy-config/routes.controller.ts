@@ -1,3 +1,4 @@
+import Joi from 'joi';
 import {
   Controller,
   Get,
@@ -52,8 +53,66 @@ interface RouteBody {
   } | null;
 }
 
+const providerEndpoint = Joi.string()
+  .uri({ scheme: ['http', 'https'] })
+  .custom((value, helpers) => {
+    const url = new URL(value);
+    return url.username || url.password || url.hash
+      ? helpers.error('any.invalid')
+      : value;
+  });
+const oidcConfigSchema = Joi.object({
+  jwksUri: providerEndpoint.required(),
+  issuer: Joi.string().required(),
+  audience: Joi.string(),
+  claimsToForward: Joi.array().items(Joi.string().pattern(/^[a-zA-Z0-9_.-]+$/)),
+});
+const oauthConfigSchema = Joi.object({
+  introspectionEndpoint: providerEndpoint,
+  tokenEndpoint: providerEndpoint,
+  clientId: Joi.string()
+    .pattern(/^\S+$/)
+    .custom((value, helpers) =>
+      [...value].some(
+        (char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127,
+      )
+        ? helpers.error('any.invalid')
+        : value,
+    )
+    .required(),
+  clientSecret: Joi.string().required(),
+  scopes: Joi.array().items(
+    Joi.string()
+      .pattern(/^\S+$/)
+      .custom((value, helpers) =>
+        [...value].some(
+          (char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127,
+        )
+          ? helpers.error('any.invalid')
+          : value,
+      ),
+  ),
+  issuer: Joi.string(),
+  audience: Joi.string(),
+  headerName: Joi.string()
+    .pattern(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/)
+    .custom((value, helpers) => {
+      const name = value.toLowerCase();
+      return [
+        'host',
+        'content-length',
+        'transfer-encoding',
+        'connection',
+        'upgrade',
+        'proxy-authorization',
+      ].includes(name) || name.startsWith('sec-websocket-')
+        ? helpers.error('any.invalid')
+        : value;
+    }),
+}).xor('introspectionEndpoint', 'tokenEndpoint');
+
 function validatePlugins(plugins: unknown): void {
-  if (!plugins) return;
+  if (plugins === null || plugins === undefined) return;
   if (!Array.isArray(plugins))
     throw new BadRequestException('plugins must be an array');
   for (const entry of plugins) {
@@ -71,6 +130,16 @@ function validatePlugins(plugins: unknown): void {
         `plugin "${entry.name}" config must be an object`,
       );
     }
+    const schema =
+      entry.name === 'oidc'
+        ? oidcConfigSchema
+        : entry.name === 'oauth2-client-credentials'
+          ? oauthConfigSchema
+          : undefined;
+    if (schema?.validate(entry.config).error)
+      throw new BadRequestException(
+        `Invalid ${entry.name} configuration: check endpoint, credentials and optional fields`,
+      );
   }
 }
 

@@ -14,7 +14,12 @@ import {
   deleteRoute,
 } from '../../../lib/api-client';
 import { useTenantId } from '../../../lib/auth';
-import type { Route, Service, CreateRouteDto } from '../../../lib/api-client';
+import type {
+  Route,
+  Service,
+  CreateRouteDto,
+  OAuth2PluginConfig,
+} from '../../../lib/api-client';
 
 const METHOD_COLORS: Record<string, string> = {
   GET: 'bg-blue-100 text-blue-700',
@@ -118,6 +123,18 @@ interface PluginsFormState {
   requestSizeLimitConfig: RequestSizeLimitConfig;
   oidc: boolean;
   oidcConfig: OidcConfig;
+  oauth: boolean;
+  oauthConfig: {
+    mode: 'introspection' | 'outbound';
+    endpoint: string;
+    clientId: string;
+    clientSecret: string;
+    scopes: string;
+    headerName: string;
+    issuer: string;
+    audience: string;
+  };
+  originalPlugins: PluginEntry[];
   hmacAuth: boolean;
   hmacAuthConfig: HmacAuthConfig;
   acl: boolean;
@@ -159,6 +176,18 @@ const EMPTY_PLUGINS_FORM: PluginsFormState = {
   requestSizeLimitConfig: { maxBodyBytes: '' },
   oidc: false,
   oidcConfig: { jwksUri: '', issuer: '', audience: '', claimsToForward: '' },
+  oauth: false,
+  oauthConfig: {
+    mode: 'introspection',
+    endpoint: '',
+    clientId: '',
+    clientSecret: '',
+    scopes: '',
+    headerName: 'authorization',
+    issuer: '',
+    audience: '',
+  },
+  originalPlugins: [],
   hmacAuth: false,
   hmacAuthConfig: {
     header: 'x-hub-signature-256',
@@ -337,6 +366,25 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
     result.push({ name: 'oidc', config: cfg });
   }
 
+  if (pf.oauth) {
+    const config: OAuth2PluginConfig = {
+      ...(pf.oauthConfig.mode === 'introspection'
+        ? { introspectionEndpoint: pf.oauthConfig.endpoint }
+        : { tokenEndpoint: pf.oauthConfig.endpoint }),
+      clientId: pf.oauthConfig.clientId,
+      clientSecret: pf.oauthConfig.clientSecret,
+      ...(pf.oauthConfig.scopes
+        ? { scopes: pf.oauthConfig.scopes.split(/[,\s]+/).filter(Boolean) }
+        : {}),
+      ...(pf.oauthConfig.headerName
+        ? { headerName: pf.oauthConfig.headerName }
+        : {}),
+      ...(pf.oauthConfig.issuer ? { issuer: pf.oauthConfig.issuer } : {}),
+      ...(pf.oauthConfig.audience ? { audience: pf.oauthConfig.audience } : {}),
+    };
+    result.push({ name: 'oauth2-client-credentials', config: { ...config } });
+  }
+
   if (pf.hmacAuth && pf.hmacAuthConfig.secrets) {
     const cfg: Record<string, unknown> = {
       header: pf.hmacAuthConfig.header || 'x-hub-signature-256',
@@ -372,12 +420,68 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
     result.push({ name: 'mtls', config: { required: pf.mtlsConfig.required } });
   }
 
-  return result;
+  const modeled: Record<string, string[]> = {
+    cors: ['origins', 'methods', 'headers', 'credentials', 'maxAge'],
+    'ip-restriction': ['allow', 'deny'],
+    'rate-limit': ['max', 'windowMs'],
+    'request-size-limit': ['maxBodyBytes'],
+    'request-transform': [
+      'addHeaders',
+      'removeHeaders',
+      'renameHeaders',
+      'addQueryParams',
+      'removeQueryParams',
+    ],
+    'response-transform': ['addHeaders', 'removeHeaders', 'statusOverride'],
+    'basic-auth': ['credentials', 'realm'],
+    oidc: ['jwksUri', 'issuer', 'audience', 'claimsToForward'],
+    'oauth2-client-credentials': [
+      'introspectionEndpoint',
+      'tokenEndpoint',
+      'clientId',
+      'clientSecret',
+      'scopes',
+      'headerName',
+      'issuer',
+      'audience',
+    ],
+    'hmac-auth': [
+      'header',
+      'algorithm',
+      'secrets',
+      'maxClockSkewSeconds',
+      'timestampHeader',
+    ],
+    acl: ['allow', 'deny'],
+    mtls: ['required'],
+  };
+  const remaining = [...result];
+  const ordered: PluginEntry[] = [];
+  for (const original of pf.originalPlugins) {
+    if (!modeled[original.name]) {
+      ordered.push(original);
+      continue;
+    }
+    const index = remaining.findIndex((entry) => entry.name === original.name);
+    if (index >= 0)
+      ordered.push({
+        name: original.name,
+        config: {
+          ...Object.fromEntries(
+            Object.entries(original.config).filter(
+              ([name]) => !modeled[original.name].includes(name),
+            ),
+          ),
+          ...remaining.splice(index, 1)[0].config,
+        },
+      });
+  }
+  return [...ordered, ...remaining];
 }
 
 function pluginsToForm(plugins: PluginEntry[] | undefined): PluginsFormState {
   if (!plugins?.length) return EMPTY_PLUGINS_FORM;
-  const state = { ...EMPTY_PLUGINS_FORM };
+  const state = { ...EMPTY_PLUGINS_FORM, originalPlugins: plugins };
 
   for (const p of plugins) {
     const cfg = p.config;
@@ -460,6 +564,19 @@ function pluginsToForm(plugins: PluginEntry[] | undefined): PluginsFormState {
         audience: (cfg.audience as string | undefined) ?? '',
         claimsToForward:
           (cfg.claimsToForward as string[] | undefined)?.join(',') ?? '',
+      };
+    } else if (p.name === 'oauth2-client-credentials') {
+      state.oauth = true;
+      const oauth = cfg as unknown as OAuth2PluginConfig;
+      state.oauthConfig = {
+        mode: oauth.introspectionEndpoint ? 'introspection' : 'outbound',
+        endpoint: oauth.introspectionEndpoint ?? oauth.tokenEndpoint ?? '',
+        clientId: oauth.clientId,
+        clientSecret: oauth.clientSecret,
+        scopes: oauth.scopes?.join(', ') ?? '',
+        headerName: oauth.headerName ?? 'authorization',
+        issuer: oauth.issuer ?? '',
+        audience: oauth.audience ?? '',
       };
     } else if (p.name === 'hmac-auth') {
       state.hmacAuth = true;
@@ -672,6 +789,7 @@ function PluginsTab({
   pf: PluginsFormState;
   setPf: (patch: Partial<PluginsFormState>) => void;
 }) {
+  const oauthModeId = useId();
   const activeCount = [
     pf.cors,
     pf.ipRestriction,
@@ -681,6 +799,7 @@ function PluginsTab({
     pf.responseTransform,
     pf.basicAuth,
     pf.oidc,
+    pf.oauth,
     pf.hmacAuth,
     pf.acl,
     pf.mtls,
@@ -1026,6 +1145,117 @@ function PluginsTab({
       <hr className="border-gray-100" />
 
       <PluginSection
+        title="OAuth 2.0"
+        description="Verify client tokens or obtain credentials for an upstream service"
+        enabled={pf.oauth}
+        onToggle={(v) => setPf({ oauth: v })}
+      >
+        <div className="flex flex-col gap-1 text-sm text-gray-700">
+          <label htmlFor={oauthModeId}>OAuth purpose</label>
+          <select
+            id={oauthModeId}
+            className="rounded-md border border-gray-300 px-3 py-2"
+            value={pf.oauthConfig.mode}
+            onChange={(e) =>
+              setPf({
+                oauthConfig: {
+                  ...pf.oauthConfig,
+                  mode: e.target.value as 'introspection' | 'outbound',
+                  issuer: '',
+                  audience: '',
+                },
+              })
+            }
+          >
+            <option value="introspection">Verify incoming client tokens</option>
+            <option value="outbound">Obtain upstream credentials</option>
+          </select>
+        </div>
+        <p className="rounded-lg bg-blue-50 p-3 text-sm text-blue-800">
+          {pf.oauthConfig.mode === 'introspection'
+            ? 'Checks each client token with your identity provider. Only verified active tokens can satisfy required route authentication.'
+            : 'Adds a service token to upstream requests. This does not authenticate your clients; configure separate incoming authentication for protected routes.'}
+        </p>
+        <TextInput
+          label={
+            pf.oauthConfig.mode === 'introspection'
+              ? 'Introspection endpoint'
+              : 'Token endpoint'
+          }
+          value={pf.oauthConfig.endpoint}
+          onChange={(v) =>
+            setPf({ oauthConfig: { ...pf.oauthConfig, endpoint: v } })
+          }
+          placeholder="https://identity.example.com/oauth"
+        />
+        <TextInput
+          label="OAuth client ID"
+          value={pf.oauthConfig.clientId}
+          onChange={(v) =>
+            setPf({ oauthConfig: { ...pf.oauthConfig, clientId: v } })
+          }
+        />
+        <label className="flex flex-col gap-1 text-sm text-gray-700">
+          OAuth client secret
+          <input
+            type="password"
+            autoComplete="new-password"
+            className="rounded-md border border-gray-300 px-3 py-2"
+            value={pf.oauthConfig.clientSecret}
+            onChange={(e) =>
+              setPf({
+                oauthConfig: {
+                  ...pf.oauthConfig,
+                  clientSecret: e.target.value,
+                },
+              })
+            }
+          />
+        </label>
+        {pf.oauthConfig.mode === 'introspection' ? (
+          <>
+            <TextInput
+              label="OAuth expected issuer (optional)"
+              value={pf.oauthConfig.issuer}
+              onChange={(v) =>
+                setPf({ oauthConfig: { ...pf.oauthConfig, issuer: v } })
+              }
+            />
+            <TextInput
+              label="OAuth expected audience (optional)"
+              value={pf.oauthConfig.audience}
+              onChange={(v) =>
+                setPf({ oauthConfig: { ...pf.oauthConfig, audience: v } })
+              }
+            />
+          </>
+        ) : (
+          <>
+            <TextInput
+              label="OAuth scopes (comma separated)"
+              value={pf.oauthConfig.scopes}
+              onChange={(v) =>
+                setPf({ oauthConfig: { ...pf.oauthConfig, scopes: v } })
+              }
+            />
+            <TextInput
+              label="Upstream token header"
+              value={pf.oauthConfig.headerName}
+              onChange={(v) =>
+                setPf({ oauthConfig: { ...pf.oauthConfig, headerName: v } })
+              }
+              placeholder="authorization"
+            />
+          </>
+        )}
+        <p className="text-xs text-gray-500">
+          Use HTTPS. Private HTTP providers require explicit gateway operator
+          configuration.
+        </p>
+      </PluginSection>
+      <hr className="border-gray-100" />
+
+      <PluginSection
         title="HMAC Auth"
         description="Validate HMAC request signatures (Stripe, GitHub webhooks)"
         enabled={pf.hmacAuth}
@@ -1272,6 +1502,7 @@ export default function RoutesPage() {
     pluginsForm.responseTransform,
     pluginsForm.basicAuth,
     pluginsForm.oidc,
+    pluginsForm.oauth,
     pluginsForm.hmacAuth,
     pluginsForm.acl,
     pluginsForm.mtls,

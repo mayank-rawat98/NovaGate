@@ -48,6 +48,10 @@ const receivedWsUrls = [];
 const trustedHealthRequests = [];
 let acknowledged = 0;
 let config;
+let identityCalls = 0;
+let inactiveIdentityCalls = 0;
+let outboundIdentityCalls = 0;
+let untrustedIdentityCalls = 0;
 const consumerKey = 'container-verification-consumer';
 const replyText = 'packaged TLS response';
 const replyMessage = Buffer.concat([
@@ -239,6 +243,53 @@ try {
     untrusted,
     () => untrustedWsCalls++,
   );
+  const identity = https.createServer(trusted, (req, res) => {
+    req.resume();
+    req.once('end', () => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url === '/token') {
+        outboundIdentityCalls++;
+        res.end(
+          JSON.stringify({
+            access_token: 'upstream-provider-token',
+            token_type: 'Bearer',
+            expires_in: 300,
+          }),
+        );
+      } else if (req.url === '/inactive') {
+        inactiveIdentityCalls++;
+        res.end(JSON.stringify({ active: false }));
+      } else {
+        identityCalls++;
+        res.end(
+          JSON.stringify({
+            active: true,
+            sub: 'provider-subject',
+            exp: Math.floor(Date.now() / 1000) + 300,
+          }),
+        );
+      }
+    });
+  });
+  servers.push(identity);
+  await new Promise((done) => identity.listen(0, '0.0.0.0', done));
+  const identityBase = `https://host.docker.internal:${identity.address().port}`;
+  const untrustedIdentity = https.createServer(untrusted, (_req, res) => {
+    untrustedIdentityCalls++;
+    res.end(JSON.stringify({ active: true }));
+  });
+  servers.push(untrustedIdentity);
+  await new Promise((done) => untrustedIdentity.listen(0, '0.0.0.0', done));
+  const untrustedIdentityEndpoint = `https://host.docker.internal:${untrustedIdentity.address().port}`;
+
+  const authPlugin = (endpoint = '/introspect') => ({
+    name: 'oauth2-client-credentials',
+    config: {
+      introspectionEndpoint: identityBase + endpoint,
+      clientId: 'fixture',
+      clientSecret: 'fixture-secret',
+    },
+  });
   config = {
     routes: [
       {
@@ -567,16 +618,140 @@ try {
     'accepted WebSocket metrics',
   );
   // Explicit fallback reaches the transport even if the untrusted health probe
-  // fails first, so this proves certificate validation in the forwarding path.
-  config.services[0].targets = [{ url: untrustedTarget, weight: 1 }];
-  config.services[0].unhealthyFallback = true;
-  config.services[1].targets = [{ url: untrustedWsTarget, weight: 1 }];
   const removedWs = once(websocket, 'close');
+  // Real HTTPS provider and private Redis: reuse within scope, never across providers.
+  config.routes[0].plugins = [authPlugin()];
+  config.routes.find((route) => route.id === 'ws-route').plugins = [
+    authPlugin(),
+  ];
+  config.routes.push({
+    id: 'provider-http',
+    method: 'GET',
+    pathPattern: '/identity',
+    serviceId: 'service',
+    enabled: true,
+    authRequired: true,
+    plugins: [authPlugin()],
+  });
+  config.routes.push({
+    id: 'inactive-http',
+    method: 'GET',
+    pathPattern: '/inactive-identity',
+    serviceId: 'service',
+    enabled: true,
+    authRequired: true,
+    plugins: [authPlugin('/inactive')],
+  });
+  config.routes.push({
+    id: 'untrusted-provider',
+    method: 'GET',
+    pathPattern: '/untrusted-identity',
+    serviceId: 'service',
+    enabled: true,
+    authRequired: true,
+    plugins: [
+      {
+        name: 'oauth2-client-credentials',
+        config: {
+          introspectionEndpoint: untrustedIdentityEndpoint,
+          clientId: 'fixture',
+          clientSecret: 'fixture-secret',
+        },
+      },
+    ],
+  });
   for (const socket of plane.clients)
     socket.send(
       JSON.stringify({ type: 'config.update', version: 3, payload: config }),
     );
-  await until(() => acknowledged === 3, 'updated target ACK');
+  await until(() => acknowledged === 3, 'provider config ACK');
+  const opaque = { authorization: 'Bearer same-provider-token' };
+  assert.equal(
+    (await fetch(`http://127.0.0.1:${httpPort}/identity`, { headers: opaque }))
+      .status,
+    200,
+  );
+  assert.equal(
+    (await call(grpcPort, trusted.cert, opaque.authorization)).status,
+    '0',
+  );
+  const providerSocket = new WebSocket(`ws://127.0.0.1:${httpPort}/socket`, {
+    headers: opaque,
+  });
+  websocketClients.add(providerSocket);
+  await once(providerSocket, 'open');
+  providerSocket.close();
+  await once(providerSocket, 'close');
+  assert.equal(
+    identityCalls,
+    1,
+    'HTTP, gRPC and WS share only the identical scoped cache',
+  );
+  assert.equal(
+    (
+      await fetch(`http://127.0.0.1:${httpPort}/inactive-identity`, {
+        headers: opaque,
+      })
+    ).status,
+    401,
+  );
+  assert.equal(
+    inactiveIdentityCalls,
+    1,
+    'Other provider must verify despite same token',
+  );
+  assert.equal(
+    (
+      await fetch(`http://127.0.0.1:${httpPort}/untrusted-identity`, {
+        headers: opaque,
+      })
+    ).status,
+    503,
+  );
+  assert.equal(untrustedIdentityCalls, 0);
+  const cacheKeys = docker(
+    'exec',
+    redisName,
+    'redis-cli',
+    '--raw',
+    'KEYS',
+    'oauth2:introspect:v2:*',
+  )
+    .split('\n')
+    .filter(Boolean);
+  assert.equal(cacheKeys.length, 1);
+  const lifetime = Number(
+    docker('exec', redisName, 'redis-cli', '--raw', 'PTTL', cacheKeys[0]),
+  );
+  assert.ok(lifetime > 0 && lifetime <= 30000);
+  const outbound = {
+    name: 'oauth2-client-credentials',
+    config: {
+      tokenEndpoint: identityBase + '/token',
+      clientId: 'fixture',
+      clientSecret: 'fixture-secret',
+    },
+  };
+  config.routes.find((route) => route.id === 'provider-http').plugins = [
+    outbound,
+  ];
+  config.routes[0].plugins = undefined;
+  config.routes.find((route) => route.id === 'ws-route').plugins = undefined;
+  // fails first, so this proves certificate validation in the forwarding path.
+  config.services[0].targets = [{ url: untrustedTarget, weight: 1 }];
+  config.services[0].unhealthyFallback = true;
+  config.services[1].targets = [{ url: untrustedWsTarget, weight: 1 }];
+
+  for (const socket of plane.clients)
+    socket.send(
+      JSON.stringify({ type: 'config.update', version: 4, payload: config }),
+    );
+  await until(() => acknowledged === 4, 'updated target ACK');
+  assert.equal(
+    (await fetch(`http://127.0.0.1:${httpPort}/identity`)).status,
+    401,
+  );
+  assert.equal(outboundIdentityCalls, 1);
   assert.equal((await call(grpcPort, trusted.cert)).status, '14');
   assert.equal(untrustedCalls, 0);
   await removedWs;
@@ -623,7 +798,16 @@ try {
         grpcurlImage,
         untrustedCalls,
         configVersion: acknowledged,
+        untrustedIdentityCalls,
+        identityCalls,
+        inactiveIdentityCalls,
+        outboundIdentityCalls,
         checks: [
+          'HTTPS-provider-scoped-Redis-HTTP-gRPC-WebSocket',
+          'identical-token-other-provider-inactive',
+          'untrusted-provider-certificate-rejected',
+          'live-Redis-active-result-expiration-capped',
+          'outbound-provider-token-does-not-authenticate-client',
           'trusted-listener-and-upstream-TLS',
           'native-health-RPC',
           'metadata-trailers',
