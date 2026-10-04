@@ -400,3 +400,20 @@ OpenSSL verifies native certificate paths and any configured CRLs. PEM listener/
 Forwarded certificates default off. `MTLS_TRUSTED_PROXY_CIDRS` explicitly trusts only the actual socket peer; it is separate from IP forwarding trust. Your trusted TLS terminator must verify client private-key possession and overwrite `ssl_client_cert` plus `ssl_client_verify: SUCCESS` (or the corresponding `x-ssl-client-cert`/`x-ssl-client-verify` pair). For intermediate chains, include the validated client chain in the URL-encoded PEM assertion. Duplicate/ambiguous assertions are rejected. Restrict access to that gateway connection to the trusted proxy; forwarded client IPs cannot grant certificate trust. The gateway rechecks current tenant anchors and clientAuth usage; full path/revocation verification belongs to the trusted terminator.
 
 Verified identity uses a certificate fingerprint, with a bounded safe subject header. The Docker health probe checks loopback HTTPS when enabled and skips certificate/hostname verification only for that local liveness request; client/provider/upstream TLS verification remains enabled. Native listener behavior follows the [Node TLS documentation](https://nodejs.org/download/release/v24.20.0/docs/api/tls.html).
+
+### Webhook signatures
+
+Use `hmac-auth` with `mode: generic` (the default) for GitHub/raw-body SHA-256 or SHA-512 signatures. Use `mode: stripe`, `header: stripe-signature`, `algorithm: sha256` for Stripe's `t=<seconds>,v1=<hex>` format: the signed bytes are `timestamp.body`. Multiple v1 signatures and up to eight overlapping secrets support rotation. Original wire headers and bytes are captured before body-aware hooks; policy hooks retain their saved order. Duplicate signature headers, partial hex, invalid/absent signed timestamps and stale/future timestamps fail closed.
+
+For custom generic timestamp signatures, configuring `timestampHeader` **requires signing `timestamp.body`**. This corrects the old unsigned timestamp check: senders using that option must update their signing format. Freshness defaults to 300 seconds and may be configured from 1–3600 seconds. A timestamp-free GitHub signature proves body authenticity but does not prevent replay. Keep durable event-ID deduplication in your application: valid provider retries are intentionally accepted. Use HTTPS and high-entropy private signing secrets; never put secrets in logs or source control. These are HTTP webhook policies, not gRPC/WebSocket handshake credentials.
+
+| Gateway setting             | Default | Bounds/purpose                                                                      |
+| --------------------------- | ------- | ----------------------------------------------------------------------------------- |
+| `HMAC_MAX_BODY_BYTES`       | 1048576 | 1–16777216 bytes; the smaller explicit route size limit also applies                |
+| `HMAC_BODY_TIMEOUT_MS`      | 5000    | 100–30000 ms absolute upload deadline                                               |
+| `HMAC_MAX_PENDING_REQUESTS` | 32      | 1–256 concurrent prepared requests, retained until response completion/cancellation |
+| `HMAC_MAX_HEADER_BYTES`     | 4096    | 128–16384 bytes per signature/timestamp field                                       |
+
+Each route permits up to eight nonempty secrets, each at most 4096 UTF-8 bytes, and at most eight Stripe v1 signatures. Oversized uploads return 413, upload deadlines 408, admission exhaustion 503 and signature failures 401. Limits apply to cached and chunked bodies; cancelled/aborted uploads release listeners and admission. Preparation never authenticates: verification remains in the ordered HMAC policy hook.
+
+Provider references: [GitHub validation and reference vector](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries), [Stripe webhook verification](https://docs.stripe.com/webhooks), [Stripe's signature implementation](https://github.com/stripe/stripe-node/blob/master/src/Webhooks.ts).

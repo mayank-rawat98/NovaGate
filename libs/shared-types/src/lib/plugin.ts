@@ -37,6 +37,10 @@ export interface GatewayPlugin {
   /** Missing capability declarations default to HTTP only. */
   protocols?: readonly ('http' | 'websocket' | 'grpc')[];
 
+  /** Optional bounded raw-body preparation before ordered policy hooks.
+   * Must not establish authentication or transform the request. */
+  prepareRequest?(ctx: PluginContext): Promise<PluginShortCircuit | void>;
+
   /**
    * Called before the request reaches the proxy.
    * Return a PluginShortCircuit to stop processing and send that response.
@@ -85,4 +89,19 @@ export const MAX_TENANT_CA_BUNDLE_BYTES = 65536;
 export const MAX_TENANT_CA_CERTIFICATES = 8;
 export interface MtlsPluginConfig {
   required: boolean;
+}
+
+/** Bounded public configuration contract for webhook signing secrets. */
+export const MAX_HMAC_SECRETS = 8;
+export const MAX_HMAC_SECRET_BYTES = 4096;
+export const MAX_HMAC_CLOCK_SKEW_SECONDS = 3600;
+export interface HmacPluginConfig {
+  /** Legacy raw-body signatures default to generic; Stripe signs timestamp.body. */
+  mode?: 'generic' | 'stripe';
+  header: string;
+  algorithm: 'sha256' | 'sha512';
+  secrets: string[];
+  maxClockSkewSeconds?: number;
+  /** Generic mode signs timestamp.body when this required header is configured. */
+  timestampHeader?: string;
 }

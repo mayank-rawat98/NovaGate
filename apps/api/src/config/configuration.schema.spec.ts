@@ -220,4 +220,18 @@ describe('native TLS and mTLS trust policy startup', () => {
         MTLS_TRUSTED_PROXY_CIDRS: '127.0.0.1/32,::1/128',
       }).error,
     ).toBeUndefined());
+  it.each([
+    { HMAC_MAX_BODY_BYTES: 0 },
+    { HMAC_MAX_BODY_BYTES: 16777217 },
+    { HMAC_BODY_TIMEOUT_MS: 99 },
+    { HMAC_BODY_TIMEOUT_MS: 30001 },
+    { HMAC_MAX_PENDING_REQUESTS: 0 },
+    { HMAC_MAX_PENDING_REQUESTS: 257 },
+    { HMAC_MAX_HEADER_BYTES: 127 },
+    { HMAC_MAX_HEADER_BYTES: 16385 },
+  ])('rejects unsafe webhook upload settings %j', (settings) => {
+    expect(
+      configSchema.validate({ ...required, ...settings }).error,
+    ).toBeDefined();
+  });
 });

@@ -70,7 +70,7 @@ enabled toggle, rate limit override.
 - `basic-auth` — realm, credentials (username:password pairs, one per line; stored as SHA-256 hashes)
 - `oauth2-client-credentials` — explicit inbound introspection or outbound service-token mode; endpoint, client ID and password-masked client secret; optional issuer/audience or scopes/header. Outbound mode must explain that it does not authenticate clients. Preserve original plugin order and unmodeled configurations on edit.
 - `oidc` — jwksUri, issuer, audience (optional), claimsToForward (comma-sep, optional)
-- `hmac-auth` — header name, algorithm (sha256/sha512), secrets (one per line for rotation), timestampHeader + maxClockSkewSeconds (optional)
+- `hmac-auth` — explicit GitHub/generic or Stripe format, signature header, algorithm (Stripe fixed SHA-256), rotation secrets, signed custom timestamp and freshness window. Explain body-only replay limitations and handler event-ID deduplication; preserve format on edit.
 - `acl` — allow/deny group lists (comma-sep); groups assigned per consumer
 - `mtls` — require a verified TLS client certificate; public CA trust bundle uploaded in Settings. Explain native listener/operator setup and explicit proxy trust. Save failure preserves input; blank input cannot remove trust, and removal uses a named explicit control.
 

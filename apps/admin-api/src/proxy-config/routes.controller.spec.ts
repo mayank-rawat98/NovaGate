@@ -161,4 +161,53 @@ describe('RoutesController', () => {
       expect(cp.triggerUpdate).not.toHaveBeenCalled();
     },
   );
+  it.each([
+    { algorithm: 'md5' },
+    { secrets: [] },
+    { secrets: [''] },
+    { secrets: ['x'.repeat(4097)] },
+    { secrets: Array(9).fill('fixture') },
+    { header: 'invalid header' },
+    { mode: 'stripe', algorithm: 'sha512' },
+    { mode: 'stripe', timestampHeader: 'x-time' },
+    { maxClockSkewSeconds: 0 },
+    { maxClockSkewSeconds: 300 },
+    { timestampHeader: 'x-signature' },
+    { timestampHeader: 'x-time', maxClockSkewSeconds: '300' },
+  ])('rejects invalid HMAC policy before persistence: %j', async (bad) => {
+    const { controller, ds, cp } = await build();
+    await expect(
+      controller.create(TENANT, {
+        plugins: [
+          {
+            name: 'hmac-auth',
+            config: {
+              header: 'x-signature',
+              algorithm: 'sha256',
+              secrets: ['fixture'],
+              ...bad,
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow();
+    expect(ds.query).not.toHaveBeenCalled();
+    expect(cp.triggerUpdate).not.toHaveBeenCalled();
+  });
+  it('persists Stripe signing mode with overlapping rotation keys', async () => {
+    const { controller, ds, cp } = await build();
+    ds.query.mockResolvedValue([{ id: 'fixture' }]);
+    const config = {
+      mode: 'stripe',
+      header: 'stripe-signature',
+      algorithm: 'sha256',
+      secrets: ['old', 'new'],
+      maxClockSkewSeconds: 300,
+    };
+    await controller.create(TENANT, {
+      plugins: [{ name: 'hmac-auth', config }],
+    });
+    expect(ds.query).toHaveBeenCalled();
+    expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
+  });
 });

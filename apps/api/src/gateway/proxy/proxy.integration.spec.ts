@@ -2,7 +2,7 @@ import { Global, INestApplication, Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
-import { createHash, generateKeyPairSync } from 'crypto';
+import { createHmac, createHash, generateKeyPairSync } from 'crypto';
 import * as http from 'http';
 import * as http2 from 'http2';
 import { sign } from 'jsonwebtoken';
@@ -32,6 +32,7 @@ import { GatewayTelemetryService } from '../telemetry/gateway-telemetry.service'
       provide: ConfigService,
       useValue: new ConfigService({
         identityProvider: { allowInsecureHttp: true },
+        hmac: { maxBodyBytes: 128, bodyTimeoutMs: 200, maxPendingRequests: 1 },
       }),
     },
   ],
@@ -490,5 +491,133 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
       'x-ssl-client-fingerprint',
     ])
       expect(received[0].headers[name]).toBeUndefined();
+  });
+  function webhook(mode: 'generic' | 'stripe' = 'stripe') {
+    config.routes[0].authRequired = true;
+    config.routes[0].plugins = [
+      {
+        name: 'hmac-auth',
+        config: {
+          mode,
+          header: 'stripe-signature',
+          algorithm: 'sha256',
+          secrets: ['old-secret', 'fixture-secret'],
+        },
+      },
+    ];
+  }
+  function webhookSignature(
+    body: Buffer,
+    timestamp = Math.floor(Date.now() / 1000),
+  ): string {
+    return `t=${timestamp},v1=${createHmac('sha256', 'fixture-secret').update(`${timestamp}.`).update(body).digest('hex')}`;
+  }
+  it('authenticates Stripe binary chunked bytes and forwards them unchanged exactly once', async () => {
+    webhook();
+    const body = Buffer.from([0, 255, 128, 13, 10, 32, 123, 125]);
+    expect(
+      (
+        await upload([body.subarray(0, 3), body.subarray(3)], {
+          'stripe-signature': webhookSignature(body),
+        })
+      ).status,
+    ).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0].body).toBe(body.toString('base64'));
+    expect(received[0].headers['content-length']).toBe(String(body.length));
+    expect(received[0].headers['transfer-encoding']).toBeUndefined();
+  });
+  it('rejects tampered or stale Stripe deliveries without contacting upstream', async () => {
+    webhook();
+    const body = Buffer.from('{ "event": "fixture" }');
+    for (const sig of [
+      webhookSignature(body),
+      webhookSignature(
+        Buffer.from('changed'),
+        Math.floor(Date.now() / 1000) - 600,
+      ),
+    ])
+      expect(
+        (await upload([Buffer.from('changed')], { 'stripe-signature': sig }))
+          .status,
+      ).toBe(401);
+    expect(received).toHaveLength(0);
+  });
+  it('rejects oversized chunked signed uploads before upstream and retains admission', async () => {
+    webhook();
+    const body = Buffer.alloc(129, 1);
+    expect(
+      (
+        await upload([body.subarray(0, 64), body.subarray(64)], {
+          'stripe-signature': webhookSignature(body),
+        })
+      ).status,
+    ).toBe(413);
+    expect(received).toHaveLength(0);
+    const next = Buffer.from('next');
+    expect(
+      (await upload([next], { 'stripe-signature': webhookSignature(next) }))
+        .status,
+    ).toBe(200);
+  });
+  it('times out a stalled HTTP upload and accepts a subsequent delivery', async () => {
+    webhook();
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = http.request(
+        `${url}/api`,
+        {
+          method: 'POST',
+          headers: {
+            'stripe-signature': webhookSignature(Buffer.from('x')),
+            'transfer-encoding': 'chunked',
+          },
+        },
+        (res) => {
+          res.resume();
+          res.once('end', () => {
+            req.destroy();
+            resolve(res.statusCode ?? 0);
+          });
+        },
+      );
+      req.once('error', reject);
+      req.write('x');
+    });
+    expect(status).toBe(408);
+    expect(received).toHaveLength(0);
+    const next = Buffer.from('next');
+    expect(
+      (await upload([next], { 'stripe-signature': webhookSignature(next) }))
+        .status,
+    ).toBe(200);
+  });
+
+  it('prepares bounded signed bytes before earlier size and GraphQL body hooks while preserving policy order', async () => {
+    webhook();
+    config.routes[0].graphql = { maxDepth: 3 };
+    config.routes[0].plugins?.unshift(
+      { name: 'request-size-limit', config: { maxBodyBytes: 256 } },
+      { name: 'graphql-guard', config: {} },
+    );
+    const body = Buffer.alloc(129, 32);
+    expect(
+      (
+        await upload([body], {
+          'stripe-signature': webhookSignature(body),
+          'content-type': 'application/json',
+        })
+      ).status,
+    ).toBe(413);
+    expect(received).toHaveLength(0);
+    const valid = Buffer.from('{"query":"{ hello }"}');
+    expect(
+      (
+        await upload([valid], {
+          'stripe-signature': webhookSignature(valid),
+          'content-type': 'application/json',
+        })
+      ).status,
+    ).toBe(200);
+    expect(received[0].body).toBe(valid.toString('base64'));
   });
 });

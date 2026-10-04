@@ -117,9 +117,10 @@ The current Nest pipeline is:
 1. `JwtMiddleware` verifies gateway consumer JWTs and attaches `req.user`.
 2. `RateLimitGuard` checks the consumer tier. Browser CORS preflights bypass quota consumption.
 3. `LoggingInterceptor` wraps the controller/proxy lifecycle.
-4. `ProxyService` matches the route and executes configured plugin request hooks in order.
-5. After plugins verify credentials, `authRequired` accepts a verified gateway consumer or `ctx.authentication` set by an authentication plugin.
-6. The upstream proxy runs response hooks before sending headers/body; error hooks run on proxy failures.
+4. `ProxyService` matches the route. Bounded `prepareRequest` hooks capture signed raw bytes without authentication or transformations before body-aware policy hooks.
+5. Configured plugin request hooks execute in saved order.
+6. After plugins verify credentials, `authRequired` accepts a verified gateway consumer or `ctx.authentication` set by an authentication plugin.
+7. The upstream proxy runs response hooks before sending headers/body; error hooks run on proxy failures.
 
 CORS preflights match the requested method, run only the CORS plugin and terminate before upstream forwarding or route authentication. GraphQL routes automatically include their guard. Other request plugins retain the configured order.
 
