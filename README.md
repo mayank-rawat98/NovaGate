@@ -230,44 +230,57 @@ TLS and routing: the VPS is shared with squadup.in, whose Caddy owns ports 80/44
 
 ## Gateway Environment Variables
 
-| Variable                       | Default     | Notes                                                                                            |
-| ------------------------------ | ----------- | ------------------------------------------------------------------------------------------------ |
-| `GATEWAY_API_KEY`              | required    | Authenticates gateway with control plane                                                         |
-| `CONTROL_PLANE_URL`            | required    | `wss://ws.novagate.dev/gateway-ws`                                                               |
-| `REDIS_URL`                    | required    | Local Redis for config cache and rate limiting                                                   |
-| `JWT_SECRET`                   | required    | Min 32 chars — validates consumer tokens                                                         |
-| `TRUSTED_PROXY_CIDRS`          | empty       | Comma-separated trusted reverse-proxy IPs/CIDRs; forwarding headers are ignored by default       |
-| `PORT`                         | `3000`      | HTTP port                                                                                        |
-| `HEALTH_DEFAULT_INTERVAL_MS`   | `10000`     | Legacy service probe interval; integer 1000–60000 ms, overridden by service settings             |
-| `HEALTH_FAILURE_THRESHOLD`     | `3`         | Consecutive failures before eviction; integer 1–10                                               |
-| `HEALTH_RECOVERY_THRESHOLD`    | `2`         | Consecutive successes before a failed target recovers; integer 1–10                              |
-| `HEALTH_PROBE_TIMEOUT_MS`      | `3000`      | Absolute probe deadline including connection and headers; integer 100–10000 ms                   |
-| `HEALTH_PROBE_CONCURRENCY`     | `8`         | Maximum simultaneous probes per gateway; integer 1–64                                            |
-| `WS_ALLOW_QUERY_TOKEN`         | `false`     | Explicit legacy query-token opt-in; credentials are stripped from the upstream URL               |
-| `WS_HANDSHAKE_TIMEOUT_MS`      | `5000`      | Absolute auth, quota and upstream upgrade deadline, 100–60000 ms; service timeout can shorten it |
-| `WS_MAX_CONNECTIONS`           | `256`       | Cap including pending admission, accepted connections and cancelled provider work, 1–10000       |
-| `WS_MAX_HEADER_BYTES`          | `16384`     | Request and upstream handshake header limit, 1024–65536 bytes                                    |
-| `WS_MAX_BUFFERED_HEAD_BYTES`   | `65536`     | Bound on data coalesced with upgrade headers, 0–1048576 bytes                                    |
-| `WS_IDLE_TIMEOUT_MS`           | `300000`    | Inactive tunnel expiry, 1000–3600000 ms                                                          |
-| `WS_SHUTDOWN_GRACE_MS`         | `5000`      | Drain accepted tunnels before closing sockets, 0–60000 ms                                        |
-| `GRPC_ENABLED`                 | `false`     | Enable the separate native HTTP/2 gRPC listener                                                  |
-| `GRPC_ALLOW_INSECURE`          | `false`     | Explicit private cleartext operation behind a trusted TLS-terminating proxy                      |
-| `GRPC_HOST`                    | `127.0.0.1` | Listener address; container deployments need an appropriate private interface                    |
-| `GRPC_PORT`                    | `50051`     | Listener port, 1–65535                                                                           |
-| `GRPC_TLS_CERT_FILE`           | unset       | Read-only PEM server certificate file; pair with key                                             |
-| `GRPC_TLS_KEY_FILE`            | unset       | Read-only PEM private key file; pair with certificate                                            |
-| `GRPC_MAX_MESSAGE_BYTES`       | `4194304`   | Maximum encoded frame payload, 1–64 MiB; compressed payloads remain opaque                       |
-| `GRPC_MAX_HEADER_BYTES`        | `16384`     | Request/response metadata bound, 1024–65536 bytes                                                |
-| `GRPC_MAX_CONCURRENT_STREAMS`  | `100`       | Per-session stream cap, 1–1000, also capped by upstream settings                                 |
-| `GRPC_MAX_SESSIONS_PER_TARGET` | `4`         | Per-service/target upstream session cap, 1–32                                                    |
-| `GRPC_MAX_ACTIVE_CALLS`        | `256`       | Admission cap (including pending cancelled auth/quota work) and incoming-session cap, 1–10000    |
-| `GRPC_DEADLINE_MS`             | `30000`     | Absolute maximum call duration, 100–3600000 ms; caller/service deadlines can shorten it          |
-| `GRPC_IDLE_TIMEOUT_MS`         | `30000`     | Unused upstream session expiry, 1000–3600000 ms                                                  |
-| `GRPC_SHUTDOWN_GRACE_MS`       | `5000`      | Drain existing calls before cancellation, 0–60000 ms                                             |
-| `PROXY_TIMEOUT_MS`             | `10000`     | Downstream request timeout                                                                       |
-| `RATE_LIMIT_WINDOW_MS`         | `60000`     | Sliding window duration                                                                          |
-| `RATE_LIMIT_UNAUTH_MAX`        | `100`       | Requests/window for unauthenticated clients                                                      |
-| `RATE_LIMIT_AUTH_MAX`          | `500`       | Requests/window for authenticated consumers                                                      |
+| Variable                                       | Default     | Notes                                                                                            |
+| ---------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------ |
+| `GATEWAY_API_KEY`                              | required    | Authenticates gateway with control plane                                                         |
+| `CONTROL_PLANE_URL`                            | required    | `wss://ws.novagate.dev/gateway-ws`                                                               |
+| `REDIS_URL`                                    | required    | Local Redis for config cache and rate limiting                                                   |
+| `JWT_SECRET`                                   | required    | Min 32 chars — validates consumer tokens                                                         |
+| `TRUSTED_PROXY_CIDRS`                          | empty       | Comma-separated trusted reverse-proxy IPs/CIDRs; forwarding headers are ignored by default       |
+| `PORT`                                         | `3000`      | HTTP port                                                                                        |
+| `HEALTH_DEFAULT_INTERVAL_MS`                   | `10000`     | Legacy service probe interval; integer 1000–60000 ms, overridden by service settings             |
+| `HEALTH_FAILURE_THRESHOLD`                     | `3`         | Consecutive failures before eviction; integer 1–10                                               |
+| `HEALTH_RECOVERY_THRESHOLD`                    | `2`         | Consecutive successes before a failed target recovers; integer 1–10                              |
+| `HEALTH_PROBE_TIMEOUT_MS`                      | `3000`      | Absolute probe deadline including connection and headers; integer 100–10000 ms                   |
+| `HEALTH_PROBE_CONCURRENCY`                     | `8`         | Maximum simultaneous probes per gateway; integer 1–64                                            |
+| `WS_ALLOW_QUERY_TOKEN`                         | `false`     | Explicit legacy query-token opt-in; credentials are stripped from the upstream URL               |
+| `WS_HANDSHAKE_TIMEOUT_MS`                      | `5000`      | Absolute auth, quota and upstream upgrade deadline, 100–60000 ms; service timeout can shorten it |
+| `WS_MAX_CONNECTIONS`                           | `256`       | Cap including pending admission, accepted connections and cancelled provider work, 1–10000       |
+| `WS_MAX_HEADER_BYTES`                          | `16384`     | Request and upstream handshake header limit, 1024–65536 bytes                                    |
+| `WS_MAX_BUFFERED_HEAD_BYTES`                   | `65536`     | Bound on data coalesced with upgrade headers, 0–1048576 bytes                                    |
+| `WS_IDLE_TIMEOUT_MS`                           | `300000`    | Inactive tunnel expiry, 1000–3600000 ms                                                          |
+| `WS_SHUTDOWN_GRACE_MS`                         | `5000`      | Drain accepted tunnels before closing sockets, 0–60000 ms                                        |
+| `GRPC_ENABLED`                                 | `false`     | Enable the separate native HTTP/2 gRPC listener                                                  |
+| `GRPC_ALLOW_INSECURE`                          | `false`     | Explicit private cleartext operation behind a trusted TLS-terminating proxy                      |
+| `GRPC_HOST`                                    | `127.0.0.1` | Listener address; container deployments need an appropriate private interface                    |
+| `GRPC_PORT`                                    | `50051`     | Listener port, 1–65535                                                                           |
+| `GRPC_TLS_CERT_FILE`                           | unset       | Read-only PEM server certificate file; pair with key                                             |
+| `GRPC_TLS_KEY_FILE`                            | unset       | Read-only PEM private key file; pair with certificate                                            |
+| `GRPC_MAX_MESSAGE_BYTES`                       | `4194304`   | Maximum encoded frame payload, 1–64 MiB; compressed payloads remain opaque                       |
+| `GRPC_MAX_HEADER_BYTES`                        | `16384`     | Request/response metadata bound, 1024–65536 bytes                                                |
+| `GRPC_MAX_CONCURRENT_STREAMS`                  | `100`       | Per-session stream cap, 1–1000, also capped by upstream settings                                 |
+| `GRPC_MAX_SESSIONS_PER_TARGET`                 | `4`         | Per-service/target upstream session cap, 1–32                                                    |
+| `GRPC_MAX_ACTIVE_CALLS`                        | `256`       | Admission cap (including pending cancelled auth/quota work) and incoming-session cap, 1–10000    |
+| `GRPC_DEADLINE_MS`                             | `30000`     | Absolute maximum call duration, 100–3600000 ms; caller/service deadlines can shorten it          |
+| `GRPC_IDLE_TIMEOUT_MS`                         | `30000`     | Unused upstream session expiry, 1000–3600000 ms                                                  |
+| `GRPC_SHUTDOWN_GRACE_MS`                       | `5000`      | Drain existing calls before cancellation, 0–60000 ms                                             |
+| `IDENTITY_PROVIDER_ALLOW_INSECURE_HTTP`        | `false`     | Explicit private HTTP opt-in                                                                     |
+| `IDENTITY_PROVIDER_TIMEOUT_MS`                 | `5000`      | Absolute provider/cache verification deadline, 100–60000 ms                                      |
+| `IDENTITY_PROVIDER_MAX_RESPONSE_BYTES`         | `262144`    | Provider JSON response limit, 1024–1048576 bytes                                                 |
+| `IDENTITY_PROVIDER_MAX_HEADER_BYTES`           | `16384`     | Provider response header limit, 1024–65536 bytes                                                 |
+| `IDENTITY_PROVIDER_MAX_TOKEN_BYTES`            | `16384`     | Credential/token byte limit, 128–65536 bytes                                                     |
+| `IDENTITY_PROVIDER_MAX_PENDING_REQUESTS`       | `128`       | Pending callers including cancelled unsettled work, 1–10000                                      |
+| `IDENTITY_PROVIDER_MAX_CONCURRENT_FETCHES`     | `16`        | Simultaneous provider connections, 1–256                                                         |
+| `IDENTITY_PROVIDER_MAX_CACHE_ENTRIES`          | `128`       | Per-process shared LRU cache cap, 1–4096                                                         |
+| `IDENTITY_PROVIDER_MAX_JWKS_KEYS`              | `64`        | Keys accepted per JWKS document, 1–256                                                           |
+| `IDENTITY_PROVIDER_JWKS_CACHE_TTL_MS`          | `300000`    | JWKS lifetime, 1000–86400000 ms                                                                  |
+| `IDENTITY_PROVIDER_JWKS_REFRESH_COOLDOWN_MS`   | `30000`     | Unknown-key refresh cooldown, 1000–60000 ms                                                      |
+| `IDENTITY_PROVIDER_INTROSPECTION_CACHE_TTL_MS` | `30000`     | Maximum active introspection cache lifetime, 0–300000 ms; 0 disables                             |
+| `IDENTITY_PROVIDER_OUTBOUND_CACHE_TTL_MS`      | `3600000`   | Maximum outbound credential lifetime, 0–86400000 ms; 0 disables                                  |
+| `PROXY_TIMEOUT_MS`                             | `10000`     | Downstream request timeout                                                                       |
+| `RATE_LIMIT_WINDOW_MS`                         | `60000`     | Sliding window duration                                                                          |
+| `RATE_LIMIT_UNAUTH_MAX`                        | `100`       | Requests/window for unauthenticated clients                                                      |
+| `RATE_LIMIT_AUTH_MAX`                          | `500`       | Requests/window for authenticated consumers                                                      |
 
 For native gRPC upstreams, choose **Native gRPC health service** in the Services form. Leave the health service name empty to check overall server health, or enter the name registered by the upstream. The gateway calls the standard `grpc.health.v1.Health/Check` RPC and accepts only a successful `SERVING` response; it caps the encoded health response at 4096 bytes and applies the gateway probe deadline and failure/recovery thresholds. Your upstream must implement that RPC. See the [official health service schema](https://github.com/grpc/grpc-proto/blob/master/grpc/health/v1/health.proto). HTTP health checks continue to use the configured path, with HTTP/2 when that service setting is enabled.
 
@@ -358,3 +371,9 @@ Production storage is disabled until configured. [docker/object-storage.env.exam
 Keep RustFS root credentials separate from the application's archive service account. Pre-create a private archive bucket, or use `OBJECT_STORAGE_CREATE_BUCKET=true` once with a provisioning identity and disable it afterward. The application account needs bucket location/list, policy/ACL read and multipart listing permissions, plus object get/put/delete and multipart abort permissions scoped to the archive bucket. It does not need to modify policies or ACLs. Use a TLS endpoint for external storage and restrict credential access. RustFS installation/readiness guidance: [official container documentation](https://docs.rustfs.com/en/installation/container) and [health endpoints](https://docs.rustfs.com/en/operations/status-check).
 
 The bundled single-node storage has no distributed redundancy. Back up PostgreSQL job metadata and RustFS objects together, protect backup credentials and preserve the bucket/object paths. Restore both into an isolated environment first; verify a known archive through the authenticated download endpoint and confirm anonymous access is denied. Expired objects will be removed when the restored worker starts. Distributed storage, restore drills, scheduled exports, redaction controls and additional destinations remain roadmap work; local and CI evidence does not establish final production acceptance.
+
+### Remote authentication providers
+
+OIDC and OAuth endpoints require HTTPS with normal certificate verification. Redirects are rejected. Explicit private HTTP requires `IDENTITY_PROVIDER_ALLOW_INSECURE_HTTP=true`. Provider calls and cache reads/writes share an absolute deadline and bounded admission; concurrent callers coalesce without allowing one cancelled caller to abort others. Cache scopes include tenant, endpoint, issuer/audience, credentials and token identity, so tenant changes or credential rotation cannot reuse another trust scope. Introspection caches contain only active responses with a known future expiration and never exceed the configured lifetime; Redis failure falls back to remote verification. Outbound OAuth tokens never establish inbound client authentication.
+
+OIDC requires an expiring JWT, a matching issuer/audience and an explicitly compatible public signing key. RSA keys must be at least 2048 bits. Client-supplied `x-claim-*` headers are removed before verified claims are forwarded. Unknown signing keys can refresh only after the cooldown; providers should overlap signing keys during rotation.

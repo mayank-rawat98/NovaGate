@@ -152,3 +152,34 @@ describe('WebSocket upgrade startup validation', () => {
     ).toBeDefined();
   });
 });
+
+describe('identity-provider resource limits', () => {
+  it('requires secure transport and finite defaults', () => {
+    expect(configSchema.validate(required).value).toMatchObject({
+      IDENTITY_PROVIDER_ALLOW_INSECURE_HTTP: 'false',
+      IDENTITY_PROVIDER_TIMEOUT_MS: 5000,
+      IDENTITY_PROVIDER_MAX_PENDING_REQUESTS: 128,
+      IDENTITY_PROVIDER_MAX_CONCURRENT_FETCHES: 16,
+    });
+  });
+  it.each([
+    ['IDENTITY_PROVIDER_ALLOW_INSECURE_HTTP', 'yes'],
+    ['IDENTITY_PROVIDER_TIMEOUT_MS', 99],
+    ['IDENTITY_PROVIDER_TIMEOUT_MS', 60001],
+    ['IDENTITY_PROVIDER_MAX_RESPONSE_BYTES', 1048577],
+    ['IDENTITY_PROVIDER_MAX_HEADER_BYTES', 65537],
+    ['IDENTITY_PROVIDER_MAX_TOKEN_BYTES', 127],
+    ['IDENTITY_PROVIDER_MAX_PENDING_REQUESTS', 0],
+    ['IDENTITY_PROVIDER_MAX_CONCURRENT_FETCHES', 257],
+    ['IDENTITY_PROVIDER_MAX_CACHE_ENTRIES', 0],
+    ['IDENTITY_PROVIDER_MAX_JWKS_KEYS', 257],
+    ['IDENTITY_PROVIDER_JWKS_CACHE_TTL_MS', 999],
+    ['IDENTITY_PROVIDER_JWKS_REFRESH_COOLDOWN_MS', 60001],
+    ['IDENTITY_PROVIDER_INTROSPECTION_CACHE_TTL_MS', -1],
+    ['IDENTITY_PROVIDER_OUTBOUND_CACHE_TTL_MS', 86400001],
+  ])('rejects unsafe %s=%s', (name, value) =>
+    expect(
+      configSchema.validate({ ...required, [name]: value }).error,
+    ).toBeDefined(),
+  );
+});

@@ -61,3 +61,21 @@ export interface GatewayPlugin {
     ctx: PluginContext & { error: Error },
   ): Promise<PluginShortCircuit | void>;
 }
+
+export interface OidcPluginConfig {
+  jwksUri: string;
+  issuer: string;
+  audience?: string;
+  claimsToForward?: string[];
+}
+export interface OAuth2PluginConfig {
+  /** Exactly one endpoint is required. Outbound injection does not authenticate inbound clients. */
+  introspectionEndpoint?: string;
+  tokenEndpoint?: string;
+  clientId: string;
+  clientSecret: string;
+  scopes?: string[];
+  headerName?: string;
+  issuer?: string;
+  audience?: string;
+}

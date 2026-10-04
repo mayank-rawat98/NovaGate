@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import { Global, Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { REDIS_CLIENT } from '../shared/redis.tokens';
@@ -8,8 +9,16 @@ import { PluginRegistryService } from './plugin-registry.service';
 
 @Global()
 @Module({
-  providers: [{ provide: REDIS_CLIENT, useValue: {} }],
-  exports: [REDIS_CLIENT],
+  providers: [
+    { provide: REDIS_CLIENT, useValue: {} },
+    {
+      provide: ConfigService,
+      useValue: new ConfigService({
+        identityProvider: { allowInsecureHttp: true },
+      }),
+    },
+  ],
+  exports: [REDIS_CLIENT, ConfigService],
 })
 class TestRedisModule {}
 

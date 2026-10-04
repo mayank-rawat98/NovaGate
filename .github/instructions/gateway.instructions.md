@@ -35,6 +35,9 @@ apps/api/src/
       grpc-wire.spec.ts
       grpc-proxy.integration.spec.ts
     plugins/                        -- registry, ordered runner, first-party plugins
+      identity-provider/
+        identity-provider.service.ts -- bounded provider requests, shared admission and caches
+        identity-provider.service.spec.ts
       plugins.module.ts
       plugin-registry.service.ts
       plugin-runner.service.ts

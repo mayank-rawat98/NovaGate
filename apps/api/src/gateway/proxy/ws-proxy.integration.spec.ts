@@ -1,3 +1,4 @@
+import { IdentityProviderService } from '../plugins/identity-provider/identity-provider.service';
 import * as http from 'node:http';
 import * as net from 'node:net';
 import { once } from 'node:events';
@@ -64,6 +65,9 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
     set: jest.fn().mockResolvedValue('OK'),
   };
   function makeGateway(settings: Partial<WebSocketSettings> = {}) {
+    const provider = new IdentityProviderService(
+      new ConfigService({ identityProvider: { allowInsecureHttp: true } }),
+    );
     return new WsProxyService(
       manager,
       metrics as never,
@@ -84,8 +88,8 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
         new BasicAuthPlugin(),
         new AclPlugin(manager),
         new IpRestrictionPlugin(),
-        new OidcPlugin(),
-        new OAuth2ClientCredentialsPlugin(redis as never),
+        new OidcPlugin(provider),
+        new OAuth2ClientCredentialsPlugin(redis as never, provider),
         { name: 'body-plugin', onRequest: jest.fn() },
         ...extraPlugins,
       ]),
@@ -681,7 +685,13 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
       await install();
       await restart({ handshakeTimeoutMs: 100 });
       expect(
-        (await reject({ headers: { authorization: 'Bearer opaque' } })).status,
+        (
+          await reject({
+            headers: {
+              authorization: `Bearer ${sign({ sub: 'external' }, generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey, { algorithm: 'RS256', keyid: 'pending', issuer: 'issuer', expiresIn: 300 })}`,
+            },
+          })
+        ).status,
       ).toBe(504);
       await until(() => providerClosed && gateway.occupiedConnections === 0);
       expect(received).toHaveLength(0);
@@ -719,6 +729,7 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
       const token = sign({ sub: 'external' }, pair.privateKey, {
         algorithm: 'RS256',
         keyid: 'live-key',
+        expiresIn: 300,
         issuer: 'issuer',
         audience: 'gateway',
       });
@@ -727,6 +738,7 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
       const wrong = sign({ sub: 'external' }, pair.privateKey, {
         algorithm: 'RS256',
         keyid: 'live-key',
+        expiresIn: 300,
         issuer: 'other',
         audience: 'gateway',
       });
@@ -746,7 +758,11 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
         res.end(
           JSON.stringify(
             req.url === '/token'
-              ? { access_token: 'upstream-only', expires_in: 3600 }
+              ? {
+                  access_token: 'upstream-only',
+                  token_type: 'Bearer',
+                  expires_in: 3600,
+                }
               : { active, sub: 'external' },
           ),
         ),

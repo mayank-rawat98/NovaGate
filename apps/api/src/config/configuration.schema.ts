@@ -3,6 +3,7 @@ import {
   DEFAULT_UPSTREAM_HEALTH,
   DEFAULT_GRPC,
   DEFAULT_WEBSOCKET,
+  DEFAULT_IDENTITY_PROVIDER,
 } from './configuration';
 import { BlockList, isIP } from 'net';
 
@@ -142,6 +143,69 @@ export const configSchema = Joi.object({
     .min(0)
     .max(60000)
     .default(DEFAULT_WEBSOCKET.shutdownGraceMs),
+  IDENTITY_PROVIDER_ALLOW_INSECURE_HTTP: Joi.string()
+    .valid('true', 'false')
+    .default('false'),
+  IDENTITY_PROVIDER_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(60000)
+    .default(DEFAULT_IDENTITY_PROVIDER.timeoutMs),
+  IDENTITY_PROVIDER_MAX_RESPONSE_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(1048576)
+    .default(DEFAULT_IDENTITY_PROVIDER.maxResponseBytes),
+  IDENTITY_PROVIDER_MAX_HEADER_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(65536)
+    .default(DEFAULT_IDENTITY_PROVIDER.maxHeaderBytes),
+  IDENTITY_PROVIDER_MAX_TOKEN_BYTES: Joi.number()
+    .integer()
+    .min(128)
+    .max(65536)
+    .default(DEFAULT_IDENTITY_PROVIDER.maxTokenBytes),
+  IDENTITY_PROVIDER_MAX_PENDING_REQUESTS: Joi.number()
+    .integer()
+    .min(1)
+    .max(10000)
+    .default(DEFAULT_IDENTITY_PROVIDER.maxPendingRequests),
+  IDENTITY_PROVIDER_MAX_CONCURRENT_FETCHES: Joi.number()
+    .integer()
+    .min(1)
+    .max(256)
+    .default(DEFAULT_IDENTITY_PROVIDER.maxConcurrentFetches),
+  IDENTITY_PROVIDER_MAX_CACHE_ENTRIES: Joi.number()
+    .integer()
+    .min(1)
+    .max(4096)
+    .default(DEFAULT_IDENTITY_PROVIDER.maxCacheEntries),
+  IDENTITY_PROVIDER_MAX_JWKS_KEYS: Joi.number()
+    .integer()
+    .min(1)
+    .max(256)
+    .default(DEFAULT_IDENTITY_PROVIDER.maxJwksKeys),
+  IDENTITY_PROVIDER_JWKS_CACHE_TTL_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(86400000)
+    .default(DEFAULT_IDENTITY_PROVIDER.jwksCacheTtlMs),
+  IDENTITY_PROVIDER_JWKS_REFRESH_COOLDOWN_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(60000)
+    .default(DEFAULT_IDENTITY_PROVIDER.jwksRefreshCooldownMs),
+  IDENTITY_PROVIDER_INTROSPECTION_CACHE_TTL_MS: Joi.number()
+    .integer()
+    .min(0)
+    .max(300000)
+    .default(DEFAULT_IDENTITY_PROVIDER.introspectionCacheTtlMs),
+  IDENTITY_PROVIDER_OUTBOUND_CACHE_TTL_MS: Joi.number()
+    .integer()
+    .min(0)
+    .max(86400000)
+    .default(DEFAULT_IDENTITY_PROVIDER.outboundCacheTtlMs),
   REDIS_URL: Joi.string().uri().required(),
   JWT_SECRET: Joi.string().min(32).required(),
   PROXY_TIMEOUT_MS: Joi.number().default(10000),

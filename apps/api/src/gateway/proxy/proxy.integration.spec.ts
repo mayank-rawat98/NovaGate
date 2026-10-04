@@ -26,8 +26,16 @@ import { GatewayTelemetryService } from '../telemetry/gateway-telemetry.service'
 
 @Global()
 @Module({
-  providers: [{ provide: REDIS_CLIENT, useValue: {} }],
-  exports: [REDIS_CLIENT],
+  providers: [
+    { provide: REDIS_CLIENT, useValue: {} },
+    {
+      provide: ConfigService,
+      useValue: new ConfigService({
+        identityProvider: { allowInsecureHttp: true },
+      }),
+    },
+  ],
+  exports: [REDIS_CLIENT, ConfigService],
 })
 class TestRedisModule {}
 
@@ -415,5 +423,54 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
     expect(response.headers.get('x-transformed')).toBe('yes');
     expect(response.headers.get('x-upstream')).toBeNull();
     expect(await response.text()).toBe('h2-body');
+  });
+  it('cancels HTTP provider verification when the client disconnects', async () => {
+    let started!: () => void;
+    let closed!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const cancelled = new Promise<void>((resolve) => {
+      closed = resolve;
+    });
+    const provider = http.createServer((req) => {
+      req.socket.once('close', closed);
+      started();
+    });
+    const endpoint = await listen(provider);
+    try {
+      config.routes[0].authRequired = true;
+      config.routes[0].plugins = [
+        { name: 'oidc', config: { jwksUri: endpoint, issuer: 'issuer' } },
+      ];
+      const token = sign({ sub: 'external' }, keys.privateKey, {
+        algorithm: 'RS256',
+        issuer: 'issuer',
+        keyid: 'pending',
+        expiresIn: 300,
+      });
+      const client = http.get(`${url}/api`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      client.on('error', () => {
+        /* Deliberate disconnect. */
+      });
+      await pending;
+      client.destroy();
+      await Promise.race([
+        cancelled,
+        new Promise((_, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error('Provider connection was not cancelled')),
+            1000,
+          );
+          cancelled.then(() => clearTimeout(timer));
+        }),
+      ]);
+      expect(received).toHaveLength(0);
+    } finally {
+      provider.closeAllConnections();
+      await new Promise<void>((resolve) => provider.close(() => resolve()));
+    }
   });
 });

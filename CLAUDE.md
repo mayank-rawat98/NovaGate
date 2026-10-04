@@ -170,7 +170,7 @@ Plugins run in listed order; returning a `PluginShortCircuit` stops the chain.
 1. `npx prettier --write .` — formats all files in place
 2. `npm run check` — runs `nx run-many -t lint build typecheck --all`
 
-**CI** (`.github/workflows/ci.yml`) — triggers on push to `dev` (i.e. when a PR is merged). Runs `lint → typecheck → test → build` for all projects via `npx nx run-many`.
+**CI** (`.github/workflows/ci.yml`) — reusable only, called by deployment on pushes to `main`. Runs local-equivalent lint, typecheck, tests, builds and browser checks before image publication and deployment. Failed verification blocks release. PRs and pushes to `dev` do not run CI; local issue-level gates remain mandatory.
 
 ---
 

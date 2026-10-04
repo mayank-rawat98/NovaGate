@@ -101,4 +101,64 @@ describe('RoutesController', () => {
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
   });
+  it.each([
+    ['oidc', { jwksUri: 'file:///jwks', issuer: 'issuer' }],
+    [
+      'oidc',
+      { jwksUri: 'https://user:secret@example.com/jwks', issuer: 'issuer' },
+    ],
+    ['oidc', { jwksUri: 'https://example.com/jwks' }],
+    [
+      'oidc',
+      {
+        jwksUri: 'https://example.com/jwks',
+        issuer: 'issuer',
+        claimsToForward: ['unsafe\r\nheader'],
+      },
+    ],
+    ['oauth2-client-credentials', { clientId: 'id', clientSecret: 'secret' }],
+    [
+      'oauth2-client-credentials',
+      {
+        clientId: 'id',
+        clientSecret: 'secret',
+        tokenEndpoint: 'https://example.com/token',
+        introspectionEndpoint: 'https://example.com/introspect',
+      },
+    ],
+    [
+      'oauth2-client-credentials',
+      { clientId: 'id', tokenEndpoint: 'https://example.com/token' },
+    ],
+    [
+      'oauth2-client-credentials',
+      {
+        clientId: 'id',
+        clientSecret: 'secret',
+        tokenEndpoint: 'https://example.com/token',
+        headerName: 'Host',
+      },
+    ],
+  ])(
+    'rejects invalid %s settings before saving or broadcasting',
+    async (name, config) => {
+      const { controller, ds, cp } = await build();
+      await expect(
+        controller.create(TENANT, {
+          plugins: [
+            { name: name as string, config: config as Record<string, unknown> },
+          ],
+        }),
+      ).rejects.toThrow('configuration');
+      await expect(
+        controller.update(TENANT, 'route', {
+          plugins: [
+            { name: name as string, config: config as Record<string, unknown> },
+          ],
+        }),
+      ).rejects.toThrow('configuration');
+      expect(ds.query).not.toHaveBeenCalled();
+      expect(cp.triggerUpdate).not.toHaveBeenCalled();
+    },
+  );
 });
