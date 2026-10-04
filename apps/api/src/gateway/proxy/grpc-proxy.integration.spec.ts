@@ -1,11 +1,15 @@
 import * as http2 from 'node:http2';
 import { once } from 'node:events';
+import * as net from 'node:net';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import { sign } from 'jsonwebtoken';
 import type { TenantConfig } from '@api-gateway/shared-types';
 import { GrpcProxyService } from './grpc-proxy.service';
-import { DEFAULT_GRPC } from '../../config/configuration';
+import { DEFAULT_GRPC, type GrpcSettings } from '../../config/configuration';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 import { LoadBalancerService } from './load-balancer.service';
 import { PluginRegistryService } from '../plugins/plugin-registry.service';
@@ -48,11 +52,61 @@ describe('native gRPC through a real listener and upstream', () => {
     setGrpcActiveCalls: jest.fn(),
   };
   const upstreamSessions = new Set<http2.ServerHttp2Session>();
+  function makeGateway(settings: Partial<GrpcSettings> = {}) {
+    const registry = new PluginRegistryService([
+      new BasicAuthPlugin(),
+      new AclPlugin(manager),
+      new IpRestrictionPlugin(),
+      { name: 'body-plugin', onRequest: jest.fn() },
+    ]);
+    return new GrpcProxyService(
+      manager,
+      metrics as never,
+      new LoadBalancerService(),
+      {
+        getHealthyUrls: () =>
+          new Set(
+            healthy ? config.services[0].targets.map((item) => item.url) : [],
+          ),
+      } as never,
+      new ConfigService({
+        grpc: {
+          ...DEFAULT_GRPC,
+          enabled: true,
+          allowInsecure: true,
+          port: 0,
+          maxMessageBytes: 64,
+          shutdownGraceMs: 20,
+          ...settings,
+        },
+        jwt: { secret },
+        rateLimit: config.rateLimit,
+      }),
+      quota as never,
+      registry,
+      new PluginRunnerService(),
+    );
+  }
+  async function restart(settings: Partial<GrpcSettings>, ca?: Buffer) {
+    client.destroy();
+    await gateway.onModuleDestroy();
+    gateway = makeGateway(settings);
+    gateway.onModuleInit();
+    await gateway.onApplicationBootstrap();
+    client = http2.connect(
+      `${settings.tlsCertFile ? 'https' : 'http'}://127.0.0.1:${gateway.listeningPort}`,
+      ca ? { ca } : undefined,
+    );
+    client.on('error', () => {
+      /* Cancellation is verified through stream/session closure. */
+    });
+    await once(client, 'connect');
+  }
   async function install() {
     await manager.loadConfig('tenant', config, ++version);
   }
-  function request(headers: http2.OutgoingHttpHeaders = {}) {
-    const stream = client.request({
+  function request(headers: http2.OutgoingHttpHeaders = {}, session = client) {
+    const stream = session.request({
       ':method': 'POST',
       ':path': '/test.Echo/Call',
       'content-type': 'application/grpc',
@@ -190,33 +244,7 @@ describe('native gRPC through a real listener and upstream', () => {
       set: jest.fn().mockResolvedValue('OK'),
     } as never);
     await install();
-    const registry = new PluginRegistryService([
-      new BasicAuthPlugin(),
-      new AclPlugin(manager),
-      new IpRestrictionPlugin(),
-      { name: 'body-plugin', onRequest: jest.fn() },
-    ]);
-    gateway = new GrpcProxyService(
-      manager,
-      metrics as never,
-      new LoadBalancerService(),
-      { getHealthyUrls: () => new Set(healthy ? [target] : []) } as never,
-      new ConfigService({
-        grpc: {
-          ...DEFAULT_GRPC,
-          enabled: true,
-          allowInsecure: true,
-          port: 0,
-          maxMessageBytes: 64,
-          shutdownGraceMs: 20,
-        },
-        jwt: { secret },
-        rateLimit: config.rateLimit,
-      }),
-      quota as never,
-      registry,
-      new PluginRunnerService(),
-    );
+    gateway = makeGateway();
     gateway.onModuleInit();
     await gateway.onApplicationBootstrap();
     client = http2.connect(`http://127.0.0.1:${gateway.listeningPort}`);
@@ -232,6 +260,198 @@ describe('native gRPC through a real listener and upstream', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
+  it('retains admission capacity while timed-out quota work is still pending', async () => {
+    await restart({ maxActiveCalls: 1 });
+    let release!: (value: { allowed: boolean }) => void;
+    quota.check.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const first = request({ 'grpc-timeout': '50m' });
+    first.stream.end(frame('test'));
+    expect((await first.finished).status).toBe('4');
+    expect(metrics.setGrpcActiveCalls).toHaveBeenLastCalledWith(1);
+    const rejected = request();
+    rejected.stream.end(frame('test'));
+    expect((await rejected.finished).status).toBe('8');
+    expect(received).toHaveLength(0);
+    release({ allowed: true });
+    await until(() => metrics.setGrpcActiveCalls.mock.calls.at(-1)?.[0] === 0);
+    const next = request();
+    next.stream.end(frame('test'));
+    expect((await next.finished).status).toBe('0');
+  });
+  it('rejects a cold upstream advertising zero stream capacity before dispatch', async () => {
+    server.updateSettings({ maxConcurrentStreams: 0 });
+    await restart({ maxSessionsPerTarget: 1 });
+    const call = request();
+    call.stream.end(frame('test'));
+    expect((await call.finished).status).toBe('8');
+    expect(received).toHaveLength(0);
+  });
+  it('releases active call capacity after cancellation', async () => {
+    await restart({ maxActiveCalls: 1 });
+    mode = 'stall';
+    const first = request();
+    first.finished.catch(() => {
+      /* Cancellation is verified through stream/session closure. */
+    });
+    first.stream.write(frame('test'));
+    await until(() => received.length === 1);
+    const rejected = request();
+    rejected.stream.end(frame('test'));
+    expect((await rejected.finished).status).toBe('8');
+    first.stream.close(http2.constants.NGHTTP2_CANCEL);
+    await until(() => closures === 1);
+    mode = 'echo';
+    const next = request();
+    next.stream.end(frame('test'));
+    expect((await next.finished).status).toBe('0');
+  });
+  it('bounds upstream sessions and reuses capacity after a cancelled stream', async () => {
+    server.updateSettings({ maxConcurrentStreams: 1 });
+    await restart({ maxSessionsPerTarget: 1, maxConcurrentStreams: 1 });
+    const other = http2.connect(`http://127.0.0.1:${gateway.listeningPort}`);
+    other.on('error', () => {
+      /* Cancellation is verified through stream/session closure. */
+    });
+    await once(other, 'connect');
+    await until(() => other.remoteSettings.maxConcurrentStreams === 1);
+    try {
+      mode = 'stall';
+      const first = request();
+      first.finished.catch(() => {
+        /* Cancellation is verified through stream/session closure. */
+      });
+      first.stream.write(frame('test'));
+      await until(() => received.length === 1);
+      const rejected = request({}, other);
+      rejected.stream.end(frame('test'));
+      expect((await rejected.finished).status).toBe('8');
+      await until(() => rejected.stream.destroyed);
+      expect(upstreamSessions.size).toBe(1);
+      expect(received).toHaveLength(1);
+      first.stream.close(http2.constants.NGHTTP2_CANCEL);
+      await until(() => closures === 1);
+      mode = 'echo';
+      const next = request({}, other);
+      next.stream.end(frame('test'));
+      expect((await next.finished).status).toBe('0');
+      expect(upstreamSessions.size).toBe(1);
+    } finally {
+      other.destroy();
+    }
+  });
+  it('cancels a cold connection that never sends peer settings', async () => {
+    const sockets = new Set<net.Socket>();
+    const blackhole = net.createServer((socket) => {
+      sockets.add(socket);
+      socket.on('error', () => {
+        /* Cancellation is verified through stream/session closure. */
+      });
+      socket.once('close', () => sockets.delete(socket));
+      socket.resume();
+    });
+    await new Promise<void>((resolve) =>
+      blackhole.listen(0, '127.0.0.1', resolve),
+    );
+    try {
+      config.services[0].targets = [
+        {
+          url: `http://127.0.0.1:${(blackhole.address() as net.AddressInfo).port}`,
+          weight: 1,
+        },
+      ];
+      await install();
+      const call = request({ 'grpc-timeout': '100m' });
+      call.stream.end(frame('test'));
+      await until(() => sockets.size === 1);
+      expect((await call.finished).status).toBe('4');
+      await until(() => sockets.size === 0);
+      expect(metrics.setGrpcActiveCalls).toHaveBeenLastCalledWith(0);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => blackhole.close(() => resolve()));
+    }
+  });
+  it('serves native gRPC over verified TLS and rejects an untrusted listener certificate', async () => {
+    const artifacts = resolve(__dirname, '../../../../..', '.local-work');
+    mkdirSync(artifacts, { recursive: true });
+    const directory = mkdtempSync(resolve(artifacts, 'grpc-tls-'));
+    try {
+      const key = resolve(directory, 'key.pem');
+      const cert = resolve(directory, 'cert.pem');
+      execFileSync(
+        'openssl',
+        [
+          'req',
+          '-x509',
+          '-newkey',
+          'rsa:2048',
+          '-nodes',
+          '-keyout',
+          key,
+          '-out',
+          cert,
+          '-days',
+          '1',
+          '-subj',
+          '/CN=localhost',
+          '-addext',
+          'subjectAltName=IP:127.0.0.1',
+        ],
+        { stdio: 'ignore' },
+      );
+      await restart(
+        { tlsCertFile: cert, tlsKeyFile: key, allowInsecure: false },
+        readFileSync(cert),
+      );
+      const call = request();
+      call.stream.end(frame('encrypted'));
+      expect((await call.finished).status).toBe('0');
+      expect(client.alpnProtocol).toBe('h2');
+      const untrusted = http2.connect(
+        `https://127.0.0.1:${gateway.listeningPort}`,
+      );
+      try {
+        const failure = await new Promise<Error>((resolve) =>
+          untrusted.once('error', resolve),
+        );
+        expect(failure.message).toMatch(/self-signed|certificate/i);
+        expect(received).toHaveLength(1);
+      } finally {
+        untrusted.destroy();
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+  it('reuses a frontend session configured for one concurrent stream', async () => {
+    await restart({ maxConcurrentStreams: 1 });
+    await until(() => client.remoteSettings.maxConcurrentStreams === 1);
+    for (let index = 0; index < 3; index++) {
+      const call = request();
+      call.stream.end(frame('test'));
+      expect((await call.finished).status).toBe('0');
+      await until(() => call.stream.destroyed);
+    }
+  });
+  it('closes a rejected unfinished upload and permits the next call', async () => {
+    config.routes[0].authRequired = true;
+    await install();
+    await restart({ maxConcurrentStreams: 1 });
+    await until(() => client.remoteSettings.maxConcurrentStreams === 1);
+    const rejected = request();
+    rejected.stream.write(frame('unfinished'));
+    expect((await rejected.finished).status).toBe('16');
+    await until(() => rejected.stream.destroyed);
+    const next = request({ authorization: `Bearer ${consumerKey}` });
+    next.stream.end(frame('test'));
+    expect((await next.finished).status).toBe('0');
+    expect(received).toHaveLength(1);
+  });
   it('preserves binary unary frames, metadata and trailers and records bounded route labels', async () => {
     const { stream, finished } = request({
       'custom-request-bin': 'BAUG',

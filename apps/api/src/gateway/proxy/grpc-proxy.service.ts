@@ -50,6 +50,8 @@ interface Call {
   request: http2.Http2ServerRequest;
   response: http2.Http2ServerResponse;
   done: boolean;
+  admitting: boolean;
+  abort: AbortController;
   finish: (status: number) => void;
   fail: (error: GrpcFailure) => void;
 }
@@ -77,6 +79,8 @@ export class GrpcProxyService
   private readonly settings: GrpcSettings;
   private readonly pool = new Map<string, SessionEntry[]>();
   private readonly calls = new Set<Call>();
+  // Providers that cannot cancel still occupy admission capacity until they settle.
+  private readonly detachedAdmissions = new Set<Call>();
   private readonly clients = new Set<http2.ServerHttp2Session>();
   private server?: http2.Http2Server | http2.Http2SecureServer;
   private sweep?: NodeJS.Timeout;
@@ -284,6 +288,37 @@ export class GrpcProxyService
     entry.active++;
     return entry;
   }
+  private get occupiedCalls(): number {
+    return this.calls.size + this.detachedAdmissions.size;
+  }
+  private async awaitReady(entry: SessionEntry, signal: AbortSignal) {
+    const unavailable = () => new GrpcFailure(14, 'Upstream unavailable');
+    if (signal.aborted) throw unavailable();
+    if (entry.session.destroyed || entry.session.closed) throw unavailable();
+    if (!entry.ready)
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          entry.session.removeListener('remoteSettings', ready);
+          entry.session.removeListener('error', failed);
+          entry.session.removeListener('close', failed);
+          signal.removeEventListener('abort', failed);
+        };
+        const ready = () => {
+          cleanup();
+          resolve();
+        };
+        const failed = () => {
+          cleanup();
+          reject(unavailable());
+        };
+        entry.session.once('remoteSettings', ready);
+        entry.session.once('error', failed);
+        entry.session.once('close', failed);
+        signal.addEventListener('abort', failed, { once: true });
+      });
+    if ((entry.session.remoteSettings.maxConcurrentStreams ?? 1) === 0)
+      throw new GrpcFailure(8, 'Upstream session capacity exhausted');
+  }
   private authenticate(ctx: PluginContext) {
     const authorization = ctx.req.headers.authorization;
     if (typeof authorization !== 'string') return;
@@ -318,6 +353,9 @@ export class GrpcProxyService
   }
   private error(response: http2.Http2ServerResponse, error: GrpcFailure) {
     if (response.destroyed || response.writableEnded) return;
+    // Drain buffered input while the error is sent; wantTrailers closes an
+    // unfinished upload, so rejection never leaves a paused stream retained.
+    response.req?.resume();
     if (!response.headersSent) {
       response.writeHead(200, {
         'content-type': 'application/grpc',
@@ -340,16 +378,29 @@ export class GrpcProxyService
     request.pause();
     request.on('error', () => response.destroy());
     response.on('error', () => request.destroy());
-    response.once('finish', () => {
-      if (!request.readableEnded && !request.stream.destroyed)
-        request.stream.close(http2.constants.NGHTTP2_NO_ERROR);
+    request.stream.once('wantTrailers', () => {
+      // The compatibility response emits finish only after stream closure.
+      // Release paused input after trailers are queued so early errors cannot
+      // retain a closed stream's memory and consume the next admission slot.
+      setImmediate(() => {
+        if (
+          response.writableEnded &&
+          !request.readableEnded &&
+          !request.stream.destroyed
+        ) {
+          request.stream.close(http2.constants.NGHTTP2_NO_ERROR);
+          request.destroy();
+        }
+      });
     });
     if (!isGrpcRequest(request.headers)) {
+      request.resume();
       response.writeHead(415);
       response.end();
       return;
     }
     if (request.method !== 'POST') {
+      request.resume();
       response.writeHead(405);
       response.end();
       return;
@@ -358,7 +409,7 @@ export class GrpcProxyService
       this.error(response, new GrpcFailure(14, 'Gateway shutting down'));
       return;
     }
-    if (this.calls.size >= this.settings.maxActiveCalls) {
+    if (this.occupiedCalls >= this.settings.maxActiveCalls) {
       this.error(
         response,
         new GrpcFailure(8, 'Gateway call capacity exhausted'),
@@ -391,12 +442,16 @@ export class GrpcProxyService
       request,
       response,
       done: false,
+      admitting: true,
+      abort: new AbortController(),
       finish: (status) => {
         if (call.done) return;
         call.done = true;
         clearTimeout(timer);
+        call.abort.abort();
         this.calls.delete(call);
-        this.metricsService.setGrpcActiveCalls(this.calls.size);
+        if (call.admitting) this.detachedAdmissions.add(call);
+        this.metricsService.setGrpcActiveCalls(this.occupiedCalls);
         request.unpipe(requestFrames);
         requestFrames?.unpipe();
         requestFrames?.destroy();
@@ -418,7 +473,7 @@ export class GrpcProxyService
       },
     };
     this.calls.add(call);
-    this.metricsService.setGrpcActiveCalls(this.calls.size);
+    this.metricsService.setGrpcActiveCalls(this.occupiedCalls);
     request.stream.once('aborted', () => call.finish(1));
     response.once('close', () => call.finish(response.writableEnded ? 0 : 1));
     try {
@@ -516,6 +571,8 @@ export class GrpcProxyService
       const entry = this.acquire(service.id, target);
       let upstream: http2.ClientHttp2Stream;
       try {
+        await this.awaitReady(entry, call.abort.signal);
+        if (call.done) throw new GrpcFailure(14, 'Call cancelled');
         const url = new URL(target);
         const remaining = Math.ceil(expires - Date.now());
         if (remaining <= 0) throw new GrpcFailure(4, 'Deadline exceeded');
@@ -532,6 +589,7 @@ export class GrpcProxyService
       } catch (error) {
         entry.active--;
         entry.lastUsed = Date.now();
+        if (!entry.ready && !entry.active) this.retire(entry, true);
         throw error;
       }
       call.upstream = upstream;
@@ -636,6 +694,10 @@ export class GrpcProxyService
           ? error
           : new GrpcFailure(14, 'Upstream unavailable'),
       );
+    } finally {
+      call.admitting = false;
+      this.detachedAdmissions.delete(call);
+      this.metricsService.setGrpcActiveCalls(this.occupiedCalls);
     }
   }
   private status(value: string | string[] | number | undefined): number {
