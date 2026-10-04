@@ -42,6 +42,8 @@ then the page that uses it.
 - Edit + delete both supported
 - Table shows first target URL + "+N more" for multi-target services
 - Health is per-service (from `health_snapshots`), not per-target
+- Service controls expose HTTP/2 upstreams, WebSocket upgrades, HTTP or native gRPC health protocol, an optional registered health service name, cadence and explicit unhealthy fallback
+- Native health mode hides the HTTP path input, preserves saved settings on edit and explains the standard health RPC requirement
 
 ## Routes page
 

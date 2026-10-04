@@ -63,3 +63,52 @@ describe('upstream health startup settings', () => {
     ).toBeDefined();
   });
 });
+
+describe('gRPC listener startup validation', () => {
+  it('keeps the listener disabled by default', () => {
+    expect(configSchema.validate(required).value.GRPC_ENABLED).toBe('false');
+  });
+  it('requires TLS or explicit private cleartext operation', () => {
+    expect(
+      configSchema.validate({ ...required, GRPC_ENABLED: 'true' }).error,
+    ).toBeDefined();
+    expect(
+      configSchema.validate({
+        ...required,
+        GRPC_ENABLED: 'true',
+        GRPC_ALLOW_INSECURE: 'true',
+      }).error,
+    ).toBeUndefined();
+    expect(
+      configSchema.validate({
+        ...required,
+        GRPC_ENABLED: 'true',
+        GRPC_TLS_CERT_FILE: '/cert.pem',
+        GRPC_TLS_KEY_FILE: '/key.pem',
+      }).error,
+    ).toBeUndefined();
+  });
+  it('rejects partial TLS credentials even when the listener is disabled', () => {
+    expect(
+      configSchema.validate({ ...required, GRPC_TLS_CERT_FILE: '/cert.pem' })
+        .error,
+    ).toBeDefined();
+  });
+  it.each([
+    ['GRPC_ENABLED', 'yes'],
+    ['GRPC_ALLOW_INSECURE', '1'],
+    ['GRPC_PORT', 0],
+    ['GRPC_MAX_MESSAGE_BYTES', 0],
+    ['GRPC_MAX_HEADER_BYTES', 65537],
+    ['GRPC_MAX_CONCURRENT_STREAMS', 1001],
+    ['GRPC_MAX_SESSIONS_PER_TARGET', 33],
+    ['GRPC_MAX_ACTIVE_CALLS', 0],
+    ['GRPC_DEADLINE_MS', 99],
+    ['GRPC_IDLE_TIMEOUT_MS', 999],
+    ['GRPC_SHUTDOWN_GRACE_MS', 60001],
+  ])('rejects unsafe %s=%s', (name, value) => {
+    expect(
+      configSchema.validate({ ...required, [name]: value }).error,
+    ).toBeDefined();
+  });
+});

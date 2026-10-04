@@ -14,6 +14,7 @@ import {
   UpstreamHealthSettings,
 } from '../../config/configuration';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
+import { grpcHealthRequest, grpcHealthServing } from './grpc-health-wire';
 import { GatewayTelemetryService } from '../telemetry/gateway-telemetry.service';
 
 interface TargetState {
@@ -22,6 +23,8 @@ interface TargetState {
   url: string;
   path: string;
   h2: boolean;
+  protocol: 'http' | 'grpc';
+  healthService: string;
   intervalMs: number;
   nextAt: number;
   status: 'unknown' | 'healthy' | 'unhealthy';
@@ -78,6 +81,8 @@ export class UpstreamHealthService implements OnModuleInit, OnModuleDestroy {
       url,
       service.healthCheckPath,
       service.h2 === true,
+      service.healthCheckProtocol ?? 'http',
+      service.healthCheckService ?? '',
     ]);
   }
   private reconcile() {
@@ -109,6 +114,8 @@ export class UpstreamHealthService implements OnModuleInit, OnModuleDestroy {
             url: target.url,
             path: service.healthCheckPath,
             h2: service.h2 === true,
+            protocol: service.healthCheckProtocol ?? 'http',
+            healthService: service.healthCheckService ?? '',
             intervalMs,
             nextAt: 0,
             status: 'unknown',
@@ -269,7 +276,7 @@ export class UpstreamHealthService implements OnModuleInit, OnModuleDestroy {
           finish(false);
           return;
         }
-        if (state.h2) {
+        if (state.h2 || state.protocol === 'grpc') {
           const connection = http2.connect(url.origin);
           session = connection;
           connection.on('error', () => finish(false));
@@ -277,8 +284,11 @@ export class UpstreamHealthService implements OnModuleInit, OnModuleDestroy {
             if (settled) return;
             try {
               const headers: http2.OutgoingHttpHeaders = {
-                ':method': 'GET',
-                ':path': url.pathname + url.search,
+                ':method': state.protocol === 'grpc' ? 'POST' : 'GET',
+                ':path':
+                  state.protocol === 'grpc'
+                    ? '/grpc.health.v1.Health/Check'
+                    : url.pathname + url.search,
               };
               if (url.username || url.password)
                 headers.authorization =
@@ -286,15 +296,54 @@ export class UpstreamHealthService implements OnModuleInit, OnModuleDestroy {
                   Buffer.from(
                     `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`,
                   ).toString('base64');
+              if (state.protocol === 'grpc') {
+                headers['content-type'] = 'application/grpc';
+                headers.te = 'trailers';
+                headers['grpc-timeout'] = `${this.settings.probeTimeoutMs}m`;
+              }
+              // Headers must be complete before opening the HTTP/2 stream.
               request = connection.request(headers);
               request.on('error', () => finish(false));
-              request.once('response', (response) =>
-                finish(
-                  Number(response[':status']) >= 200 &&
-                    Number(response[':status']) < 300,
-                ),
-              );
-              request.end();
+              if (state.protocol === 'grpc') {
+                const chunks: Buffer[] = [];
+                let bytes = 0;
+                let responseOk = false;
+                let grpcStatus: string | number | string[] | undefined;
+                request.once('response', (response) => {
+                  responseOk =
+                    response[':status'] === 200 &&
+                    typeof response['content-type'] === 'string' &&
+                    /^application\/grpc(?:\+[\w.-]+)?(?:\s*;.*)?$/i.test(
+                      response['content-type'],
+                    );
+                  grpcStatus = response['grpc-status'];
+                  if (!responseOk) finish(false);
+                });
+                request.on('trailers', (trailers) => {
+                  grpcStatus = trailers['grpc-status'];
+                });
+                request.on('data', (chunk: Buffer) => {
+                  bytes += chunk.length;
+                  if (bytes > this.settings.grpcMaxResponseBytes) finish(false);
+                  else chunks.push(chunk);
+                });
+                request.once('end', () =>
+                  finish(
+                    responseOk &&
+                      grpcStatus === '0' &&
+                      grpcHealthServing(Buffer.concat(chunks)),
+                  ),
+                );
+                request.end(grpcHealthRequest(state.healthService));
+              } else {
+                request.once('response', (response) =>
+                  finish(
+                    Number(response[':status']) >= 200 &&
+                      Number(response[':status']) < 300,
+                  ),
+                );
+                request.end();
+              }
             } catch {
               finish(false);
             }

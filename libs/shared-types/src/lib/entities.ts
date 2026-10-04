@@ -48,7 +48,11 @@ export interface ServiceEntity {
   targets: Array<{ url: string; weight: number }>;
   healthCheckPath: string;
   healthCheckIntervalMs?: number;
+  healthCheckProtocol?: 'http' | 'grpc';
+  healthCheckService?: string;
   unhealthyFallback?: boolean;
+  h2?: boolean;
+  supportsWebSocket?: boolean;
   timeoutMs: number;
   createdAt: string;
   deletedAt?: string;

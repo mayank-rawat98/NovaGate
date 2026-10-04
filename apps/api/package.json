@@ -85,6 +85,17 @@
           "build",
           "prune"
         ]
+      },
+      "grpc-container-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/grpc-container-smoke.mjs",
+            "node tools/grpc-container-smoke.mjs"
+          ],
+          "parallel": false
+        }
       }
     }
   },

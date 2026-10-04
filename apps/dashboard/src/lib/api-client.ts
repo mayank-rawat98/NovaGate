@@ -70,6 +70,10 @@ export type UpdateRouteDto = Partial<CreateRouteDto>;
 export type CreateServiceDto = Pick<ServiceEntity, 'name' | 'targets'> & {
   healthCheckPath?: string;
   healthCheckIntervalMs?: number;
+  healthCheckProtocol?: 'http' | 'grpc';
+  healthCheckService?: string;
+  h2?: boolean;
+  supportsWebSocket?: boolean;
   unhealthyFallback?: boolean;
   timeoutMs?: number;
 };

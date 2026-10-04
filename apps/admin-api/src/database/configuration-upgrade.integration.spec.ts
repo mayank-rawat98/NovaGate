@@ -64,7 +64,7 @@ integration('Configuration upgrades and updates on PostgreSQL', () => {
       [service],
     );
     await new MigrationService(ds).onModuleInit();
-  });
+  }, 30000);
   afterAll(async () => {
     if (ds?.isInitialized) await ds.destroy();
     if (root?.isInitialized) {
@@ -174,6 +174,39 @@ integration('Configuration upgrades and updates on PostgreSQL', () => {
         targets: [{ url: 'http://fresh:8080', weight: 1 }],
       }),
     ).toMatchObject({ healthCheckIntervalMs: 10000, unhealthyFallback: false });
+  });
+  it('migrates and round trips native health settings and protocol flags', async () => {
+    const controller = new ServicesController(ds, push);
+    expect(await controller.update(tenant, service, {})).toMatchObject({
+      healthCheckProtocol: 'http',
+      healthCheckService: '',
+    });
+    expect(
+      await controller.update(tenant, service, {
+        healthCheckProtocol: 'grpc',
+        healthCheckService: 'test.Echo',
+        h2: true,
+        supportsWebSocket: true,
+      }),
+    ).toMatchObject({
+      healthCheckProtocol: 'grpc',
+      healthCheckService: 'test.Echo',
+      h2: true,
+      supportsWebSocket: true,
+    });
+    expect(
+      await controller.update(tenant, service, { name: 'preserved-protocol' }),
+    ).toMatchObject({
+      healthCheckProtocol: 'grpc',
+      healthCheckService: 'test.Echo',
+      h2: true,
+    });
+    expect(
+      await controller.update(tenant, service, {
+        healthCheckService: '',
+        supportsWebSocket: false,
+      }),
+    ).toMatchObject({ healthCheckService: '', supportsWebSocket: false });
   });
   it('keeps consumer groups when omitted and returns the updated consumer without its key hash', async () => {
     const controller = new ConsumersController(ds, push);

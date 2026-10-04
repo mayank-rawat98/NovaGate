@@ -15,6 +15,7 @@ interface IpRestrictionConfig {
 @Injectable()
 export class IpRestrictionPlugin implements GatewayPlugin {
   readonly name = 'ip-restriction';
+  readonly protocols = ['http', 'grpc'] as const;
 
   async onRequest(ctx: PluginContext): Promise<PluginShortCircuit | void> {
     const config = this.resolveConfig(ctx);

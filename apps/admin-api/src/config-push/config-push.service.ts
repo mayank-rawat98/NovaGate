@@ -77,6 +77,8 @@ export class ConfigPushService implements OnModuleInit, OnModuleDestroy {
       targets: row.targets,
       healthCheckPath: row.healthCheckPath,
       healthCheckIntervalMs: row.healthCheckIntervalMs ?? 10000,
+      healthCheckProtocol: row.healthCheckProtocol ?? 'http',
+      healthCheckService: row.healthCheckService ?? '',
       unhealthyFallback: row.unhealthyFallback ?? false,
       timeoutMs: row.timeoutMs,
       h2: row.h2 ?? false,

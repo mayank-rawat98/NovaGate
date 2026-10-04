@@ -12,6 +12,18 @@ RustFS 1.0.1 is pinned by digest in verification/production Compose. Production 
 
 This implements manual private archives, not all phase 4 criteria. Scheduled/per-tenant destination configuration, webhook/Datadog exporters, privacy/redaction controls, distributed storage and documented restore drills still require implementation and acceptance evidence.
 
+## Streaming gRPC implementation — issue #41
+
+The branch replaces the previously unwired buffered helper with an opt-in native HTTP/2 listener, streaming frame validation, metadata/trailers, absolute deadlines, cancellation, health-aware selection and verified JWT/consumer authentication. Header-based plugin capabilities are explicit; incompatible body-based plugins fail closed. Live-network tests cover unary/bidirectional data, authentication, Basic/ACL/IP enforcement, quotas, message bounds, cancellation and all-down behavior. Listener settings and encoded-frame limits are documented in the gateway environment template. The current checkpoint passes all five projects’ uncached test/lint/typecheck/build gates (392 tests) against OrbStack PostgreSQL, Redis and RustFS. Gateway typecheck artifacts are isolated from Webpack output to prevent concurrent build/typecheck races.
+
+Native health checks now call the standard Health/Check RPC with an optional registered service name, a bounded response and strict SERVING plus successful RPC status semantics. Service protocol fields survive provisioning, legacy upgrades, CRUD and configuration snapshots. Accessible dashboard controls choose health protocol/service name and HTTP/2/WebSocket flags; browser checks verify submitted values and mobile form accessibility.
+
+Live-network checks now verify a trusted TLS listener and rejection of its certificate without an explicit trust root. Calls wait for peer settings before dispatch, reject zero advertised capacity, and release cold connections that miss deadlines. Cancelled requests retain admission capacity until pending quota work settles. Rejection cleanup releases paused uploads and allows connection reuse even with a one-stream limit; session/call limits and cancellation reuse have regression coverage.
+
+The slow-client regression streams over 8 MB while a paused client holds the producer below 1 MB, then verifies complete delivery and successful trailers after resuming. Normal upstream closure no longer cancels response bytes waiting to drain. Shutdown checks cover successful calls during grace and unavailable responses after grace. The repeatable `api:grpc-container-smoke` Nx task verifies the non-root Node 24 production image through trusted listener/upstream TLS, the actual registered native health RPC, authenticated protobuf unary calls with pinned grpcurl, configuration ACKs, metadata/trailers and rejection of an untrusted upstream certificate. Disposable test databases and containers are removed afterward.
+
+These are issue-level implementation and regression results. Full phase 3 acceptance, WebSocket runtime acceptance, least-connections/GraphQL work and the final all-phase campaign remain required.
+
 ## Code audit — 4 October 2026
 
 The code contains substantial work for phases 0–3, but file presence does not prove production acceptance. No phase is marked complete by this audit.

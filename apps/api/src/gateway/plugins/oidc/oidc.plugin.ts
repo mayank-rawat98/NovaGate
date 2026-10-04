@@ -43,6 +43,7 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 @Injectable()
 export class OidcPlugin implements GatewayPlugin {
   readonly name = 'oidc';
+  readonly protocols = ['http', 'grpc'] as const;
   private readonly logger = new Logger(OidcPlugin.name);
 
   // In-memory JWKS cache keyed by jwksUri

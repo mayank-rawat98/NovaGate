@@ -57,6 +57,8 @@ describe('ServicesController', () => {
         false,
         10000,
         false,
+        'http',
+        '',
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
@@ -86,6 +88,8 @@ describe('ServicesController', () => {
         false,
         10000,
         false,
+        'http',
+        '',
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
@@ -149,6 +153,26 @@ describe('ServicesController', () => {
     );
   });
 
+  it.each([
+    { healthCheckProtocol: 'other' },
+    { healthCheckProtocol: null },
+    { healthCheckService: null },
+    { healthCheckService: 'x'.repeat(257) },
+    { healthCheckService: 'é'.repeat(129) },
+    { healthCheckService: 'bad\nname' },
+    { h2: 'true' },
+    { supportsWebSocket: null },
+    { timeoutMs: 99 },
+    { timeoutMs: 3600001 },
+    { timeoutMs: 100.5 },
+  ])('rejects invalid protocol settings %j', async (body) => {
+    const { controller, ds, cp } = await build();
+    await expect(
+      controller.update(TENANT, 'svc', body as never),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(ds.query).not.toHaveBeenCalled();
+    expect(cp.triggerUpdate).not.toHaveBeenCalled();
+  });
   describe('DELETE remove', () => {
     it('soft-deletes service and triggers config push', async () => {
       const ds = mockDataSource();

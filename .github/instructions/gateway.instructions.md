@@ -28,7 +28,10 @@ apps/api/src/
       load-balancer.service.ts      -- weighted round-robin target selection
       http2-session-pool.service.ts
       ws-proxy.service.ts
-      grpc-proxy.service.ts
+      grpc-proxy.service.ts        -- HTTP/2 listener and authenticated streaming
+      grpc-wire.ts                 -- frame validation, deadlines and metadata
+      grpc-wire.spec.ts
+      grpc-proxy.integration.spec.ts
     plugins/                        -- registry, ordered runner, first-party plugins
       plugins.module.ts
       plugin-registry.service.ts
@@ -49,6 +52,8 @@ apps/api/src/
       health.controller.spec.ts
       upstream-health.service.ts    -- bounded per-service probes and eviction/recovery
       upstream-health.service.spec.ts -- real HTTP/HTTP2/IPv6 lifecycle checks
+      grpc-health-wire.ts           -- bounded standard gRPC health request/response
+      grpc-health-wire.spec.ts
     config-manager/
       gateway-config-manager.service.ts
     connector/

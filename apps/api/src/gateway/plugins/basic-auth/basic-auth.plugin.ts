@@ -20,6 +20,7 @@ interface BasicAuthConfig {
 @Injectable()
 export class BasicAuthPlugin implements GatewayPlugin {
   readonly name = 'basic-auth';
+  readonly protocols = ['http', 'grpc'] as const;
 
   async onRequest(ctx: PluginContext): Promise<PluginShortCircuit | void> {
     const entry = ctx.route.plugins?.find((p) => p.name === 'basic-auth');

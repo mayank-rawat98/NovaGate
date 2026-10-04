@@ -6,8 +6,28 @@ export const DEFAULT_UPSTREAM_HEALTH = {
   concurrency: 8,
   schedulerIntervalMs: 250,
   telemetryIntervalMs: 5000,
+  grpcMaxResponseBytes: 4096,
 };
 export type UpstreamHealthSettings = typeof DEFAULT_UPSTREAM_HEALTH;
+
+export const DEFAULT_GRPC = {
+  enabled: false,
+  allowInsecure: false,
+  host: '127.0.0.1',
+  port: 50051,
+  maxMessageBytes: 4 * 1024 * 1024,
+  maxHeaderBytes: 16384,
+  maxConcurrentStreams: 100,
+  maxSessionsPerTarget: 4,
+  maxActiveCalls: 256,
+  deadlineMs: 30000,
+  idleTimeoutMs: 30000,
+  shutdownGraceMs: 5000,
+};
+export type GrpcSettings = typeof DEFAULT_GRPC & {
+  tlsCertFile?: string;
+  tlsKeyFile?: string;
+};
 
 export interface ProxyServiceConfig {
   name: string;
@@ -32,6 +52,7 @@ export interface GatewayConfig {
     services: ProxyServiceConfig[];
   };
   upstreamHealth: UpstreamHealthSettings;
+  grpc: GrpcSettings;
   rateLimit: {
     windowMs: number;
     unauthMax: number;
@@ -67,6 +88,38 @@ export default (): GatewayConfig => ({
     timeout: parseInt(process.env.PROXY_TIMEOUT_MS ?? '10000', 10) || 10000,
     services: parseProxyServices(),
   },
+  grpc: {
+    enabled: process.env.GRPC_ENABLED === 'true',
+    allowInsecure: process.env.GRPC_ALLOW_INSECURE === 'true',
+    host: process.env.GRPC_HOST ?? DEFAULT_GRPC.host,
+    port: Number(process.env.GRPC_PORT ?? DEFAULT_GRPC.port),
+    tlsCertFile: process.env.GRPC_TLS_CERT_FILE || undefined,
+    tlsKeyFile: process.env.GRPC_TLS_KEY_FILE || undefined,
+    maxMessageBytes: Number(
+      process.env.GRPC_MAX_MESSAGE_BYTES ?? DEFAULT_GRPC.maxMessageBytes,
+    ),
+    maxHeaderBytes: Number(
+      process.env.GRPC_MAX_HEADER_BYTES ?? DEFAULT_GRPC.maxHeaderBytes,
+    ),
+    maxConcurrentStreams: Number(
+      process.env.GRPC_MAX_CONCURRENT_STREAMS ??
+        DEFAULT_GRPC.maxConcurrentStreams,
+    ),
+    maxSessionsPerTarget: Number(
+      process.env.GRPC_MAX_SESSIONS_PER_TARGET ??
+        DEFAULT_GRPC.maxSessionsPerTarget,
+    ),
+    maxActiveCalls: Number(
+      process.env.GRPC_MAX_ACTIVE_CALLS ?? DEFAULT_GRPC.maxActiveCalls,
+    ),
+    deadlineMs: Number(process.env.GRPC_DEADLINE_MS ?? DEFAULT_GRPC.deadlineMs),
+    idleTimeoutMs: Number(
+      process.env.GRPC_IDLE_TIMEOUT_MS ?? DEFAULT_GRPC.idleTimeoutMs,
+    ),
+    shutdownGraceMs: Number(
+      process.env.GRPC_SHUTDOWN_GRACE_MS ?? DEFAULT_GRPC.shutdownGraceMs,
+    ),
+  },
   upstreamHealth: {
     defaultIntervalMs: Number(
       process.env.HEALTH_DEFAULT_INTERVAL_MS ??
@@ -90,6 +143,7 @@ export default (): GatewayConfig => ({
     ),
     schedulerIntervalMs: DEFAULT_UPSTREAM_HEALTH.schedulerIntervalMs,
     telemetryIntervalMs: DEFAULT_UPSTREAM_HEALTH.telemetryIntervalMs,
+    grpcMaxResponseBytes: DEFAULT_UPSTREAM_HEALTH.grpcMaxResponseBytes,
   },
   rateLimit: {
     windowMs:
