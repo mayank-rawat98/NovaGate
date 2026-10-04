@@ -19,6 +19,8 @@ interface ServiceBody {
   targets?: unknown;
   healthCheckPath?: string;
   timeoutMs?: number;
+  healthCheckIntervalMs?: number;
+  unhealthyFallback?: boolean;
   h2?: boolean;
   supportsWebSocket?: boolean;
 }
@@ -47,6 +49,40 @@ function validateTargets(targets: unknown): ServiceTarget[] {
   });
 }
 
+function validateHealthSettings(body: ServiceBody) {
+  if (
+    body.healthCheckIntervalMs !== undefined &&
+    (!Number.isSafeInteger(body.healthCheckIntervalMs) ||
+      body.healthCheckIntervalMs < 1000 ||
+      body.healthCheckIntervalMs > 60000)
+  ) {
+    throw new BadRequestException(
+      'Health check interval must be an integer between 1000 and 60000 ms',
+    );
+  }
+  if (
+    body.unhealthyFallback !== undefined &&
+    typeof body.unhealthyFallback !== 'boolean'
+  ) {
+    throw new BadRequestException('Unhealthy fallback must be a boolean');
+  }
+  if (
+    body.healthCheckPath !== undefined &&
+    (typeof body.healthCheckPath !== 'string' ||
+      !body.healthCheckPath.startsWith('/') ||
+      body.healthCheckPath.startsWith('//') ||
+      /[\\#]/.test(body.healthCheckPath) ||
+      [...body.healthCheckPath].some(
+        (char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127,
+      ) ||
+      body.healthCheckPath.length > 1024)
+  ) {
+    throw new BadRequestException(
+      'Health check path must be a relative absolute path, such as /health',
+    );
+  }
+}
+
 @Controller('tenants/:tenantId/services')
 export class ServicesController {
   constructor(
@@ -65,10 +101,11 @@ export class ServicesController {
   @Post()
   async create(@Param('tenantId') tenantId: string, @Body() body: ServiceBody) {
     const schema = tenantSchema(tenantId);
+    validateHealthSettings(body);
     const targets = validateTargets(body.targets);
     const rows = await this.dataSource.query(
-      `INSERT INTO ${schema}.services (name, targets, "healthCheckPath", "timeoutMs", h2, "supportsWebSocket")
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      `INSERT INTO ${schema}.services (name, targets, "healthCheckPath", "timeoutMs", h2, "supportsWebSocket", "healthCheckIntervalMs", "unhealthyFallback")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
       [
         body.name,
         JSON.stringify(targets),
@@ -76,6 +113,8 @@ export class ServicesController {
         body.timeoutMs ?? 10000,
         body.h2 ?? false,
         body.supportsWebSocket ?? false,
+        body.healthCheckIntervalMs ?? 10000,
+        body.unhealthyFallback ?? false,
       ],
     );
     await this.configPush.triggerUpdate(tenantId);
@@ -89,6 +128,7 @@ export class ServicesController {
     @Body() body: ServiceBody,
   ) {
     const schema = tenantSchema(tenantId);
+    validateHealthSettings(body);
     const targets =
       body.targets === undefined
         ? null
@@ -100,7 +140,9 @@ export class ServicesController {
             "healthCheckPath" = COALESCE($4, "healthCheckPath"),
             "timeoutMs" = COALESCE($5, "timeoutMs"),
             h2 = COALESCE($6, h2),
-            "supportsWebSocket" = COALESCE($7, "supportsWebSocket")
+            "supportsWebSocket" = COALESCE($7, "supportsWebSocket"),
+            "healthCheckIntervalMs" = COALESCE($8, "healthCheckIntervalMs"),
+            "unhealthyFallback" = COALESCE($9, "unhealthyFallback")
        WHERE id = $1 AND "deletedAt" IS NULL RETURNING *) SELECT * FROM updated`,
       [
         id,
@@ -110,6 +152,8 @@ export class ServicesController {
         body.timeoutMs ?? null,
         body.h2 ?? null,
         body.supportsWebSocket ?? null,
+        body.healthCheckIntervalMs ?? null,
+        body.unhealthyFallback ?? null,
       ],
     );
     if (!rows.length)

@@ -16,15 +16,15 @@ This implements manual private archives, not all phase 4 criteria. Scheduled/per
 
 The code contains substantial work for phases 0–3, but file presence does not prove production acceptance. No phase is marked complete by this audit.
 
-| Phase | Evidence in repository                                                                         | Remaining work / verification                                                                                                                                                 |
-| ----- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0     | Weighted balancer, active health probes, HTTP retry loop, size/CORS/IP plugins                 | Issue #29 repairs peer-IP trust/IPv6, bounded binary body replay, browser preflight and HTTP retry termination; health interval and target failover acceptance remain         |
-| 1     | Plugin contracts, runner, registry, thirteen first-party plugins, dashboard route plugin forms | Plugin aggregate registration and fail-closed name resolution repaired in issue #27, verified through the real Nest module; broader runtime plugin acceptance remains         |
-| 2     | OIDC, client credentials, HMAC, ACL, mTLS implementations and unit tests                       | Verify real providers and TLS handshakes; Tenant-bound REST authorization and new-schema consumer groups repaired in issue #27; live provider/TLS acceptance remains          |
-| 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                      | Issue #29 verifies real HTTP/2 response hooks before sending the body and automatic GraphQL guard activation; WebSocket/gRPC protocol acceptance and least-connections remain |
-| 4     | Existing logs/health/metrics tables and REST views                                             | Tracing, live metrics, alert delivery/history, RustFS log export and consumer aggregates remain to implement                                                                  |
-| 5     | Existing REST configuration primitives                                                         | Declarative reconciliation, CLI, portal, Terraform, plugin SDK and third-party loading remain to implement                                                                    |
-| 6     | No verified implementations                                                                    | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                     |
+| Phase | Evidence in repository                                                                         | Remaining work / verification                                                                                                                                                                                                                          |
+| ----- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0     | Weighted balancer, active health probes, HTTP retry loop, size/CORS/IP plugins                 | Issue #29 repairs peer-IP trust/IPv6, bounded binary body replay, browser preflight and HTTP retry termination; issue #39 adds configurable service probes, bounded lifecycle and explicit all-down routing; whole-phase load/chaos acceptance remains |
+| 1     | Plugin contracts, runner, registry, thirteen first-party plugins, dashboard route plugin forms | Plugin aggregate registration and fail-closed name resolution repaired in issue #27, verified through the real Nest module; broader runtime plugin acceptance remains                                                                                  |
+| 2     | OIDC, client credentials, HMAC, ACL, mTLS implementations and unit tests                       | Verify real providers and TLS handshakes; Tenant-bound REST authorization and new-schema consumer groups repaired in issue #27; live provider/TLS acceptance remains                                                                                   |
+| 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                      | Issue #29 verifies real HTTP/2 response hooks before sending the body and automatic GraphQL guard activation; WebSocket/gRPC protocol acceptance and least-connections remain                                                                          |
+| 4     | Logs/health/metrics REST views and private RustFS manual NDJSON archives (#37)                 | Tracing, live metrics, alert delivery/history, scheduled/external exports, privacy controls and consumer aggregates remain to implement                                                                                                                |
+| 5     | Existing REST configuration primitives                                                         | Declarative reconciliation, CLI, portal, Terraform, plugin SDK and third-party loading remain to implement                                                                                                                                             |
+| 6     | No verified implementations                                                                    | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                              |
 
 ### Prerequisites discovered by audit
 
@@ -122,15 +122,15 @@ targets: Array<{ url: string; weight: number }>; // weight 1–100, defaults to 
 
 `apps/api/src/gateway/health/upstream-health.service.ts`:
 
-- Runs a `setInterval` every `healthCheckIntervalMs` (default 10s, configurable per service)
-- Probes `GET {target.url}{healthCheckPath}` with a 3s timeout
-- Maintains `Map<targetUrl, { healthy: boolean; failCount: number; lastChecked: Date }>`
+- Schedules immediate initial checks and independent per-service intervals (default 10s, configurable from 1–60s), with bounded concurrency and no overlapping checks.
+- Probes a same-origin absolute health path using HTTP, HTTPS or HTTP/2 with an absolute 3s deadline including connection and headers; only 2xx responses succeed.
+- Keys health state by tenant, service, target URL, health path and protocol. Configuration removal cancels stale probes; shutdown cancels outstanding network work.
 - Marks unhealthy after 3 consecutive failures; marks healthy after 2 consecutive successes (avoids flap)
-- `LoadBalancerService` skips unhealthy targets; falls back to all targets if all are unhealthy (never drop to zero)
+- `LoadBalancerService` skips unhealthy targets and returns unavailable when every target has failed. A per-service `unhealthyFallback` option explicitly enables attempts against failed peers. Initial unprobed targets remain eligible; mixed healthy/failed pools report degraded.
 
 `apps/api/src/gateway/telemetry/` — existing `health` telemetry message already wired; populate it from `UpstreamHealthService` instead of stubs.
 
-**Success criteria:** Stop a downstream service. Within 30s, gateway routes zero requests to it. Restart it. Within 30s, it re-enters rotation. Health page in dashboard reflects current state.
+**Success criteria:** Stop a downstream service and verify eviction after three failed checks; restart and verify re-entry after two successful checks. The bound includes the configured cadence, probe deadline, 250ms scheduler tick and queue delay under the configured concurrency. With no queue delay, conservative bounds are failure threshold × interval + probe deadline + scheduler tick for eviction, and recovery threshold × interval + probe deadline + scheduler tick for recovery. Verify all-down requests return unavailable by default, explicit fallback permits attempts, removal cancels probes, and dashboard reflects partial failures and editable settings. Issue #39 adds live HTTP/HTTP2/IPv6 probe lifecycle checks, TLS rejection checks, real HTTP all-down/fallback requests, WebSocket/gRPC unavailable contract checks, PostgreSQL migration/CRUD and control-plane round trips, and dashboard browser/accessibility verification. Full protocol acceptance remains part of phase 3.
 
 ---
 

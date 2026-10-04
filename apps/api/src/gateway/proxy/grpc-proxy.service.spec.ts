@@ -3,6 +3,7 @@ import {
   isGrpcRequest,
   GrpcProxyService,
 } from './grpc-proxy.service';
+import { LoadBalancerService } from './load-balancer.service';
 import type { TenantConfig } from '@api-gateway/shared-types';
 
 // Mock http2 module entirely so tests don't open real network connections
@@ -40,7 +41,7 @@ const BASE_CONFIG: TenantConfig = {
   rateLimit: { windowMs: 60000, unauthMax: 100, authMax: 500 },
 };
 
-function makeService(): GrpcProxyService {
+function makeService(allDown = false): GrpcProxyService {
   const configManager = {
     getConfig: jest.fn().mockReturnValue(BASE_CONFIG),
   };
@@ -53,12 +54,14 @@ function makeService(): GrpcProxyService {
   const upstreamHealth = {
     getHealthyUrls: jest
       .fn()
-      .mockReturnValue(new Set(['http://grpc-downstream:50051'])),
+      .mockReturnValue(
+        new Set(allDown ? [] : ['http://grpc-downstream:50051']),
+      ),
   };
   return new GrpcProxyService(
     configManager as never,
     metrics as never,
-    loadBalancer as never,
+    (allDown ? new LoadBalancerService() : loadBalancer) as never,
     upstreamHealth as never,
   );
 }
@@ -210,6 +213,27 @@ describe('GrpcProxyService.proxyStream', () => {
       'helloworld.Greeter',
       'SayHello',
       '0',
+    );
+  });
+});
+
+describe('gRPC unhealthy pool', () => {
+  it('returns gRPC unavailable before creating a downstream session', async () => {
+    const send = jest.fn();
+    await makeService(true).proxyStream(
+      {
+        ':path': '/helloworld.Greeter/SayHello',
+        ':method': 'POST',
+        'content-type': 'application/grpc',
+      },
+      Buffer.alloc(0),
+      send,
+    );
+    expect(send).toHaveBeenCalledWith(
+      200,
+      expect.objectContaining({ 'grpc-status': '14' }),
+      expect.any(Buffer),
+      {},
     );
   });
 });

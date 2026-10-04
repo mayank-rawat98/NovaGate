@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import { DEFAULT_UPSTREAM_HEALTH } from './configuration';
 import { BlockList, isIP } from 'net';
 
 export const configSchema = Joi.object({
@@ -29,6 +30,31 @@ export const configSchema = Joi.object({
         return helpers.error('any.invalid');
       }
     }),
+  HEALTH_DEFAULT_INTERVAL_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(60000)
+    .default(DEFAULT_UPSTREAM_HEALTH.defaultIntervalMs),
+  HEALTH_FAILURE_THRESHOLD: Joi.number()
+    .integer()
+    .min(1)
+    .max(10)
+    .default(DEFAULT_UPSTREAM_HEALTH.failureThreshold),
+  HEALTH_RECOVERY_THRESHOLD: Joi.number()
+    .integer()
+    .min(1)
+    .max(10)
+    .default(DEFAULT_UPSTREAM_HEALTH.recoveryThreshold),
+  HEALTH_PROBE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(10000)
+    .default(DEFAULT_UPSTREAM_HEALTH.probeTimeoutMs),
+  HEALTH_PROBE_CONCURRENCY: Joi.number()
+    .integer()
+    .min(1)
+    .max(64)
+    .default(DEFAULT_UPSTREAM_HEALTH.concurrency),
   DATABASE_URL: Joi.string().uri().required(),
   REDIS_URL: Joi.string().uri().required(),
   JWT_SECRET: Joi.string().min(32).required(),

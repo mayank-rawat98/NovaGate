@@ -55,6 +55,8 @@ describe('ServicesController', () => {
         5000,
         false,
         false,
+        10000,
+        false,
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
@@ -82,6 +84,8 @@ describe('ServicesController', () => {
         10000,
         false,
         false,
+        10000,
+        false,
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
@@ -101,6 +105,48 @@ describe('ServicesController', () => {
       expect(result).toEqual({ id: 'svc-1', timeoutMs: 3000 });
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
+  });
+
+  describe('health settings validation', () => {
+    it.each([0, 999, 60001, 1500.5, NaN, null, '1000'])(
+      'rejects invalid probe intervals: %s',
+      async (interval) => {
+        const { controller, ds, cp } = await build();
+        await expect(
+          controller.update(TENANT, 'svc', {
+            healthCheckIntervalMs: interval,
+          } as never),
+        ).rejects.toMatchObject({ status: 400 });
+        expect(ds.query).not.toHaveBeenCalled();
+        expect(cp.triggerUpdate).not.toHaveBeenCalled();
+      },
+    );
+    it.each([
+      '//other/health',
+      'https://other/health',
+      '/\\other',
+      '/health#fragment',
+      '/health with-space',
+      '',
+      null,
+    ])('rejects invalid health paths: %s', async (path) => {
+      const { controller, ds } = await build();
+      await expect(
+        controller.update(TENANT, 'svc', { healthCheckPath: path } as never),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(ds.query).not.toHaveBeenCalled();
+    });
+    it.each([null, 1, 'false'])(
+      'rejects non-boolean fallback: %s',
+      async (fallback) => {
+        const { controller } = await build();
+        await expect(
+          controller.update(TENANT, 'svc', {
+            unhealthyFallback: fallback,
+          } as never),
+        ).rejects.toMatchObject({ status: 400 });
+      },
+    );
   });
 
   describe('DELETE remove', () => {

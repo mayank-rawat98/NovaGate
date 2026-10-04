@@ -69,6 +69,8 @@ export type CreateRouteDto = Pick<
 export type UpdateRouteDto = Partial<CreateRouteDto>;
 export type CreateServiceDto = Pick<ServiceEntity, 'name' | 'targets'> & {
   healthCheckPath?: string;
+  healthCheckIntervalMs?: number;
+  unhealthyFallback?: boolean;
   timeoutMs?: number;
 };
 export type UpdateServiceDto = Partial<CreateServiceDto>;

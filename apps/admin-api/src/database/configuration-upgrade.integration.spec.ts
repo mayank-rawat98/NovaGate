@@ -150,6 +150,31 @@ integration('Configuration upgrades and updates on PostgreSQL', () => {
       await controller.update(tenant, service, { h2: false }),
     ).toMatchObject({ id: service, h2: false });
   });
+  it('migrates health defaults and preserves omitted settings across updates', async () => {
+    const controller = new ServicesController(ds, push);
+    expect(await controller.update(tenant, service, {})).toMatchObject({
+      healthCheckIntervalMs: 10000,
+      unhealthyFallback: false,
+    });
+    expect(
+      await controller.update(tenant, service, {
+        healthCheckIntervalMs: 1500,
+        unhealthyFallback: true,
+      }),
+    ).toMatchObject({ healthCheckIntervalMs: 1500, unhealthyFallback: true });
+    expect(
+      await controller.update(tenant, service, { name: 'preserved' }),
+    ).toMatchObject({ healthCheckIntervalMs: 1500, unhealthyFallback: true });
+    expect(
+      await controller.update(tenant, service, { unhealthyFallback: false }),
+    ).toMatchObject({ healthCheckIntervalMs: 1500, unhealthyFallback: false });
+    expect(
+      await controller.create(tenant, {
+        name: 'fresh',
+        targets: [{ url: 'http://fresh:8080', weight: 1 }],
+      }),
+    ).toMatchObject({ healthCheckIntervalMs: 10000, unhealthyFallback: false });
+  });
   it('keeps consumer groups when omitted and returns the updated consumer without its key hash', async () => {
     const controller = new ConsumersController(ds, push);
     const consumer = await controller.create(tenant, {
