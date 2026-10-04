@@ -6,11 +6,32 @@ import {
   DEFAULT_IDENTITY_PROVIDER,
   DEFAULT_MTLS,
   DEFAULT_TLS,
+  DEFAULT_HMAC,
 } from './configuration';
 import { BlockList, isIP } from 'net';
 
 export const configSchema = Joi.object({
   PORT: Joi.number().default(3000),
+  HMAC_MAX_BODY_BYTES: Joi.number()
+    .integer()
+    .min(1)
+    .max(16777216)
+    .default(DEFAULT_HMAC.maxBodyBytes),
+  HMAC_BODY_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(30000)
+    .default(DEFAULT_HMAC.bodyTimeoutMs),
+  HMAC_MAX_PENDING_REQUESTS: Joi.number()
+    .integer()
+    .min(1)
+    .max(256)
+    .default(DEFAULT_HMAC.maxPendingRequests),
+  HMAC_MAX_HEADER_BYTES: Joi.number()
+    .integer()
+    .min(128)
+    .max(16384)
+    .default(DEFAULT_HMAC.maxHeaderBytes),
   TRUSTED_PROXY_CIDRS: Joi.string()
     .allow('')
     .default('')

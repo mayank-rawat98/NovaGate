@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import {
   chmodSync,
   mkdirSync,
@@ -40,6 +40,7 @@ const servers = [];
 let plane;
 let networkCreated = false;
 let trustedCalls = 0;
+const webhookBodies = [];
 let untrustedCalls = 0;
 let trustedWsCalls = 0;
 let untrustedWsCalls = 0;
@@ -392,6 +393,23 @@ try {
   await new Promise((done) => untrustedIdentity.listen(0, '0.0.0.0', done));
   const untrustedIdentityEndpoint = `https://host.docker.internal:${untrustedIdentity.address().port}`;
 
+  const webhookUpstream = https.createServer(trusted, (req, res) => {
+    if (req.method !== 'POST') {
+      req.resume();
+      res.end('healthy');
+      return;
+    }
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.once('end', () => {
+      webhookBodies.push(Buffer.concat(chunks).toString('base64'));
+      res.end('verified webhook');
+    });
+  });
+  servers.push(webhookUpstream);
+  await new Promise((done) => webhookUpstream.listen(0, '0.0.0.0', done));
+  const webhookTarget = `https://host.docker.internal:${webhookUpstream.address().port}`;
+
   const authPlugin = (endpoint = '/introspect') => ({
     name: 'oauth2-client-credentials',
     config: {
@@ -495,6 +513,10 @@ try {
     'WS_ALLOW_QUERY_TOKEN=true',
     '-e',
     'WS_MAX_CONNECTIONS=2',
+    '-e',
+    'HMAC_MAX_BODY_BYTES=128',
+    '-e',
+    'HMAC_BODY_TIMEOUT_MS=300',
     '-e',
     'GRPC_HOST=0.0.0.0',
     '-e',
@@ -1069,6 +1091,90 @@ try {
   await once(rotatedSocket, 'open');
   rotatedSocket.close();
   await once(rotatedSocket, 'close');
+  config.services.push({
+    id: 'webhook-service',
+    name: 'webhook-fixture',
+    targets: [{ url: webhookTarget, weight: 1 }],
+  });
+  config.routes.push({
+    id: 'webhook-route',
+    method: 'POST',
+    pathPattern: '/webhook',
+    serviceId: 'webhook-service',
+    enabled: true,
+    authRequired: true,
+    plugins: [
+      { name: 'request-size-limit', config: { maxBodyBytes: 256 } },
+      {
+        name: 'hmac-auth',
+        config: {
+          mode: 'stripe',
+          header: 'stripe-signature',
+          algorithm: 'sha256',
+          secrets: ['fixture-old', 'fixture-new'],
+        },
+      },
+    ],
+  });
+  for (const socket of plane.clients)
+    socket.send(
+      JSON.stringify({ type: 'config.update', version: 7, payload: config }),
+    );
+  await until(() => acknowledged === 7, 'webhook config ACK');
+  const webhookBody = Buffer.from([0, 255, 128, 32, 13, 10, 123, 125]);
+  const webhookSignature = (body, timestamp = Math.floor(Date.now() / 1000)) =>
+    `t=${timestamp},v1=${createHmac('sha256', 'fixture-new').update(`${timestamp}.`).update(body).digest('hex')}`;
+  const sendWebhook = (body, signature = webhookSignature(body)) =>
+    fetch(`https://127.0.0.1:${httpPort}/webhook`, {
+      method: 'POST',
+      headers: { 'stripe-signature': signature },
+      body,
+    });
+  assert.equal((await sendWebhook(webhookBody)).status, 200);
+  assert.deepEqual(webhookBodies, [webhookBody.toString('base64')]);
+  assert.equal(
+    (await sendWebhook(Buffer.from('changed'), webhookSignature(webhookBody)))
+      .status,
+    401,
+  );
+  assert.equal(
+    (
+      await sendWebhook(
+        webhookBody,
+        webhookSignature(webhookBody, Math.floor(Date.now() / 1000) - 600),
+      )
+    ).status,
+    401,
+  );
+  assert.equal((await sendWebhook(Buffer.alloc(129, 1))).status, 413);
+  assert.equal(webhookBodies.length, 1);
+  const stalled = await new Promise((done, fail) => {
+    const request = https.request(
+      `https://127.0.0.1:${httpPort}/webhook`,
+      {
+        ca: listenerCa,
+        agent: false,
+        method: 'POST',
+        headers: {
+          'stripe-signature': webhookSignature(webhookBody),
+          'transfer-encoding': 'chunked',
+        },
+      },
+      (res) => {
+        res.resume();
+        res.once('end', () => {
+          request.destroy();
+          done(res.statusCode);
+        });
+      },
+    );
+    request.on('error', fail);
+    request.write(webhookBody);
+  });
+  assert.equal(stalled, 408);
+  assert.equal((await sendWebhook(webhookBody)).status, 200);
+  assert.equal(webhookBodies.length, 2);
+
   const healthCommand = JSON.parse(
     docker(
       'inspect',
@@ -1119,6 +1225,8 @@ try {
         inactiveIdentityCalls,
         outboundIdentityCalls,
         checks: [
+          'Stripe-HTTPS-binary-rotation-tamper-staleness-body-limit-deadline-recovery',
+          'signed-byte-preparation-before-earlier-body-limit-hook',
           'native-client-private-key-proof-HTTPS-gRPC-WSS',
           'copied-public-certificate-assertion-denied',
           'tenant-trust-removal-cancels-gRPC-and-WSS-denies-new-requests',

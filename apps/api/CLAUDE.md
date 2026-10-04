@@ -104,7 +104,7 @@ gateway/
 - Phase 2 plugins that need config manager: `acl` and `mtls` inject `GatewayConfigManagerService` directly
 - Phase 2 plugins that need Redis: `oauth2-client-credentials` injects `REDIS_CLIENT` token
 - OIDC plugin caches JWKS keys in-memory (24h TTL); refreshes on `kid` miss then fails if still not found
-- HMAC plugin reads `req.rawBody` if already buffered, otherwise streams and caches it as `req.rawBody`
+- Bounded HMAC `prepareRequest` captures original bytes before body-aware hooks without authenticating; request policies run in saved order. HMAC admission lasts until response finish/close/cancellation. Stripe and custom timestamp modes sign timestamp.body; body-only mode cannot claim replay protection.
 
 ## Guardrails
 

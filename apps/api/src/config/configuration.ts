@@ -47,6 +47,16 @@ export const DEFAULT_WEBSOCKET = {
 };
 export type WebSocketSettings = typeof DEFAULT_WEBSOCKET;
 
+export const DEFAULT_HMAC = {
+  maxBodyBytes: 1048576,
+  bodyTimeoutMs: 5000,
+  maxPendingRequests: 32,
+  maxHeaderBytes: 4096,
+  maxSignatures: 8,
+  clockSkewSeconds: 300,
+};
+export type HmacSettings = typeof DEFAULT_HMAC;
+
 export const DEFAULT_TLS = { handshakeTimeoutMs: 10000, maxConnections: 1024 };
 export const DEFAULT_MTLS = {
   maxCertificateBytes: 16384,
@@ -107,6 +117,7 @@ export interface GatewayConfig {
   websocket: WebSocketSettings;
   identityProvider: IdentityProviderSettings;
   mtls: MtlsSettings;
+  hmac: HmacSettings;
   tls: ListenerTlsSettings;
   rateLimit: {
     windowMs: number;
@@ -136,6 +147,21 @@ export default (): GatewayConfig => ({
     keyFile: process.env.HTTP_TLS_KEY_FILE,
     clientCaFile: process.env.HTTP_TLS_CLIENT_CA_FILE,
     crlFile: process.env.HTTP_TLS_CRL_FILE,
+  },
+  hmac: {
+    ...DEFAULT_HMAC,
+    maxBodyBytes: Number(
+      process.env.HMAC_MAX_BODY_BYTES ?? DEFAULT_HMAC.maxBodyBytes,
+    ),
+    bodyTimeoutMs: Number(
+      process.env.HMAC_BODY_TIMEOUT_MS ?? DEFAULT_HMAC.bodyTimeoutMs,
+    ),
+    maxPendingRequests: Number(
+      process.env.HMAC_MAX_PENDING_REQUESTS ?? DEFAULT_HMAC.maxPendingRequests,
+    ),
+    maxHeaderBytes: Number(
+      process.env.HMAC_MAX_HEADER_BYTES ?? DEFAULT_HMAC.maxHeaderBytes,
+    ),
   },
   mtls: {
     maxCertificateBytes: Number(

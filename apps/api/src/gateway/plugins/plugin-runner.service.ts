@@ -14,6 +14,26 @@ export class PluginRunnerService {
     plugins: GatewayPlugin[],
     ctx: PluginContext,
   ): Promise<PluginShortCircuit | void> {
+    // Capture signed bytes under admission/deadline limits before any body-aware
+    // hook can consume or reconstruct them. Policy hooks still run in saved order.
+    for (const plugin of plugins) {
+      if (ctx.signal?.aborted) return;
+      if (!plugin.prepareRequest) continue;
+      try {
+        const result = await plugin.prepareRequest(ctx);
+        if (result) return result;
+      } catch {
+        return {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            error: 'PLUGIN_ERROR',
+            message: 'Internal plugin error',
+            requestId: ctx.requestId,
+          }),
+        };
+      }
+    }
     for (const plugin of plugins) {
       if (ctx.signal?.aborted)
         return {

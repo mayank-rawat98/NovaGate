@@ -19,6 +19,7 @@ import type {
   Service,
   CreateRouteDto,
   OAuth2PluginConfig,
+  HmacPluginConfig,
 } from '../../../lib/api-client';
 
 const METHOD_COLORS: Record<string, string> = {
@@ -92,8 +93,9 @@ interface OidcConfig {
   claimsToForward: string;
 }
 interface HmacAuthConfig {
+  mode: NonNullable<HmacPluginConfig['mode']>;
   header: string;
-  algorithm: string;
+  algorithm: HmacPluginConfig['algorithm'];
   secrets: string;
   maxClockSkewSeconds: string;
   timestampHeader: string;
@@ -190,6 +192,7 @@ const EMPTY_PLUGINS_FORM: PluginsFormState = {
   originalPlugins: [],
   hmacAuth: false,
   hmacAuthConfig: {
+    mode: 'generic',
     header: 'x-hub-signature-256',
     algorithm: 'sha256',
     secrets: '',
@@ -385,8 +388,9 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
     result.push({ name: 'oauth2-client-credentials', config: { ...config } });
   }
 
-  if (pf.hmacAuth && pf.hmacAuthConfig.secrets) {
-    const cfg: Record<string, unknown> = {
+  if (pf.hmacAuth) {
+    const cfg: HmacPluginConfig = {
+      mode: pf.hmacAuthConfig.mode,
       header: pf.hmacAuthConfig.header || 'x-hub-signature-256',
       algorithm: pf.hmacAuthConfig.algorithm || 'sha256',
       secrets: pf.hmacAuthConfig.secrets
@@ -396,9 +400,12 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
     };
     if (pf.hmacAuthConfig.maxClockSkewSeconds)
       cfg.maxClockSkewSeconds = Number(pf.hmacAuthConfig.maxClockSkewSeconds);
-    if (pf.hmacAuthConfig.timestampHeader)
+    if (
+      pf.hmacAuthConfig.mode === 'generic' &&
+      pf.hmacAuthConfig.timestampHeader
+    )
       cfg.timestampHeader = pf.hmacAuthConfig.timestampHeader;
-    result.push({ name: 'hmac-auth', config: cfg });
+    result.push({ name: 'hmac-auth', config: { ...cfg } });
   }
 
   if (pf.acl && (pf.aclConfig.allow || pf.aclConfig.deny)) {
@@ -446,6 +453,7 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
       'audience',
     ],
     'hmac-auth': [
+      'mode',
       'header',
       'algorithm',
       'secrets',
@@ -580,9 +588,11 @@ function pluginsToForm(plugins: PluginEntry[] | undefined): PluginsFormState {
       };
     } else if (p.name === 'hmac-auth') {
       state.hmacAuth = true;
+      const hmac = cfg as unknown as HmacPluginConfig;
       state.hmacAuthConfig = {
+        mode: hmac.mode ?? 'generic',
         header: (cfg.header as string | undefined) ?? 'x-hub-signature-256',
-        algorithm: (cfg.algorithm as string | undefined) ?? 'sha256',
+        algorithm: hmac.algorithm ?? 'sha256',
         secrets: (cfg.secrets as string[] | undefined)?.join('\n') ?? '',
         maxClockSkewSeconds:
           cfg.maxClockSkewSeconds != null
@@ -1261,6 +1271,45 @@ function PluginsTab({
         enabled={pf.hmacAuth}
         onToggle={(v) => setPf({ hmacAuth: v })}
       >
+        <div className="flex flex-col gap-1">
+          <label
+            htmlFor="hmac-format"
+            className="text-xs font-medium text-gray-600"
+          >
+            Webhook signature format
+          </label>
+          <select
+            id="hmac-format"
+            value={pf.hmacAuthConfig.mode}
+            onChange={(e) => {
+              const mode = e.target.value as HmacAuthConfig['mode'];
+              setPf({
+                hmacAuthConfig: {
+                  ...pf.hmacAuthConfig,
+                  mode,
+                  header:
+                    mode === 'stripe'
+                      ? 'stripe-signature'
+                      : 'x-hub-signature-256',
+                  algorithm: 'sha256',
+                  timestampHeader: '',
+                  maxClockSkewSeconds: '',
+                },
+              });
+            }}
+            className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+          >
+            <option value="generic">GitHub / generic raw body</option>
+            <option value="stripe">Stripe timestamp + body</option>
+          </select>
+        </div>
+        <p className="text-xs text-gray-500">
+          {pf.hmacAuthConfig.mode === 'stripe'
+            ? 'Checks Stripe t= and v1= signatures over the original timestamp and body. Freshness defaults to 300 seconds.'
+            : 'GitHub signs the original body. For a custom timestamp header, your sender must sign timestamp.body. Body-only signatures do not prevent replays.'}{' '}
+          Keep event-ID deduplication in your webhook handler; legitimate
+          retries remain supported.
+        </p>
         <div className="grid grid-cols-2 gap-3">
           <TextInput
             label="Signature Header"
@@ -1280,11 +1329,12 @@ function PluginsTab({
             <select
               id="routes-field-1"
               value={pf.hmacAuthConfig.algorithm}
+              disabled={pf.hmacAuthConfig.mode === 'stripe'}
               onChange={(e) =>
                 setPf({
                   hmacAuthConfig: {
                     ...pf.hmacAuthConfig,
-                    algorithm: e.target.value,
+                    algorithm: e.target.value as HmacPluginConfig['algorithm'],
                   },
                 })
               }
@@ -1305,16 +1355,18 @@ function PluginsTab({
           rows={3}
         />
         <div className="grid grid-cols-2 gap-3">
-          <TextInput
-            label="Timestamp Header (optional)"
-            value={pf.hmacAuthConfig.timestampHeader}
-            onChange={(v) =>
-              setPf({
-                hmacAuthConfig: { ...pf.hmacAuthConfig, timestampHeader: v },
-              })
-            }
-            placeholder="x-timestamp"
-          />
+          {pf.hmacAuthConfig.mode === 'generic' && (
+            <TextInput
+              label="Timestamp Header (optional)"
+              value={pf.hmacAuthConfig.timestampHeader}
+              onChange={(v) =>
+                setPf({
+                  hmacAuthConfig: { ...pf.hmacAuthConfig, timestampHeader: v },
+                })
+              }
+              placeholder="x-timestamp"
+            />
+          )}
           <TextInput
             label="Max Clock Skew (seconds)"
             value={pf.hmacAuthConfig.maxClockSkewSeconds}

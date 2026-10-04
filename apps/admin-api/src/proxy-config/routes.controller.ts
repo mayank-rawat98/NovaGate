@@ -1,5 +1,10 @@
 import Joi from 'joi';
 import {
+  MAX_HMAC_SECRETS,
+  MAX_HMAC_SECRET_BYTES,
+  MAX_HMAC_CLOCK_SKEW_SECONDS,
+} from '@api-gateway/shared-types';
+import {
   Controller,
   Get,
   Post,
@@ -111,6 +116,49 @@ const oauthConfigSchema = Joi.object({
     }),
 }).xor('introspectionEndpoint', 'tokenEndpoint');
 
+const hmacConfigSchema = Joi.object({
+  mode: Joi.string().valid('generic', 'stripe'),
+  header: Joi.string()
+    .max(128)
+    .pattern(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/)
+    .required(),
+  algorithm: Joi.string().valid('sha256', 'sha512').required(),
+  secrets: Joi.array()
+    .min(1)
+    .max(MAX_HMAC_SECRETS)
+    .items(
+      Joi.string().custom((v: string, helpers) =>
+        Buffer.byteLength(v) > MAX_HMAC_SECRET_BYTES
+          ? helpers.error('any.invalid')
+          : v,
+      ),
+    )
+    .required(),
+  timestampHeader: Joi.string()
+    .max(128)
+    .pattern(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/),
+  maxClockSkewSeconds: Joi.number()
+    .strict()
+    .integer()
+    .min(1)
+    .max(MAX_HMAC_CLOCK_SKEW_SECONDS),
+}).custom((v, helpers) => {
+  if (
+    v.mode === 'stripe' &&
+    (v.algorithm !== 'sha256' || v.timestampHeader !== undefined)
+  )
+    return helpers.error('any.invalid');
+  if (v.timestampHeader?.toLowerCase() === v.header.toLowerCase())
+    return helpers.error('any.invalid');
+  if (
+    v.maxClockSkewSeconds !== undefined &&
+    v.mode !== 'stripe' &&
+    !v.timestampHeader
+  )
+    return helpers.error('any.invalid');
+  return v;
+});
+
 function validatePlugins(plugins: unknown): void {
   if (plugins === null || plugins === undefined) return;
   if (!Array.isArray(plugins))
@@ -135,12 +183,14 @@ function validatePlugins(plugins: unknown): void {
         ? oidcConfigSchema
         : entry.name === 'oauth2-client-credentials'
           ? oauthConfigSchema
-          : entry.name === 'mtls'
-            ? Joi.object({ required: Joi.boolean().strict().required() })
-            : undefined;
+          : entry.name === 'hmac-auth'
+            ? hmacConfigSchema
+            : entry.name === 'mtls'
+              ? Joi.object({ required: Joi.boolean().strict().required() })
+              : undefined;
     if (schema?.validate(entry.config).error)
       throw new BadRequestException(
-        `Invalid ${entry.name} configuration: check endpoint, credentials and optional fields`,
+        `Invalid ${entry.name} configuration: check credentials and optional fields`,
       );
   }
 }

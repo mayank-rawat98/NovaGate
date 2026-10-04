@@ -61,6 +61,18 @@ const routes = [
     serviceId: service,
     authRequired: false,
     enabled: false,
+    plugins: [
+      { name: 'request-size-limit', config: { maxBodyBytes: 1048576 } },
+      {
+        name: 'hmac-auth',
+        config: {
+          mode: 'generic',
+          header: 'x-hub-signature-256',
+          algorithm: 'sha256',
+          secrets: ['fixture-old', 'fixture-new'],
+        },
+      },
+    ],
     createdAt,
   },
 ];
@@ -141,6 +153,27 @@ await context.route('**/api/**', async (route) => {
   }
   if (url.pathname.includes('/routes/') && route.request().method() === 'PUT') {
     const dto = route.request().postDataJSON();
+    if (url.pathname.endsWith('/r2')) {
+      assert.deepEqual(
+        dto.plugins.map((p) => p.name),
+        ['request-size-limit', 'hmac-auth'],
+      );
+      assert.deepEqual(dto.plugins[0].config, { maxBodyBytes: 1048576 });
+      assert.deepEqual(dto.plugins[1].config, {
+        mode: 'stripe',
+        header: 'stripe-signature',
+        algorithm: 'sha256',
+        secrets: ['fixture-old', 'fixture-new'],
+        maxClockSkewSeconds: 300,
+      });
+      routes[1] = { ...routes[1], ...dto };
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(routes[1]),
+      });
+      return;
+    }
     assert.deepEqual(
       dto.plugins.map((entry) => entry.name),
       ['oauth2-client-credentials', 'graphql-guard', 'cors'],
@@ -429,6 +462,54 @@ try {
     .getByRole('button', { name: 'Save Changes', exact: true })
     .click();
   await expect(oauthDrawer).not.toBeVisible();
+  await page
+    .getByRole('button', { name: 'Edit POST /events', exact: true })
+    .click();
+  const hmacDrawer = page.getByRole('dialog', {
+    name: 'Routes form',
+    exact: true,
+  });
+  await hmacDrawer.getByRole('button', { name: /^plugins/i }).click();
+  await expect(
+    hmacDrawer.getByLabel('Webhook signature format', { exact: true }),
+  ).toHaveValue('generic');
+  await expect(
+    hmacDrawer.getByText(/Body-only signatures do not prevent replays/),
+  ).toBeVisible();
+  await hmacDrawer
+    .getByLabel('Webhook signature format', { exact: true })
+    .selectOption('stripe');
+  await expect(
+    hmacDrawer.getByLabel('Signature Header', { exact: true }),
+  ).toHaveValue('stripe-signature');
+  await expect(
+    hmacDrawer.getByLabel('Algorithm', { exact: true }),
+  ).toBeDisabled();
+  await expect(
+    hmacDrawer.getByLabel('Timestamp Header (optional)', { exact: true }),
+  ).toHaveCount(0);
+  await hmacDrawer
+    .getByLabel('Max Clock Skew (seconds)', { exact: true })
+    .fill('300');
+  await audit('Stripe webhook format mobile');
+  await hmacDrawer
+    .getByRole('button', { name: 'Save Changes', exact: true })
+    .click();
+  await expect(hmacDrawer).not.toBeVisible();
+  await page
+    .getByRole('button', { name: 'Edit POST /events', exact: true })
+    .click();
+  await hmacDrawer.getByRole('button', { name: /^plugins/i }).click();
+  await expect(
+    hmacDrawer.getByLabel('Webhook signature format', { exact: true }),
+  ).toHaveValue('stripe');
+  await expect(
+    hmacDrawer.getByLabel('Secrets (one per line — supports rotation)', {
+      exact: true,
+    }),
+  ).toHaveValue('fixture-old\nfixture-new');
+  await page.keyboard.press('Escape');
+  await expect(hmacDrawer).not.toBeVisible();
   const addRoute = page.getByRole('button', { name: 'Add Route', exact: true });
   await addRoute.click();
   const drawer = page.getByRole('dialog', { name: 'Routes form', exact: true });

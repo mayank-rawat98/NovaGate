@@ -46,15 +46,15 @@ Authentication applies to the handshake. Opaque tunnels drain during shutdown gr
 
 The code contains substantial work for phases 0–3, but file presence does not prove production acceptance. No phase is marked complete by this audit.
 
-| Phase | Evidence in repository                                                                         | Remaining work / verification                                                                                                                                                                                                                                 |
-| ----- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0     | Weighted balancer, active health probes, HTTP retry loop, size/CORS/IP plugins                 | Issue #29 repairs peer-IP trust/IPv6, bounded binary body replay, browser preflight and HTTP retry termination; issue #39 adds configurable service probes, bounded lifecycle and explicit all-down routing; whole-phase load/chaos acceptance remains        |
-| 1     | Plugin contracts, runner, registry, thirteen first-party plugins, dashboard route plugin forms | Plugin aggregate registration and fail-closed name resolution repaired in issue #27, verified through the real Nest module; broader runtime plugin acceptance remains                                                                                         |
-| 2     | OIDC, client credentials, HMAC, ACL, mTLS implementations and unit tests                       | Verify real providers and TLS handshakes; Tenant-bound REST authorization and groups repaired in #27; provider isolation/bounds verified in #47 and native/proxy mTLS plus live trust rotation in #49. Real webhook HMAC and external Auth0 acceptance remain |
-| 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                      | Issue #29 verifies real HTTP/2 response hooks before sending the body and automatic GraphQL guard activation; Native gRPC/WebSocket runtime checks now exist (#41/#43); formal protocol acceptance and least-connections remain                               |
-| 4     | Logs/health/metrics REST views and private RustFS manual NDJSON archives (#37)                 | Tracing, live metrics, alert delivery/history, scheduled/external exports, privacy controls and consumer aggregates remain to implement                                                                                                                       |
-| 5     | Existing REST configuration primitives                                                         | Declarative reconciliation, CLI, portal, Terraform, plugin SDK and third-party loading remain to implement                                                                                                                                                    |
-| 6     | No verified implementations                                                                    | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                     |
+| Phase | Evidence in repository                                                                         | Remaining work / verification                                                                                                                                                                                                                                                                               |
+| ----- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0     | Weighted balancer, active health probes, HTTP retry loop, size/CORS/IP plugins                 | Issue #29 repairs peer-IP trust/IPv6, bounded binary body replay, browser preflight and HTTP retry termination; issue #39 adds configurable service probes, bounded lifecycle and explicit all-down routing; whole-phase load/chaos acceptance remains                                                      |
+| 1     | Plugin contracts, runner, registry, thirteen first-party plugins, dashboard route plugin forms | Plugin aggregate registration and fail-closed name resolution repaired in issue #27, verified through the real Nest module; broader runtime plugin acceptance remains                                                                                                                                       |
+| 2     | OIDC, client credentials, HMAC, ACL, mTLS implementations and unit tests                       | Verify real providers and TLS handshakes; Tenant-bound REST authorization and groups repaired in #27; provider isolation/bounds verified in #47 and native/proxy mTLS plus live trust rotation in #49. Bounded Stripe/GitHub webhook HMAC verified in #51; external Auth0 and final phase acceptance remain |
+| 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                      | Issue #29 verifies real HTTP/2 response hooks before sending the body and automatic GraphQL guard activation; Native gRPC/WebSocket runtime checks now exist (#41/#43); formal protocol acceptance and least-connections remain                                                                             |
+| 4     | Logs/health/metrics REST views and private RustFS manual NDJSON archives (#37)                 | Tracing, live metrics, alert delivery/history, scheduled/external exports, privacy controls and consumer aggregates remain to implement                                                                                                                                                                     |
+| 5     | Existing REST configuration primitives                                                         | Declarative reconciliation, CLI, portal, Terraform, plugin SDK and third-party loading remain to implement                                                                                                                                                                                                  |
+| 6     | No verified implementations                                                                    | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                                                                   |
 
 ### Prerequisites discovered by audit
 
@@ -481,6 +481,7 @@ config: {
 
 ```typescript
 config: {
+  mode?: 'generic' | 'stripe' // default generic; Stripe signs timestamp.body
   header: string          // header containing signature, e.g. 'X-Hub-Signature-256'
   algorithm: 'sha256' | 'sha512'
   secrets: string[]       // list of valid secrets (supports rotation — check all)
@@ -488,8 +489,11 @@ config: {
 }
 ```
 
-- Computes `HMAC(secret, rawBody)` and compares to header value using `timingSafeEqual`
-- `rawBody` captured before any transformation plugins run
+- Generic signs original raw bytes; Stripe parses bounded `t=`/`v1=` envelopes and signs `timestamp.body`. Custom `timestampHeader` requires the same signed timestamp format.
+- Require exact hex length, original nonduplicate wire headers, constant-time comparisons across bounded rotation keys/signatures and canonical timestamps; freshness checked again after upload.
+- Bounded preparation captures bytes before body-aware hooks without changing policy hook order or authenticating. Operator byte/deadline/admission/header limits protect cached and chunked requests; capacity remains reserved until response completion/cancellation.
+- Body-only GitHub signatures do not prevent replay. Application event-ID deduplication remains required and valid provider retries remain allowed.
+- Issue #51 implements these contracts and provider selection in the dashboard. Verified real HTTP/TLS binary forwarding, the published GitHub vector, Stripe timestamp/signature rotation, tampering and stale delivery rejection, upload size/deadline/cancellation/admission recovery, preceding body-reader protection and saved policy order. All five-project gates pass (582 tests), as do desktop/mobile accessibility and the latest non-root OrbStack image with retained transport/auth/Redis regressions. External-provider and all-phase formal acceptance remain pending.
 
 ---
 

@@ -414,3 +414,5 @@ export type {
 } from '@api-gateway/shared-types';
 
 export type { MtlsPluginConfig } from '@api-gateway/shared-types';
+
+export type { HmacPluginConfig } from '@api-gateway/shared-types';
