@@ -6,6 +6,12 @@ Each phase builds on the previous. Track implementation, regression verification
 
 The workspace now has responsive grouped navigation, an ivory/mint/indigo palette, CSS clay illustrations, clear gateway loading/unavailable states, actual enabled-route counts, fetch retry controls and accessible native configuration dialogs. The browser verifier covers mobile/desktop layouts, saved-session hydration, keyboard containment/Escape/focus restoration, expanded route plugin controls, one-time consumer keys and axe WCAG A/AA rules. CI runs the verifier against a standalone production build and retains screenshots/findings. This is incremental implementation evidence; visual checks with real users, full live API acceptance and the final all-phase campaign remain required.
 
+## RustFS archive foundation — issue #37
+
+RustFS 1.0.1 is pinned by digest in verification/production Compose. Production storage is opt-in with private networking and separate credentials. Tenant session routes create/list durable jobs and stream authorized NDJSON downloads. Workers coordinate replicas with row/tenant locks, fenced leases, bounded keyset reads under a repeatable snapshot, size/record/deadline limits, three attempts and expiry cleanup of objects/multipart uploads. Settings includes accessible archive filters, states and download recovery. Real PostgreSQL/RustFS checks cover tenancy, anonymous denial, streaming/multipart operations, snapshot pagination, failed work and lease recovery; a packaged OrbStack admin container verifies automatic processing. CI runs storage integration and browser checks.
+
+This implements manual private archives, not all phase 4 criteria. Scheduled/per-tenant destination configuration, webhook/Datadog exporters, privacy/redaction controls, distributed storage and documented restore drills still require implementation and acceptance evidence.
+
 ## Code audit — 4 October 2026
 
 The code contains substantial work for phases 0–3, but file presence does not prove production acceptance. No phase is marked complete by this audit.
@@ -681,7 +687,8 @@ type AlertChannel = { type: 'webhook'; url: string; secret?: string } | { type: 
 - Background job (configurable schedule: real-time or hourly batch)
 - Destinations: S3-compatible (RustFS by default, AWS S3 and compatible providers), webhook (NDJSON), Datadog Logs API
 - Config per tenant: `{ destination, credentials, filter: { minStatusCode, paths } }`
-- Uses streaming SELECT (TypeORM cursor) to avoid loading all logs into memory
+- Uses streaming SELECT or bounded keyset pages under a repeatable snapshot to avoid loading all logs into memory
+- Issue #37 implements manual RustFS NDJSON archive jobs, authenticated downloads and expiry cleanup; scheduling and additional destinations remain pending.
 
 `apps/dashboard` — Settings → Log Export tab.
 

@@ -1,3 +1,4 @@
+import { LogExportModule } from '../log-export/log-export.module';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { TenantAuthGuard } from '../auth/tenant-auth.guard';
@@ -25,6 +26,7 @@ import { MigrationService } from '../database/migration.service';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    LogExportModule,
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({

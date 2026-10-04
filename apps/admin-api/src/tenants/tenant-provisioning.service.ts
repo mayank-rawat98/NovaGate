@@ -78,6 +78,10 @@ export class TenantProvisioningService {
         )
       `);
 
+      await manager.query(
+        `CREATE INDEX IF NOT EXISTS request_logs_export_cursor ON ${schemaName}.request_logs (timestamp, id)`,
+      );
+
       await manager.query(`
         CREATE TABLE IF NOT EXISTS ${schemaName}.error_events (
           id UUID PRIMARY KEY,

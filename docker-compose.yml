@@ -66,6 +66,14 @@ services:
       SMTP_API_KEY: ${SMTP_API_KEY}
       SMTP_API_BASE_URL: ${SMTP_API_BASE_URL:-https://api.mailtr.co}
       SMTP_FROM: ${SMTP_FROM:-support@novagate.dev}
+      OBJECT_STORAGE_ENABLED: ${OBJECT_STORAGE_ENABLED:-false}
+      OBJECT_STORAGE_ENDPOINT: ${OBJECT_STORAGE_ENDPOINT:-http://rustfs:9000}
+      OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-us-east-1}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-novagate-archives}
+      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:-}
+      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:-}
+      OBJECT_STORAGE_CREATE_BUCKET: ${OBJECT_STORAGE_CREATE_BUCKET:-false}
+      LOG_EXPORT_RETENTION_DAYS: ${LOG_EXPORT_RETENTION_DAYS:-7}
       PORT: 3001
     depends_on:
       postgres:
@@ -74,6 +82,9 @@ services:
         condition: service_healthy
       control-plane:
         condition: service_healthy
+      rustfs:
+        condition: service_healthy
+        required: false
     healthcheck:
       test:
         ['CMD-SHELL', 'wget -qO- http://localhost:3001/api/health || exit 1']
@@ -84,6 +95,35 @@ services:
     networks:
       - gateway-net
       - edge # reached by the shared Caddy in the squadup stack
+
+  rustfs:
+    profiles: ['object-storage']
+    image: rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-}
+      RUSTFS_CONSOLE_ENABLE: 'false'
+      RUSTFS_REGION: ${OBJECT_STORAGE_REGION:-us-east-1}
+      RUSTFS_OBS_LOGGER_LEVEL: warn
+    volumes:
+      - rustfs-data:/data
+      - rustfs-logs:/logs
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'curl',
+          '--fail',
+          '--silent',
+          'http://127.0.0.1:9000/health/ready',
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    networks:
+      - gateway-net
+    restart: unless-stopped
 
   dashboard:
     image: ghcr.io/${NOVAGATE_IMAGE_OWNER:-mayank-rawat98}/dashboard:${NOVAGATE_IMAGE_TAG:-latest}
@@ -121,4 +161,8 @@ volumes:
   postgres-data:
     driver: local
   redis-data:
+    driver: local
+  rustfs-data:
+    driver: local
+  rustfs-logs:
     driver: local

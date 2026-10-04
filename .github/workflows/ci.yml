@@ -40,6 +40,16 @@ jobs:
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s --health-timeout 5s --health-retries 10
+      rustfs:
+        image: rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
+        env:
+          RUSTFS_ACCESS_KEY: novagate-verification
+          RUSTFS_SECRET_KEY: local-object-storage-verification-only
+          RUSTFS_CONSOLE_ENABLE: 'false'
+        ports: ['19000:9000']
+        options: >-
+          --health-cmd "curl --fail --silent http://127.0.0.1:9000/health/ready"
+          --health-interval 2s --health-timeout 3s --health-retries 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,6 +74,7 @@ jobs:
           CI: 'true'
           TEST_DATABASE_URL: postgres://novagate_test:local-verification-only@127.0.0.1:15432/novagate_test
           TEST_REDIS_URL: redis://127.0.0.1:16379
+          TEST_OBJECT_STORAGE_ENDPOINT: http://127.0.0.1:19000
 
       - name: Build
         run: npm exec nx run-many -- -t build

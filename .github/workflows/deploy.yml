@@ -203,9 +203,9 @@ jobs:
             printf '%s' "$ENV_PRODUCTION" > .env.production
             export NOVAGATE_IMAGE_TAG="sha-$RELEASE_SHA"
             export NOVAGATE_IMAGE_OWNER="$IMAGE_OWNER"
-            docker compose --env-file .env.production --profile production config --quiet
-            docker compose --env-file .env.production --profile production pull
-            docker compose --env-file .env.production --profile production up -d --wait --wait-timeout 180
+            docker compose --env-file .env.production config --quiet
+            docker compose --env-file .env.production pull
+            docker compose --env-file .env.production up -d --wait --wait-timeout 180
         env:
           ENV_PRODUCTION: ${{ secrets.ENV_PRODUCTION }}
           GHCR_PAT: ${{ secrets.GHCR_PAT }}

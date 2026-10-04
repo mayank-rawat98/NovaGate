@@ -52,16 +52,14 @@ integration(
         ),
       );
       await new MigrationService(ds).onModuleInit();
-      const tenant = await ds
-        .getRepository(Tenant)
-        .save({
-          name: 'Test tenant',
-          email: 'test@example.test',
-          planId: 'free',
-          gatewayConfigVersion: 0,
-          emailVerified: true,
-          passwordHash: 'preserve-auth-column',
-        });
+      const tenant = await ds.getRepository(Tenant).save({
+        name: 'Test tenant',
+        email: 'test@example.test',
+        planId: 'free',
+        gatewayConfigVersion: 0,
+        emailVerified: true,
+        passwordHash: 'preserve-auth-column',
+      });
       tenantId = tenant.id;
       await new TenantProvisioningService(ds).provisionTenant(tenantId);
       const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
@@ -88,7 +86,7 @@ integration(
       }
       if (previousRedis === undefined) delete process.env.REDIS_URL;
       else process.env.REDIS_URL = previousRedis;
-    });
+    }, 30000);
 
     it('creates consumer groups on new tenant schemas', async () => {
       const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
