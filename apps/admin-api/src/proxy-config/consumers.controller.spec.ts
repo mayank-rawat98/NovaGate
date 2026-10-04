@@ -142,6 +142,7 @@ describe('ConsumersController', () => {
       expect(ds.query).toHaveBeenCalledWith(expect.stringContaining('UPDATE'), [
         'c-1',
         JSON.stringify(['admin', 'read-only']),
+        true,
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });

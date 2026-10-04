@@ -266,3 +266,7 @@ Use Node 24 (`.nvmrc`) and `npm ci`. `npm run check` runs lint, typecheck, tests
 The pre-commit hook checks formatting of the staged content without writing files or adding unrelated edits. Format and stage the files you intend to commit.
 
 The production workflow calls the same CI checks before building all release images. It queues releases, builds from the tested revision, deploys full SHA image tags, checks out that revision on the server and waits for container health. Pull requests into `dev` continue to run CI. Production secrets remain in GitHub environment secrets; this workflow change does not initiate a production release.
+
+Tenant schema upgrades run in a transaction under a database migration lock. Legacy route CORS, IP restriction and body-limit fields are converted to plugins before their columns are removed; explicitly configured plugins take precedence. A failed migration rolls back and prevents admin API startup. An existing installation whose old migration already removed those fields needs its lost settings restored from a backup or re-entered; this repair cannot recover previously deleted values.
+
+Configuration PUT requests preserve omitted fields. Send `null` to clear optional route retry, GraphQL, plugin or rate-limit override policies; use an empty array to clear consumer groups. Updating a missing configuration record returns 404.
