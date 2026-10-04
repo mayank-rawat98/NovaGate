@@ -135,7 +135,9 @@ function validatePlugins(plugins: unknown): void {
         ? oidcConfigSchema
         : entry.name === 'oauth2-client-credentials'
           ? oauthConfigSchema
-          : undefined;
+          : entry.name === 'mtls'
+            ? Joi.object({ required: Joi.boolean().strict().required() })
+            : undefined;
     if (schema?.validate(entry.config).error)
       throw new BadRequestException(
         `Invalid ${entry.name} configuration: check endpoint, credentials and optional fields`,

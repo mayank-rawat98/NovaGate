@@ -473,4 +473,22 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
       await new Promise<void>((resolve) => provider.close(() => resolve()));
     }
   });
+  it('never forwards unchecked certificate assertions on ordinary HTTP routes', async () => {
+    const response = await fetch(`${url}/api`, {
+      headers: {
+        ssl_client_cert: 'copied-public-certificate',
+        ssl_client_verify: 'SUCCESS',
+        'x-ssl-client-subject': 'administrator',
+        'x-ssl-client-fingerprint': 'spoofed',
+      },
+    });
+    expect(response.status).toBe(200);
+    for (const name of [
+      'ssl_client_cert',
+      'ssl_client_verify',
+      'x-ssl-client-subject',
+      'x-ssl-client-fingerprint',
+    ])
+      expect(received[0].headers[name]).toBeUndefined();
+  });
 });

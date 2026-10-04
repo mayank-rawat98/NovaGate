@@ -64,6 +64,9 @@ const routes = [
     createdAt,
   },
 ];
+let configuredCa;
+let failCaSave = false;
+let caSaves = 0;
 let archivesEnabled = true;
 let failArchiveCreate = false;
 let failArchiveDownload = false;
@@ -95,8 +98,10 @@ page.on('pageerror', (error) => runtimeErrors.push(error.message));
 page.on('console', (message) => {
   if (
     message.type() === 'error' &&
-    message.text() !==
-      'Failed to load resource: the server responded with a status of 503 (Service Unavailable)'
+    ![
+      'Failed to load resource: the server responded with a status of 503 (Service Unavailable)',
+      'Failed to load resource: the server responded with a status of 400 (Bad Request)',
+    ].includes(message.text())
   )
     runtimeErrors.push(message.text());
 });
@@ -116,6 +121,24 @@ await context.route('**/api/**', async (route) => {
     'Dashboard must use its configured API origin',
   );
   const resource = url.pathname.split('/').at(-1);
+  if (resource === 'ca-cert' && route.request().method() === 'PUT') {
+    caSaves++;
+    const body = route.request().postDataJSON();
+    if (!failCaSave) configuredCa = body.caCertPem ?? undefined;
+    await route.fulfill({
+      status: failCaSave ? 400 : 200,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        failCaSave
+          ? {
+              message:
+                'Provide an active CA certificate bundle. Leaf certificates and private keys are not accepted.',
+            }
+          : { success: true },
+      ),
+    });
+    return;
+  }
   if (url.pathname.includes('/routes/') && route.request().method() === 'PUT') {
     const dto = route.request().postDataJSON();
     assert.deepEqual(
@@ -213,6 +236,7 @@ await context.route('**/api/**', async (route) => {
       email: 'demo@example.test',
       planId: 'free',
       gatewayConfigVersion: 12,
+      caCertPem: configuredCa,
       createdAt,
     };
   else if (resource === 'gateway-status')
@@ -528,6 +552,44 @@ try {
     );
     await audit(path);
   }
+  await expect(
+    page.getByText(/Clients must prove possession of their private key/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Save CA Certificate', exact: true }),
+  ).toBeDisabled();
+  assert.equal(caSaves, 0, 'Blank save must not remove trust');
+  const caInput = page.getByLabel('CA certificate PEM', { exact: true });
+  const publicFixture =
+    '-----BEGIN CERTIFICATE-----\nfixture-public-ca\n-----END CERTIFICATE-----';
+  await caInput.fill(publicFixture);
+  failCaSave = true;
+  await page
+    .getByRole('button', { name: 'Save CA Certificate', exact: true })
+    .click();
+  await expect(
+    page.getByRole('alert', { name: 'CA certificate error', exact: true }),
+  ).toContainText('Leaf certificates and private keys are not accepted');
+  await expect(
+    page.getByRole('alert', { name: 'CA certificate error', exact: true }),
+  ).not.toContainText('{');
+  await expect(caInput).toHaveValue(publicFixture);
+  await audit('CA validation recovery mobile');
+  failCaSave = false;
+  await page
+    .getByRole('button', { name: 'Save CA Certificate', exact: true })
+    .click();
+  await expect(
+    page.getByText('CA certificate is configured', { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole('button', { name: 'Remove CA certificate', exact: true })
+    .click();
+  await expect(
+    page.getByText('CA certificate is configured', { exact: true }),
+  ).not.toBeVisible();
+  await expect(caInput).toHaveValue('');
+  await audit('CA removal recovery mobile');
   const archivePanel = page.getByRole('region', {
     name: 'Log archives',
     exact: true,

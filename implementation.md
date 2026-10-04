@@ -46,15 +46,15 @@ Authentication applies to the handshake. Opaque tunnels drain during shutdown gr
 
 The code contains substantial work for phases 0–3, but file presence does not prove production acceptance. No phase is marked complete by this audit.
 
-| Phase | Evidence in repository                                                                         | Remaining work / verification                                                                                                                                                                                                                          |
-| ----- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 0     | Weighted balancer, active health probes, HTTP retry loop, size/CORS/IP plugins                 | Issue #29 repairs peer-IP trust/IPv6, bounded binary body replay, browser preflight and HTTP retry termination; issue #39 adds configurable service probes, bounded lifecycle and explicit all-down routing; whole-phase load/chaos acceptance remains |
-| 1     | Plugin contracts, runner, registry, thirteen first-party plugins, dashboard route plugin forms | Plugin aggregate registration and fail-closed name resolution repaired in issue #27, verified through the real Nest module; broader runtime plugin acceptance remains                                                                                  |
-| 2     | OIDC, client credentials, HMAC, ACL, mTLS implementations and unit tests                       | Verify real providers and TLS handshakes; Tenant-bound REST authorization and new-schema consumer groups repaired in issue #27; live provider/TLS acceptance remains                                                                                   |
-| 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                      | Issue #29 verifies real HTTP/2 response hooks before sending the body and automatic GraphQL guard activation; Native gRPC/WebSocket runtime checks now exist (#41/#43); formal protocol acceptance and least-connections remain                        |
-| 4     | Logs/health/metrics REST views and private RustFS manual NDJSON archives (#37)                 | Tracing, live metrics, alert delivery/history, scheduled/external exports, privacy controls and consumer aggregates remain to implement                                                                                                                |
-| 5     | Existing REST configuration primitives                                                         | Declarative reconciliation, CLI, portal, Terraform, plugin SDK and third-party loading remain to implement                                                                                                                                             |
-| 6     | No verified implementations                                                                    | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                              |
+| Phase | Evidence in repository                                                                         | Remaining work / verification                                                                                                                                                                                                                                 |
+| ----- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0     | Weighted balancer, active health probes, HTTP retry loop, size/CORS/IP plugins                 | Issue #29 repairs peer-IP trust/IPv6, bounded binary body replay, browser preflight and HTTP retry termination; issue #39 adds configurable service probes, bounded lifecycle and explicit all-down routing; whole-phase load/chaos acceptance remains        |
+| 1     | Plugin contracts, runner, registry, thirteen first-party plugins, dashboard route plugin forms | Plugin aggregate registration and fail-closed name resolution repaired in issue #27, verified through the real Nest module; broader runtime plugin acceptance remains                                                                                         |
+| 2     | OIDC, client credentials, HMAC, ACL, mTLS implementations and unit tests                       | Verify real providers and TLS handshakes; Tenant-bound REST authorization and groups repaired in #27; provider isolation/bounds verified in #47 and native/proxy mTLS plus live trust rotation in #49. Real webhook HMAC and external Auth0 acceptance remain |
+| 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                      | Issue #29 verifies real HTTP/2 response hooks before sending the body and automatic GraphQL guard activation; Native gRPC/WebSocket runtime checks now exist (#41/#43); formal protocol acceptance and least-connections remain                               |
+| 4     | Logs/health/metrics REST views and private RustFS manual NDJSON archives (#37)                 | Tracing, live metrics, alert delivery/history, scheduled/external exports, privacy controls and consumer aggregates remain to implement                                                                                                                       |
+| 5     | Existing REST configuration primitives                                                         | Declarative reconciliation, CLI, portal, Terraform, plugin SDK and third-party loading remain to implement                                                                                                                                                    |
+| 6     | No verified implementations                                                                    | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                     |
 
 ### Prerequisites discovered by audit
 
@@ -526,17 +526,18 @@ acl?: {
 
 ### 2.5 mTLS — Client Certificate Verification
 
+Issue #49 implementation and verification. A real baseline authenticated cleartext HTTP with a copied public client certificate and no client private key. The replacement proves possession at the native TLS handshake or at an explicitly trusted verifying proxy, with tenant-current trust, certificate/bundle/chain/identity limits, CRL options, native HTTPS/WSS/gRPC setup and CA-upload validation. Forwarded certificate assertions default off; IP forwarding never establishes certificate-proxy trust. Local feature/regression verification passes 539 tests (gateway 402, admin 126, control-plane 10, dashboard 1), including a real anonymous TLS 1.3 resumed session, CRL revocation, intermediate chains, current trust, explicit proxy boundaries and ordinary HTTP assertion stripping. All five-project lint/typecheck/build and standalone desktop/mobile keyboard/axe checks pass. The OrbStack production image proves native client-key possession across HTTPS/gRPC/WSS, copied-public-certificate denial, live gRPC/tunnel cancellation on CA trust removal, new-request denial, acceptance of the newly trusted CA across HTTPS/gRPC/WSS without a listener restart, and the configured anonymous HTTPS health command; disposable fixtures are removed. Formal all-phase acceptance remains deferred.
+
 **Who needs it:** Financial services, healthcare, B2B APIs where both parties need to prove identity.
 
-`apps/api/src/gateway/auth/mtls.middleware.ts`:
+`apps/api/src/gateway/plugins/mtls/mtls.plugin.ts`:
 
-- Reads `ssl_client_cert` header (set by nginx/load balancer TLS termination) or raw TLS cert from `req.socket`
-- Validates against a per-route or global CA bundle stored in the gateway's local config
-- Extracts `CN`, `SAN` from cert; populates `req.user.certSubject`
+- Require verified native TLS client possession and an actual peer certificate, including resumed sessions; alternatively require an explicitly trusted verifying proxy and its overwritten certificate/SUCCESS assertions.
+- Recheck the tenant's current validated CA bundle, clientAuth usage and bounded certificate/chain/identity data; native OpenSSL or the trusted terminator verifies full path constraints and revocation.
+- Set external `ctx.authentication` to an opaque fingerprint; strip unverified assertions on every HTTP/gRPC/WebSocket route and forward only bounded verified identity.
+- Support operator-mounted HTTPS/WSS/gRPC certificate, key, client CA and optional CRL files. Listener files need a restart; tenant CA rotation applies immediately and revokes affected live calls/tunnels.
 
-`apps/dashboard` — Settings page:
-
-- Upload CA certificate PEM per tenant; stored encrypted in DB
+Dashboard Settings validates active public CA bundles before database persistence/config broadcast, supports overlapping trust during rotation and uses an explicit remove action. Private keys are rejected. Production database transport/at-rest encryption remains a deployment security acceptance requirement; uploaded public trust anchors do not replace the separate secret-management requirements for private keys or OAuth credentials.
 
 ---
 

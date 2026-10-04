@@ -48,6 +48,7 @@ const receivedWsUrls = [];
 const trustedHealthRequests = [];
 let acknowledged = 0;
 let config;
+let listenerCa;
 let identityCalls = 0;
 let inactiveIdentityCalls = 0;
 let outboundIdentityCalls = 0;
@@ -66,6 +67,29 @@ const frame = (value) => {
   prefix.writeUInt32BE(payload.length, 1);
   return Buffer.concat([prefix, payload]);
 };
+function fetch(url, options = {}) {
+  return new Promise((done, fail) => {
+    const request = https.request(
+      url,
+      { ca: listenerCa, agent: false, ...options },
+      (response) => {
+        const chunks = [];
+        response.on('data', (chunk) => chunks.push(chunk));
+        response.on('error', fail);
+        response.once('end', () =>
+          done(
+            new Response(Buffer.concat(chunks), {
+              status: response.statusCode,
+              headers: response.headers,
+            }),
+          ),
+        );
+      },
+    );
+    request.on('error', fail);
+    request.end(options.body);
+  });
+}
 async function until(predicate, description, timeout = 15000) {
   const expires = Date.now() + timeout;
   while (!(await predicate())) {
@@ -131,14 +155,25 @@ async function upstream(tls, count, healthRequests = []) {
       });
     } else {
       count();
-      stream.end(frame(replyMessage));
+      if (headers[':path'] === '/test.Mtls/Watch')
+        stream.write(frame(replyMessage));
+      else stream.end(frame(replyMessage));
     }
   });
   await new Promise((done) => server.listen(0, '0.0.0.0', done));
   return `https://host.docker.internal:${server.address().port}`;
 }
-async function call(port, ca, authorization = `Bearer ${consumerKey}`) {
-  const session = http2.connect(`https://127.0.0.1:${port}`, { ca });
+async function call(
+  port,
+  ca,
+  authorization = `Bearer ${consumerKey}`,
+  credentials = {},
+  path = '/test.Echo/Call',
+) {
+  const session = http2.connect(`https://127.0.0.1:${port}`, {
+    ca,
+    ...credentials,
+  });
   session.on('error', () => {
     /* Propagated by the request promise. */
   });
@@ -146,7 +181,7 @@ async function call(port, ca, authorization = `Bearer ${consumerKey}`) {
     await once(session, 'connect');
     const request = session.request({
       ':method': 'POST',
-      ':path': '/test.Echo/Call',
+      ':path': path,
       'content-type': 'application/grpc',
       te: 'trailers',
       authorization,
@@ -191,9 +226,16 @@ async function websocketUpstream(tls, count) {
   await new Promise((done) => server.listen(0, '0.0.0.0', done));
   return `https://host.docker.internal:${server.address().port}`;
 }
-function connectWebsocket(port, path = '/socket', headers = {}) {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, ['chat'], {
+function connectWebsocket(
+  port,
+  path = '/socket',
+  headers = {},
+  credentials = {},
+) {
+  const ws = new WebSocket(`wss://127.0.0.1:${port}${path}`, ['chat'], {
     headers,
+    ca: listenerCa,
+    ...credentials,
     perMessageDeflate: true,
     handshakeTimeout: 5000,
   });
@@ -229,6 +271,74 @@ try {
   networkCreated = true;
   const trusted = certificate('trusted');
   const untrusted = certificate('untrusted');
+  listenerCa = trusted.cert;
+  execFileSync(
+    'openssl',
+    [
+      'req',
+      '-newkey',
+      'rsa:2048',
+      '-nodes',
+      '-keyout',
+      resolve(directory, 'client.key.pem'),
+      '-out',
+      resolve(directory, 'client.csr'),
+      '-subj',
+      '/CN=Packaged client',
+    ],
+    { stdio: 'ignore', timeout: 15000 },
+  );
+  writeFileSync(
+    resolve(directory, 'client.ext'),
+    'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n',
+  );
+  execFileSync(
+    'openssl',
+    [
+      'x509',
+      '-req',
+      '-in',
+      resolve(directory, 'client.csr'),
+      '-CA',
+      resolve(directory, 'trusted.cert.pem'),
+      '-CAkey',
+      resolve(directory, 'trusted.key.pem'),
+      '-CAcreateserial',
+      '-out',
+      resolve(directory, 'client.cert.pem'),
+      '-days',
+      '1',
+      '-extfile',
+      resolve(directory, 'client.ext'),
+    ],
+    { stdio: 'ignore', timeout: 15000 },
+  );
+  execFileSync(
+    'openssl',
+    [
+      'x509',
+      '-req',
+      '-in',
+      resolve(directory, 'client.csr'),
+      '-CA',
+      resolve(directory, 'untrusted.cert.pem'),
+      '-CAkey',
+      resolve(directory, 'untrusted.key.pem'),
+      '-CAcreateserial',
+      '-out',
+      resolve(directory, 'rotated-client.cert.pem'),
+      '-days',
+      '1',
+      '-extfile',
+      resolve(directory, 'client.ext'),
+    ],
+    { stdio: 'ignore', timeout: 15000 },
+  );
+  const clientCredentials = {
+    key: readFileSync(resolve(directory, 'client.key.pem')),
+    cert: readFileSync(resolve(directory, 'client.cert.pem')),
+  };
+
   const trustedTarget = await upstream(
     trusted,
     () => trustedCalls++,
@@ -291,6 +401,7 @@ try {
     },
   });
   config = {
+    caCertPem: trusted.cert.toString(),
     routes: [
       {
         id: 'route',
@@ -391,6 +502,15 @@ try {
     '-e',
     'GRPC_TLS_KEY_FILE=/verification/trusted.key.pem',
     '-e',
+    'HTTP_TLS_CERT_FILE=/verification/trusted.cert.pem',
+    '-e',
+    'HTTP_TLS_KEY_FILE=/verification/trusted.key.pem',
+    '-e',
+    'HTTP_TLS_CLIENT_CA_FILE=/verification/trusted.cert.pem',
+    '-e',
+    'GRPC_TLS_CLIENT_CA_FILE=/verification/trusted.cert.pem',
+
+    '-e',
     'NODE_EXTRA_CA_CERTS=/verification/trusted.cert.pem',
     '-e',
     'HEALTH_FAILURE_THRESHOLD=1',
@@ -412,7 +532,7 @@ try {
   await until(async () => {
     try {
       return (
-        await fetch(`http://127.0.0.1:${httpPort}/health`, {
+        await fetch(`https://127.0.0.1:${httpPort}/health`, {
           signal: AbortSignal.timeout(1000),
         })
       ).ok;
@@ -435,7 +555,7 @@ try {
     ['PUT', '/admin/services/unused'],
     ['DELETE', '/admin/services/unused'],
   ]) {
-    const legacy = await fetch(`http://127.0.0.1:${httpPort}${path}`, {
+    const legacy = await fetch(`https://127.0.0.1:${httpPort}${path}`, {
       method,
     });
     assert.equal(legacy.status, 404);
@@ -443,7 +563,7 @@ try {
     assert.equal(error.error, 'SERVICE_NOT_FOUND');
     assert.equal(typeof error.requestId, 'string');
   }
-  const metrics = await fetch(`http://127.0.0.1:${httpPort}/metrics`);
+  const metrics = await fetch(`https://127.0.0.1:${httpPort}/metrics`);
   assert.equal(metrics.status, 200);
   assert.match(await metrics.text(), /gateway_grpc_active_calls/);
   const result = await call(grpcPort, trusted.cert);
@@ -534,10 +654,10 @@ try {
     );
   await until(() => acknowledged === 2, 'tenant HTTP route ACK');
   assert.equal(
-    (await fetch(`http://127.0.0.1:${httpPort}/admin/services`)).status,
+    (await fetch(`https://127.0.0.1:${httpPort}/admin/services`)).status,
     401,
   );
-  const proxied = await fetch(`http://127.0.0.1:${httpPort}/admin/services`, {
+  const proxied = await fetch(`https://127.0.0.1:${httpPort}/admin/services`, {
     headers: { authorization: `Bearer ${consumerKey}` },
   });
   assert.equal(proxied.status, 200);
@@ -555,7 +675,7 @@ try {
     'true',
   );
   assert.equal(
-    (await fetch(`http://127.0.0.1:${httpPort}/health`)).status,
+    (await fetch(`https://127.0.0.1:${httpPort}/health`)).status,
     200,
   );
   assert.equal(trustedWsCalls, 0);
@@ -574,7 +694,7 @@ try {
   await until(
     async () =>
       /gateway_ws_active_connections 0(?:\n|$)/.test(
-        await (await fetch(`http://127.0.0.1:${httpPort}/metrics`)).text(),
+        await (await fetch(`https://127.0.0.1:${httpPort}/metrics`)).text(),
       ),
     'limited WebSocket metric cleanup',
   );
@@ -613,7 +733,7 @@ try {
   await until(
     async () =>
       /gateway_ws_active_connections 1(?:\n|$)/.test(
-        await (await fetch(`http://127.0.0.1:${httpPort}/metrics`)).text(),
+        await (await fetch(`https://127.0.0.1:${httpPort}/metrics`)).text(),
       ),
     'accepted WebSocket metrics',
   );
@@ -667,7 +787,7 @@ try {
   await until(() => acknowledged === 3, 'provider config ACK');
   const opaque = { authorization: 'Bearer same-provider-token' };
   assert.equal(
-    (await fetch(`http://127.0.0.1:${httpPort}/identity`, { headers: opaque }))
+    (await fetch(`https://127.0.0.1:${httpPort}/identity`, { headers: opaque }))
       .status,
     200,
   );
@@ -675,8 +795,9 @@ try {
     (await call(grpcPort, trusted.cert, opaque.authorization)).status,
     '0',
   );
-  const providerSocket = new WebSocket(`ws://127.0.0.1:${httpPort}/socket`, {
+  const providerSocket = new WebSocket(`wss://127.0.0.1:${httpPort}/socket`, {
     headers: opaque,
+    ca: listenerCa,
   });
   websocketClients.add(providerSocket);
   await once(providerSocket, 'open');
@@ -689,7 +810,7 @@ try {
   );
   assert.equal(
     (
-      await fetch(`http://127.0.0.1:${httpPort}/inactive-identity`, {
+      await fetch(`https://127.0.0.1:${httpPort}/inactive-identity`, {
         headers: opaque,
       })
     ).status,
@@ -702,7 +823,7 @@ try {
   );
   assert.equal(
     (
-      await fetch(`http://127.0.0.1:${httpPort}/untrusted-identity`, {
+      await fetch(`https://127.0.0.1:${httpPort}/untrusted-identity`, {
         headers: opaque,
       })
     ).status,
@@ -748,7 +869,7 @@ try {
     );
   await until(() => acknowledged === 4, 'updated target ACK');
   assert.equal(
-    (await fetch(`http://127.0.0.1:${httpPort}/identity`)).status,
+    (await fetch(`https://127.0.0.1:${httpPort}/identity`)).status,
     401,
   );
   assert.equal(outboundIdentityCalls, 1);
@@ -767,9 +888,204 @@ try {
   await until(
     async () =>
       /gateway_ws_active_connections 0(?:\n|$)/.test(
-        await (await fetch(`http://127.0.0.1:${httpPort}/metrics`)).text(),
+        await (await fetch(`https://127.0.0.1:${httpPort}/metrics`)).text(),
       ),
     'released WebSocket metrics',
+  );
+
+  config.services[0].targets = [{ url: trustedTarget, weight: 1 }];
+  config.services[1].targets = [{ url: trustedWsTarget, weight: 1 }];
+  const mtls = [{ name: 'mtls', config: { required: true } }];
+  config.routes.push({
+    id: 'mtls-http',
+    method: 'GET',
+    pathPattern: '/mtls',
+    serviceId: 'service',
+    enabled: true,
+    authRequired: true,
+    plugins: mtls,
+  });
+  config.routes.push({
+    id: 'mtls-grpc-watch',
+    method: 'POST',
+    pathPattern: '/test.Mtls/Watch',
+    serviceId: 'service',
+    enabled: true,
+    authRequired: true,
+    plugins: mtls,
+  });
+  config.routes.push({
+    id: 'mtls-grpc',
+    method: 'POST',
+    pathPattern: '/test.Mtls/Call',
+    serviceId: 'service',
+    enabled: true,
+    authRequired: true,
+    plugins: mtls,
+  });
+  config.routes.push({
+    id: 'mtls-ws',
+    method: 'GET',
+    pathPattern: '/mtls-socket',
+    serviceId: 'ws-service',
+    enabled: true,
+    authRequired: true,
+    plugins: mtls,
+  });
+  for (const socket of plane.clients)
+    socket.send(
+      JSON.stringify({ type: 'config.update', version: 5, payload: config }),
+    );
+  await until(() => acknowledged === 5, 'native client trust ACK');
+  assert.equal((await fetch(`https://127.0.0.1:${httpPort}/mtls`)).status, 403);
+  assert.equal(
+    (
+      await fetch(`https://127.0.0.1:${httpPort}/mtls`, {
+        headers: {
+          ssl_client_cert: encodeURIComponent(
+            clientCredentials.cert.toString(),
+          ),
+          ssl_client_verify: 'SUCCESS',
+        },
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (await fetch(`https://127.0.0.1:${httpPort}/mtls`, clientCredentials))
+      .status,
+    200,
+  );
+  assert.equal(
+    (await call(grpcPort, trusted.cert, '', {}, '/test.Mtls/Call')).status,
+    '7',
+  );
+  assert.equal(
+    (
+      await call(
+        grpcPort,
+        trusted.cert,
+        '',
+        clientCredentials,
+        '/test.Mtls/Call',
+      )
+    ).status,
+    '0',
+  );
+  assert.equal((await rejectedWebsocket(httpPort, '/mtls-socket')).status, 403);
+  const mtlsSocket = connectWebsocket(
+    httpPort,
+    '/mtls-socket',
+    {},
+    clientCredentials,
+  );
+  await once(mtlsSocket, 'open');
+  mtlsSocket.send('native mTLS');
+  assert.equal(
+    (await once(mtlsSocket, 'message'))[0].toString(),
+    'native mTLS',
+  );
+  const revokedSocket = once(mtlsSocket, 'close');
+  const mtlsSession = http2.connect(`https://127.0.0.1:${grpcPort}`, {
+    ca: trusted.cert,
+    ...clientCredentials,
+  });
+  mtlsSession.on('error', () => {
+    /* Intentional trust cancellation. */
+  });
+  sockets.add(mtlsSession);
+  await once(mtlsSession, 'connect');
+  const watched = mtlsSession.request({
+    ':method': 'POST',
+    ':path': '/test.Mtls/Watch',
+    'content-type': 'application/grpc',
+    te: 'trailers',
+  });
+  watched.on('error', () => {
+    /* Intentional trust cancellation. */
+  });
+  watched.end(frame([]));
+  await once(watched, 'data');
+  const stoppedTrust = once(watched, 'trailers');
+
+  config.caCertPem = untrusted.cert.toString();
+  for (const socket of plane.clients)
+    socket.send(
+      JSON.stringify({ type: 'config.update', version: 6, payload: config }),
+    );
+  await until(() => acknowledged === 6, 'tenant trust removal ACK');
+  await revokedSocket;
+  assert.equal((await stoppedTrust)[0]['grpc-status'], '14');
+  mtlsSession.destroy();
+  sockets.delete(mtlsSession);
+  assert.equal(
+    (await fetch(`https://127.0.0.1:${httpPort}/mtls`, clientCredentials))
+      .status,
+    403,
+  );
+  assert.equal(
+    (
+      await call(
+        grpcPort,
+        trusted.cert,
+        '',
+        clientCredentials,
+        '/test.Mtls/Call',
+      )
+    ).status,
+    '7',
+  );
+  assert.equal(
+    (await fetch(`https://127.0.0.1:${httpPort}/health`)).status,
+    200,
+  );
+  const rotatedCredentials = {
+    key: clientCredentials.key,
+    cert: readFileSync(resolve(directory, 'rotated-client.cert.pem')),
+  };
+  assert.equal(
+    (await fetch(`https://127.0.0.1:${httpPort}/mtls`, rotatedCredentials))
+      .status,
+    200,
+  );
+  assert.equal(
+    (
+      await call(
+        grpcPort,
+        trusted.cert,
+        '',
+        rotatedCredentials,
+        '/test.Mtls/Call',
+      )
+    ).status,
+    '0',
+  );
+  const rotatedSocket = connectWebsocket(
+    httpPort,
+    '/mtls-socket',
+    {},
+    rotatedCredentials,
+  );
+  await once(rotatedSocket, 'open');
+  rotatedSocket.close();
+  await once(rotatedSocket, 'close');
+  const healthCommand = JSON.parse(
+    docker(
+      'inspect',
+      gatewayName,
+      '--format',
+      '{{json .Config.Healthcheck.Test}}',
+    ),
+  );
+  assert.equal(healthCommand[0], 'CMD-SHELL');
+  docker('exec', gatewayName, 'sh', '-c', healthCommand[1]);
+  docker(
+    'exec',
+    gatewayName,
+    'wget',
+    '--no-check-certificate',
+    '-qO-',
+    'https://localhost:3000/health',
   );
   const environment = JSON.parse(
     docker('inspect', gatewayName, '--format', '{{json .Config.Env}}'),
@@ -803,6 +1119,12 @@ try {
         inactiveIdentityCalls,
         outboundIdentityCalls,
         checks: [
+          'native-client-private-key-proof-HTTPS-gRPC-WSS',
+          'copied-public-certificate-assertion-denied',
+          'tenant-trust-removal-cancels-gRPC-and-WSS-denies-new-requests',
+          'native-HTTPS-anonymous-loopback-health',
+          'new-client-CA-accepted-without-listener-restart-HTTPS-gRPC-WSS',
+          'configured-Docker-HTTPS-health-command',
           'HTTPS-provider-scoped-Redis-HTTP-gRPC-WebSocket',
           'identical-token-other-provider-inactive',
           'untrusted-provider-certificate-rejected',

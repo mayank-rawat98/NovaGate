@@ -1,3 +1,7 @@
+import {
+  MAX_TENANT_CA_BUNDLE_BYTES,
+  MAX_TENANT_CA_CERTIFICATES,
+} from '@api-gateway/shared-types';
 export const DEFAULT_UPSTREAM_HEALTH = {
   defaultIntervalMs: 10000,
   failureThreshold: 3,
@@ -25,8 +29,11 @@ export const DEFAULT_GRPC = {
   shutdownGraceMs: 5000,
 };
 export type GrpcSettings = typeof DEFAULT_GRPC & {
+  handshakeTimeoutMs?: number;
   tlsCertFile?: string;
   tlsKeyFile?: string;
+  clientCaFile?: string;
+  crlFile?: string;
 };
 
 export const DEFAULT_WEBSOCKET = {
@@ -39,6 +46,25 @@ export const DEFAULT_WEBSOCKET = {
   shutdownGraceMs: 5000,
 };
 export type WebSocketSettings = typeof DEFAULT_WEBSOCKET;
+
+export const DEFAULT_TLS = { handshakeTimeoutMs: 10000, maxConnections: 1024 };
+export const DEFAULT_MTLS = {
+  maxCertificateBytes: 16384,
+  maxCaBundleBytes: MAX_TENANT_CA_BUNDLE_BYTES,
+  maxChainDepth: MAX_TENANT_CA_CERTIFICATES,
+  maxIdentityBytes: 4096,
+};
+export type MtlsSettings = typeof DEFAULT_MTLS & {
+  trustedProxyCidrs: string[];
+};
+export interface ListenerTlsSettings {
+  handshakeTimeoutMs?: number;
+  maxConnections?: number;
+  certFile?: string;
+  keyFile?: string;
+  clientCaFile?: string;
+  crlFile?: string;
+}
 
 export const DEFAULT_IDENTITY_PROVIDER = {
   allowInsecureHttp: false,
@@ -80,6 +106,8 @@ export interface GatewayConfig {
   grpc: GrpcSettings;
   websocket: WebSocketSettings;
   identityProvider: IdentityProviderSettings;
+  mtls: MtlsSettings;
+  tls: ListenerTlsSettings;
   rateLimit: {
     windowMs: number;
     unauthMax: number;
@@ -97,6 +125,37 @@ const parseProxyServices = (): ProxyServiceConfig[] => {
 };
 
 export default (): GatewayConfig => ({
+  tls: {
+    handshakeTimeoutMs: Number(
+      process.env.TLS_HANDSHAKE_TIMEOUT_MS ?? DEFAULT_TLS.handshakeTimeoutMs,
+    ),
+    maxConnections: Number(
+      process.env.HTTP_TLS_MAX_CONNECTIONS ?? DEFAULT_TLS.maxConnections,
+    ),
+    certFile: process.env.HTTP_TLS_CERT_FILE,
+    keyFile: process.env.HTTP_TLS_KEY_FILE,
+    clientCaFile: process.env.HTTP_TLS_CLIENT_CA_FILE,
+    crlFile: process.env.HTTP_TLS_CRL_FILE,
+  },
+  mtls: {
+    maxCertificateBytes: Number(
+      process.env.MTLS_MAX_CERTIFICATE_BYTES ??
+        DEFAULT_MTLS.maxCertificateBytes,
+    ),
+    maxCaBundleBytes: Number(
+      process.env.MTLS_MAX_CA_BUNDLE_BYTES ?? DEFAULT_MTLS.maxCaBundleBytes,
+    ),
+    maxChainDepth: Number(
+      process.env.MTLS_MAX_CHAIN_DEPTH ?? DEFAULT_MTLS.maxChainDepth,
+    ),
+    maxIdentityBytes: Number(
+      process.env.MTLS_MAX_IDENTITY_BYTES ?? DEFAULT_MTLS.maxIdentityBytes,
+    ),
+    trustedProxyCidrs: (process.env.MTLS_TRUSTED_PROXY_CIDRS ?? '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean),
+  },
   port: parseInt(process.env.PORT ?? '3000', 10) || 3000,
   trustedProxies: (process.env.TRUSTED_PROXY_CIDRS ?? '')
     .split(',')
@@ -117,8 +176,13 @@ export default (): GatewayConfig => ({
     allowInsecure: process.env.GRPC_ALLOW_INSECURE === 'true',
     host: process.env.GRPC_HOST ?? DEFAULT_GRPC.host,
     port: Number(process.env.GRPC_PORT ?? DEFAULT_GRPC.port),
+    handshakeTimeoutMs: Number(
+      process.env.TLS_HANDSHAKE_TIMEOUT_MS ?? DEFAULT_TLS.handshakeTimeoutMs,
+    ),
     tlsCertFile: process.env.GRPC_TLS_CERT_FILE || undefined,
     tlsKeyFile: process.env.GRPC_TLS_KEY_FILE || undefined,
+    clientCaFile: process.env.GRPC_TLS_CLIENT_CA_FILE || undefined,
+    crlFile: process.env.GRPC_TLS_CRL_FILE || undefined,
     maxMessageBytes: Number(
       process.env.GRPC_MAX_MESSAGE_BYTES ?? DEFAULT_GRPC.maxMessageBytes,
     ),

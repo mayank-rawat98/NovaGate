@@ -71,6 +71,7 @@ export default function SettingsPage() {
   const [rotating, setRotating] = useState(false);
 
   const [caCertInput, setCaCertInput] = useState('');
+  const [caCertError, setCaCertError] = useState<string | null>(null);
   const [savingCert, setSavingCert] = useState(false);
 
   const {
@@ -110,11 +111,22 @@ export default function SettingsPage() {
     e.preventDefault();
     if (!tenantId) return;
     setSavingCert(true);
+    setCaCertError(null);
+    if (!caCertInput.trim()) {
+      setCaCertError(
+        'Paste a CA certificate bundle to save. Use Remove CA certificate to remove existing trust.',
+      );
+      setSavingCert(false);
+      return;
+    }
     try {
-      await setCaCert(tenantId, caCertInput.trim() || null);
+      await setCaCert(tenantId, caCertInput.trim());
       await mutateTenant();
       toast.success('CA certificate saved and pushed to gateway');
     } catch (err) {
+      setCaCertError(
+        err instanceof Error ? err.message : 'Failed to save CA cert',
+      );
       toast.error(
         err instanceof Error ? err.message : 'Failed to save CA cert',
       );
@@ -129,6 +141,7 @@ export default function SettingsPage() {
     try {
       await setCaCert(tenantId, null);
       setCaCertInput('');
+      setCaCertError(null);
       await mutateTenant();
       toast.success('CA certificate removed');
     } catch (err) {
@@ -239,8 +252,10 @@ export default function SettingsPage() {
             </h2>
           </div>
           <p className="mt-0.5 text-xs text-gray-500">
-            PEM-encoded CA used to validate client certificates for mTLS routes.
-            Changes are pushed to the gateway immediately.
+            Trust bundle for clients connecting to mTLS routes. Include up to
+            eight active CA certificates to overlap trust during rotation.
+            Changes are pushed immediately; removing trust closes affected
+            streams and tunnels.
           </p>
         </div>
         <div className="px-6 py-4">
@@ -259,17 +274,37 @@ export default function SettingsPage() {
                 disabled={savingCert}
                 className="shrink-0 rounded p-1 text-green-600 hover:bg-green-100 disabled:opacity-50"
                 title="Remove CA certificate"
+                aria-label="Remove CA certificate"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
+          )}
+          <p className="mb-4 rounded-lg bg-indigo-50 p-3 text-sm text-indigo-800">
+            Clients must prove possession of their private key over TLS. Your
+            gateway operator must enable HTTPS/WSS or native gRPC TLS with a
+            client CA trust file. Certificate headers are ignored unless the
+            operator explicitly trusts the verifying proxy. Upload public CA
+            certificates only; keep private keys out of this dashboard.
+          </p>
+          {caCertError && (
+            <p
+              role="alert"
+              aria-label="CA certificate error"
+              className="mb-3 rounded-lg bg-red-50 p-3 text-sm text-red-700"
+            >
+              {caCertError}
+            </p>
           )}
           <form onSubmit={handleSaveCaCert} className="flex flex-col gap-3">
             <textarea
               aria-label="CA certificate PEM"
               rows={6}
               value={caCertInput}
-              onChange={(e) => setCaCertInput(e.target.value)}
+              onChange={(e) => {
+                setCaCertInput(e.target.value);
+                setCaCertError(null);
+              }}
               placeholder={
                 '-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----'
               }
