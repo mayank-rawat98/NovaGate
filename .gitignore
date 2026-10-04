@@ -55,3 +55,5 @@ test-output
 # Next.js
 .next
 out
+# Repository-local caches and verification artifacts
+.local-work/

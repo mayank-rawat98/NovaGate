@@ -49,7 +49,7 @@ CUSTOMER'S VPS                          SAAS SERVERS (novagate.dev)
 | Control plane        | NestJS, WebSocket (`ws`), Redis pub/sub                         |
 | Admin API            | NestJS, TypeORM, PostgreSQL (schema-per-tenant)                 |
 | Dashboard            | Next.js 14 App Router, Tailwind CSS, SWR                        |
-| Infrastructure       | Docker, Docker Compose, Nginx (SSL termination), GitHub Actions |
+| Infrastructure       | Docker, Docker Compose, Caddy (SSL termination, shared with squadup.in), GitHub Actions |
 | Monorepo             | Nx 20 with project-boundary lint rules                          |
 
 ---
@@ -132,7 +132,6 @@ libs/
 docker/
   Dockerfile.api
   Dockerfile.dashboard
-  nginx.conf
 .github/
   workflows/deploy.yml    Build → push GHCR → SSH deploy on merge to main
 ```
@@ -221,7 +220,9 @@ GitHub Actions pipeline on push to `main`:
 2. Push to GitHub Container Registry (`ghcr.io/mayank-rawat98/novagate/*`)
 3. SSH into VPS → `docker compose pull && docker compose up -d`
 
-Zero-downtime: Docker Compose restarts containers one at a time; Nginx keeps serving during image pulls.
+Zero-downtime: Docker Compose restarts containers one at a time; the reverse proxy keeps serving during image pulls.
+
+TLS and routing: the VPS is shared with squadup.in, whose Caddy owns ports 80/443 and serves `novagate.dev`, `api.novagate.dev` and `ws.novagate.dev` (see `caddy/Caddyfile` in that repo). Caddy reaches `dashboard`, `admin-api` and `control-plane` over the `novagate-edge` network defined here, and issues and renews the certificates itself.
 
 ---
 
