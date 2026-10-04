@@ -21,9 +21,11 @@ export class PluginRegistryService {
   resolve(
     pluginEntries: Array<{ name: string; config: Record<string, unknown> }>,
   ): GatewayPlugin[] {
-    return pluginEntries
-      .map((entry) => this.pluginMap.get(entry.name))
-      .filter((p): p is GatewayPlugin => p !== undefined);
+    return pluginEntries.map((entry) => {
+      const plugin = this.pluginMap.get(entry.name);
+      if (!plugin) throw new Error(`Unknown configured plugin: ${entry.name}`);
+      return plugin;
+    });
   }
 
   isKnown(name: string): boolean {

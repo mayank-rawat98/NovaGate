@@ -13,6 +13,7 @@ import * as crypto from 'crypto';
 import { Tenant } from '../database/entities/public.entities';
 import { TenantProvisioningService } from '../tenants/tenant-provisioning.service';
 import { EmailService } from '../email/email.service';
+import { platformJwtSecret } from './platform-jwt-secret';
 
 @Injectable()
 export class AuthService {
@@ -174,8 +175,7 @@ export class AuthService {
   }
 
   private sign(tenantId: string): string {
-    const secret =
-      process.env.PLATFORM_JWT_SECRET ?? 'changeme-platform-secret-32-chars!';
+    const secret = platformJwtSecret();
     return jwt.sign({ sub: tenantId }, secret, { expiresIn: '7d' });
   }
 }

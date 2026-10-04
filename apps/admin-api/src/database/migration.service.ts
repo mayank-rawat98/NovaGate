@@ -12,6 +12,21 @@ export class MigrationService implements OnModuleInit {
   }
 
   private async migrateAllTenants(): Promise<void> {
+    await this.dataSource.query(`ALTER TABLE public.tenants
+      ADD COLUMN IF NOT EXISTS "passwordHash" VARCHAR,
+      ADD COLUMN IF NOT EXISTS "resetPasswordToken" VARCHAR,
+      ADD COLUMN IF NOT EXISTS "resetPasswordExpires" TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS "emailVerified" BOOLEAN NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS "verifyToken" VARCHAR,
+      ADD COLUMN IF NOT EXISTS "verifyExpires" TIMESTAMP`);
+    // One durable latest update per tenant. Older installations may contain duplicates.
+    await this.dataSource.query(`
+      DELETE FROM public.pending_config_updates a USING public.pending_config_updates b
+      WHERE a."tenantId" = b."tenantId" AND (a."createdAt", a.id) < (b."createdAt", b.id)
+    `);
+    await this.dataSource.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS pending_config_updates_tenant_unique ON public.pending_config_updates ("tenantId")`,
+    );
     // Public schema migrations
     try {
       await this.dataSource.query(

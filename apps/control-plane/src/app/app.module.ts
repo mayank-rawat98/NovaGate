@@ -19,7 +19,9 @@ import { HealthController } from './health.controller';
         type: 'postgres',
         url: config.get('DATABASE_URL'),
         entities: [Tenant, ApiKey, PendingConfigUpdate],
-        synchronize: true, // For demo purposes
+        // Public schema is initialized by docker/postgres-init.sql and migrated
+        // by admin-api. Synchronization here can drop admin-only auth columns.
+        synchronize: false,
       }),
     }),
     TypeOrmModule.forFeature([Tenant, ApiKey, PendingConfigUpdate]),

@@ -12,12 +12,18 @@ export class LogIngestionService {
 
   constructor(private readonly dataSource: DataSource) {}
 
+  private tenantSchema(tenantId: string): string {
+    if (!/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(tenantId)) {
+      throw new Error('Invalid tenant ID');
+    }
+    return `tenant_${tenantId.replace(/-/g, '_')}`;
+  }
+
   async ingestLogs(tenantId: string, logs: RequestLog[]) {
     if (logs.length === 0) return;
 
     try {
-      const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
-      await this.dataSource.query(`SET search_path TO ${schema}`);
+      const schema = this.tenantSchema(tenantId);
 
       const values = logs.map((log) => [
         log.id,
@@ -36,61 +42,57 @@ export class LogIngestionService {
       ]);
 
       await this.dataSource.query(
-        `INSERT INTO request_logs (
+        `INSERT INTO ${schema}.request_logs (
           id, "consumerId", method, path, "statusCode", 
           "responseTimeMs", "requestId", "downstreamService", 
           "downstreamLatencyMs", "clientIp", "userAgent", "errorCode", timestamp
-        ) VALUES ${values.map((_, i) => `($${i * 13 + 1}, $${i * 13 + 2}, $${i * 13 + 3}, $${i * 13 + 4}, $${i * 13 + 5}, $${i * 13 + 6}, $${i * 13 + 7}, $${i * 13 + 8}, $${i * 13 + 9}, $${i * 13 + 10}, $${i * 13 + 11}, $${i * 13 + 12}, $${i * 13 + 13})`).join(', ')}`,
+        ) VALUES ${values.map((_, i) => `($${i * 13 + 1}, $${i * 13 + 2}, $${i * 13 + 3}, $${i * 13 + 4}, $${i * 13 + 5}, $${i * 13 + 6}, $${i * 13 + 7}, $${i * 13 + 8}, $${i * 13 + 9}, $${i * 13 + 10}, $${i * 13 + 11}, $${i * 13 + 12}, $${i * 13 + 13})`).join(', ')} ON CONFLICT (id) DO NOTHING`,
         values.flat(),
       );
-
-      await this.dataSource.query(`SET search_path TO public`);
     } catch (err) {
       this.logger.error(
         `Failed to ingest logs for tenant ${tenantId}: ${(err as Error).message}`,
       );
+      throw err;
     }
   }
 
   async ingestHealth(tenantId: string, snapshots: HealthSnapshot[]) {
     try {
-      const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
-      await this.dataSource.query(`SET search_path TO ${schema}`);
+      const schema = this.tenantSchema(tenantId);
 
       for (const s of snapshots) {
         await this.dataSource.query(
-          `INSERT INTO health_snapshots ("serviceId", status, "latencyMs", "checkedAt", "errorMessage")
+          `INSERT INTO ${schema}.health_snapshots ("serviceId", status, "latencyMs", "checkedAt", "errorMessage")
            VALUES ($1, $2, $3, $4, $5)`,
           [s.serviceId, s.status, s.latencyMs, s.checkedAt, s.errorMessage],
         );
 
         // Keep only last 100
         await this.dataSource.query(
-          `DELETE FROM health_snapshots WHERE id IN (
-            SELECT id FROM health_snapshots WHERE "serviceId" = $1
+          `DELETE FROM ${schema}.health_snapshots WHERE id IN (
+            SELECT id FROM ${schema}.health_snapshots WHERE "serviceId" = $1
             ORDER BY "checkedAt" DESC OFFSET 100
           )`,
           [s.serviceId],
         );
       }
-
-      await this.dataSource.query(`SET search_path TO public`);
     } catch (err) {
       this.logger.error(
         `Failed to ingest health for tenant ${tenantId}: ${(err as Error).message}`,
       );
+      throw err;
     }
   }
 
   async ingestErrors(tenantId: string, errors: ErrorEvent[]) {
     try {
-      const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
-      await this.dataSource.query(`SET search_path TO ${schema}`);
+      const schema = this.tenantSchema(tenantId);
 
       for (const e of errors) {
         await this.dataSource.query(
-          `INSERT INTO error_events (id, "requestId", "errorCode", message, "serviceId", path, "statusCode", timestamp)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          `INSERT INTO ${schema}.error_events (id, "requestId", "errorCode", message, "serviceId", path, "statusCode", timestamp)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
           [
             e.id,
             e.requestId,
@@ -103,31 +105,28 @@ export class LogIngestionService {
           ],
         );
       }
-
-      await this.dataSource.query(`SET search_path TO public`);
     } catch (err) {
       this.logger.error(
         `Failed to ingest errors for tenant ${tenantId}: ${(err as Error).message}`,
       );
+      throw err;
     }
   }
 
   async ingestMetrics(tenantId: string, payload: Record<string, unknown>) {
     try {
-      const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
-      await this.dataSource.query(`SET search_path TO ${schema}`);
+      const schema = this.tenantSchema(tenantId);
 
       await this.dataSource.query(
-        `INSERT INTO metrics_snapshots (rps, "p50Ms", "p95Ms", "p99Ms", "errorRate", timestamp)
+        `INSERT INTO ${schema}.metrics_snapshots (rps, "p50Ms", "p95Ms", "p99Ms", "errorRate", timestamp)
          VALUES ($1, $2, $3, $4, $5, NOW())`,
         [payload.rps, payload.p50, payload.p95, payload.p99, payload.errorRate],
       );
-
-      await this.dataSource.query(`SET search_path TO public`);
     } catch (err) {
       this.logger.error(
         `Failed to ingest metrics for tenant ${tenantId}: ${(err as Error).message}`,
       );
+      throw err;
     }
   }
 }

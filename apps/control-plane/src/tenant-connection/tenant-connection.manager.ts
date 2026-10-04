@@ -7,7 +7,7 @@ import {
 import { WebSocket, WebSocketServer } from 'ws';
 import * as crypto from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, IsNull, Repository } from 'typeorm';
 import {
   Tenant,
   ApiKey,
@@ -35,6 +35,8 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
   private connections = new Map<string, WebSocket>();
   private redisPub!: Redis;
   private redisSub!: Redis;
+  private heartbeatTimer?: NodeJS.Timeout;
+  private stopped = false;
 
   constructor(
     @InjectRepository(Tenant)
@@ -44,6 +46,7 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
     @InjectRepository(PendingConfigUpdate)
     private readonly pendingUpdateRepo: Repository<PendingConfigUpdate>,
     private readonly ingestionService: LogIngestionService,
+    private readonly dataSource: DataSource,
   ) {}
 
   onModuleInit() {
@@ -58,19 +61,30 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
     this.redisSub.subscribe('config.update');
     this.redisSub.on('message', (channel, message) => {
       if (channel === 'config.update') {
-        const { tenantId, config } = JSON.parse(message);
-        this.pushConfigUpdate(tenantId, config);
+        try {
+          const { tenantId, config, version } = JSON.parse(message);
+          void this.pushConfigUpdate(tenantId, config, version).catch(
+            (err: Error) =>
+              this.logger.error(`Config delivery failed: ${err.message}`),
+          );
+        } catch {
+          this.logger.warn('Ignoring malformed config publication');
+        }
       }
     });
 
     this.wss.on('connection', (ws) => this.handleConnection(ws));
 
     // Heartbeat: ping all connections every 30s
-    setInterval(() => this.heartbeat(), 30000);
+    this.heartbeatTimer = setInterval(() => this.heartbeat(), 30000);
   }
 
-  onModuleDestroy() {
+  async onModuleDestroy() {
+    this.stopped = true;
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    for (const ws of this.connections.values()) ws.close();
     this.wss.close();
+    await Promise.allSettled([this.redisPub.quit(), this.redisSub.quit()]);
   }
 
   private handleConnection(ws: WebSocket) {
@@ -85,92 +99,126 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
       }
     }, 5000);
 
-    ws.on('message', async (data) => {
-      try {
-        const message = JSON.parse(data.toString()) as BaseWsMessage;
+    let messageQueue = Promise.resolve();
+    ws.on('message', (data) => {
+      messageQueue = messageQueue.then(async () => {
+        try {
+          const message = JSON.parse(data.toString()) as BaseWsMessage;
 
-        if (!authenticated && message.type === 'auth') {
-          const authPayload = (message as AuthMessage).payload;
-          tenantId = await this.validateApiKey(authPayload.apiKey);
+          if (!authenticated && message.type === 'auth') {
+            const authPayload = (message as AuthMessage).payload;
+            tenantId = await this.validateApiKey(authPayload.apiKey);
 
-          if (!tenantId) {
-            this.logger.warn(`Invalid API key attempt: ${authPayload.apiKey}`);
-            ws.close(GatewayCloseCode.INVALID_API_KEY);
+            if (!tenantId) {
+              this.logger.warn('Invalid or revoked gateway API key');
+              ws.close(GatewayCloseCode.INVALID_API_KEY);
+              return;
+            }
+
+            authenticated = true;
+            clearTimeout(authTimeout);
+            this.connections.set(tenantId, ws);
+            await this.redisPub.set(`gw:online:${tenantId}`, '1', 'EX', 90);
+
+            // Get config and pending updates
+            const { config, version } = await this.getTenantConfig(tenantId);
+
+            const authOk: AuthOkMessage = {
+              type: 'auth_ok',
+              payload: {
+                tenantId,
+                config,
+                configVersion: version,
+              },
+            };
+            ws.send(JSON.stringify(authOk));
+
+            await this.tenantRepo.update(tenantId, { lastSeen: new Date() });
+            this.logger.log(`Tenant ${tenantId} connected`);
+
+            // Flush pending updates if any
+            await this.flushPendingUpdates(tenantId, ws);
             return;
           }
 
-          authenticated = true;
-          clearTimeout(authTimeout);
-          this.connections.set(tenantId, ws);
-          await this.redisPub.set(`gw:online:${tenantId}`, '1', 'EX', 90);
+          if (!authenticated) {
+            this.logger.warn('Received message before auth - ignoring');
+            return;
+          }
 
-          // Get config and pending updates
-          const config = await this.getTenantConfig();
-          const tenant = await this.tenantRepo.findOneBy({ id: tenantId });
-
-          const authOk: AuthOkMessage = {
-            type: 'auth_ok',
-            payload: {
-              tenantId,
-              config,
-              configVersion: tenant?.gatewayConfigVersion || 0,
-            },
-          };
-          ws.send(JSON.stringify(authOk));
-
-          await this.tenantRepo.update(tenantId, { lastSeen: new Date() });
-          this.logger.log(`Tenant ${tenantId} connected`);
-
-          // Flush pending updates if any
-          await this.flushPendingUpdates(tenantId, ws);
-          return;
+          // Handle other message types (logs, health, etc.)
+          if (tenantId) await this.handleInboundMessage(tenantId, message);
+        } catch (err) {
+          this.logger.error(
+            `Error processing message: ${(err as Error).message}`,
+          );
         }
-
-        if (!authenticated) {
-          this.logger.warn('Received message before auth - ignoring');
-          return;
-        }
-
-        // Handle other message types (logs, health, etc.)
-        if (tenantId) this.handleInboundMessage(tenantId, message);
-      } catch (err) {
-        this.logger.error(
-          `Error processing message: ${(err as Error).message}`,
-        );
-      }
+      });
     });
 
     ws.on('close', () => {
-      if (tenantId) {
+      clearTimeout(authTimeout);
+      if (!this.stopped && tenantId && this.connections.get(tenantId) === ws) {
         this.connections.delete(tenantId);
-        this.tenantRepo.update(tenantId, { lastSeen: new Date() });
-        this.redisPub.del(`gw:online:${tenantId}`);
+        void this.tenantRepo
+          .update(tenantId, { lastSeen: new Date() })
+          .catch((err: Error) => this.logger.error(err.message));
+        void this.redisPub
+          .del(`gw:online:${tenantId}`)
+          .catch((err: Error) => this.logger.error(err.message));
         this.logger.log(`Tenant ${tenantId} disconnected`);
       }
     });
 
     ws.on('pong', () => {
-      if (tenantId) this.redisPub.set(`gw:online:${tenantId}`, '1', 'EX', 90);
+      if (!this.stopped && tenantId)
+        void this.redisPub
+          .set(`gw:online:${tenantId}`, '1', 'EX', 90)
+          .catch((err: Error) => this.logger.error(err.message));
     });
   }
 
   private async validateApiKey(apiKey: string): Promise<string | null> {
+    if (typeof apiKey !== 'string' || apiKey.length > 512) return null;
     const hash = crypto.createHash('sha256').update(apiKey).digest('hex');
     const key = await this.apiKeyRepo.findOne({
-      where: { keyHash: hash, revokedAt: undefined },
+      where: { keyHash: hash, revokedAt: IsNull() },
     });
     return key ? key.tenantId : null;
   }
 
-  private async getTenantConfig(): Promise<TenantConfig> {
-    // This will be implemented fully once we have the tenant schema logic
-    // For now, return a default skeleton or read from public schema placeholder
-    return {
-      routes: [],
-      services: [],
-      consumers: [],
-      rateLimit: { windowMs: 60000, unauthMax: 100, authMax: 500 },
-    };
+  private async getTenantConfig(
+    tenantId: string,
+  ): Promise<{ config: TenantConfig; version: number }> {
+    if (!/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(tenantId))
+      throw new Error('Invalid tenant ID');
+    const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
+    return this.dataSource.transaction('REPEATABLE READ', async (manager) => {
+      const [tenant] = await manager.query(
+        `SELECT "gatewayConfigVersion", "caCertPem" FROM public.tenants WHERE id = $1`,
+        [tenantId],
+      );
+      if (!tenant) throw new Error('Tenant not found');
+      const routes = await manager.query(
+        `SELECT * FROM ${schema}.routes WHERE "deletedAt" IS NULL AND enabled = true`,
+      );
+      const services = await manager.query(
+        `SELECT * FROM ${schema}.services WHERE "deletedAt" IS NULL`,
+      );
+      const consumers = await manager.query(
+        `SELECT * FROM ${schema}.consumers WHERE "revokedAt" IS NULL`,
+      );
+      return {
+        config: {
+          routes,
+          services,
+          consumers,
+          caCertPem: tenant.caCertPem ?? undefined,
+          rateLimit: { windowMs: 60000, unauthMax: 100, authMax: 500 },
+        },
+        version: tenant.gatewayConfigVersion,
+      };
+    });
   }
 
   private async flushPendingUpdates(tenantId: string, ws: WebSocket) {
@@ -180,19 +228,35 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
     });
 
     for (const update of pending) {
+      const envelope = update.config as unknown as {
+        config: TenantConfig;
+        version: number;
+      };
+      if (!envelope.config || !Number.isSafeInteger(envelope.version)) continue;
       ws.send(
         JSON.stringify({
           type: 'config.update',
-          payload: update.config,
-          version: Date.now(), // placeholder
+          payload: envelope.config,
+          version: envelope.version,
         }),
       );
-      await this.pendingUpdateRepo.delete(update.id);
+      // Retain until the gateway confirms installation with config.ack.
     }
   }
 
   private async handleInboundMessage(tenantId: string, message: BaseWsMessage) {
     switch (message.type) {
+      case 'config.ack': {
+        const version = (message as BaseWsMessage & { version: number })
+          .version;
+        if (Number.isSafeInteger(version) && version >= 0) {
+          await this.dataSource.query(
+            `DELETE FROM public.pending_config_updates WHERE "tenantId" = $1 AND (config->>'version')::bigint <= $2`,
+            [tenantId, version],
+          );
+        }
+        break;
+      }
       case 'logs':
         await this.ingestionService.ingestLogs(
           tenantId,
@@ -239,22 +303,22 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async pushConfigUpdate(tenantId: string, config: TenantConfig) {
+  async pushConfigUpdate(
+    tenantId: string,
+    config: TenantConfig,
+    version: number,
+  ) {
+    if (!Number.isSafeInteger(version) || version < 0)
+      throw new Error('Invalid configuration version');
     const ws = this.connections.get(tenantId);
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(
         JSON.stringify({
           type: 'config.update',
           payload: config,
-          version: Date.now(),
+          version,
         }),
       );
-    } else {
-      await this.pendingUpdateRepo.save({
-        tenantId,
-        config: config as unknown as Record<string, unknown>,
-        createdAt: new Date(),
-      });
     }
   }
 

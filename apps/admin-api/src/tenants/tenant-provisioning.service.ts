@@ -53,6 +53,7 @@ export class TenantProvisioningService {
           name VARCHAR NOT NULL,
           "keyHash" VARCHAR NOT NULL,
           "rateLimitTier" VARCHAR DEFAULT 'authenticated',
+          groups JSONB NOT NULL DEFAULT '[]'::jsonb,
           "createdAt" TIMESTAMP DEFAULT NOW(),
           "revokedAt" TIMESTAMP
         )
