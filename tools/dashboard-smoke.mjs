@@ -149,6 +149,9 @@ await context.route('**/api/**', async (route) => {
     return;
   }
   if (route.request().method() === 'POST' && resource === 'services') {
+    const submitted = route.request().postDataJSON();
+    assert.equal(submitted.healthCheckIntervalMs, 1500);
+    assert.equal(submitted.unhealthyFallback, true);
     await route.fulfill({
       status: 503,
       contentType: 'application/json',
@@ -198,7 +201,7 @@ await context.route('**/api/**', async (route) => {
       body = { message: 'Verification outage' };
     }
   } else if (resource === 'health')
-    body = [{ serviceId: service, status: 'healthy', checkedAt: createdAt }];
+    body = [{ serviceId: service, status: 'degraded', checkedAt: createdAt }];
   else if (resource === 'metrics')
     body = Array.from({ length: 12 }, (_, i) => ({
       timestamp: new Date(Date.parse(createdAt) + i * 60000).toISOString(),
@@ -288,6 +291,7 @@ try {
   await page.getByRole('button', { name: 'Try again', exact: true }).click();
   await expect(page.getByText('Catalog API', { exact: true })).toBeVisible();
   assert(serviceRequests >= 2, 'Retry must fetch the list again');
+  await expect(page.getByText('degraded', { exact: true })).toBeVisible();
   await audit('services desktop');
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -392,6 +396,12 @@ try {
       await serviceDialog
         .getByLabel('Target 1 URL', { exact: true })
         .fill('https://upstream.example.test');
+      await serviceDialog
+        .getByLabel('Health check interval (ms)', { exact: true })
+        .fill('1500');
+      await serviceDialog
+        .getByRole('checkbox', { name: /Try failed targets/ })
+        .check();
       await serviceDialog
         .getByRole('button', { name: 'Add Service', exact: true })
         .click();

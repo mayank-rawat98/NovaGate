@@ -47,7 +47,8 @@ apps/api/src/
     health/
       health.controller.ts
       health.controller.spec.ts
-      upstream-health.service.ts    -- active health probing for service targets
+      upstream-health.service.ts    -- bounded per-service probes and eviction/recovery
+      upstream-health.service.spec.ts -- real HTTP/HTTP2/IPv6 lifecycle checks
     config-manager/
       gateway-config-manager.service.ts
     connector/
@@ -190,6 +191,7 @@ Defined error codes:
 | `RATE_LIMIT_EXCEEDED` | 429 | Sliding window limit hit |
 | `DOWNSTREAM_TIMEOUT` | 504 | Proxy upstream did not respond within limit |
 | `DOWNSTREAM_ERROR` | 502 | Proxy upstream returned 5xx |
+| `NO_HEALTHY_TARGETS` | 503 | Every configured upstream target has failed health checks |
 | `SERVICE_NOT_FOUND` | 404 | No downstream service matches the path |
 | `IP_RESTRICTED` | 403 | Request IP is in the route's deny list, or not in allow list |
 | `REQUEST_TOO_LARGE` | 413 | Body exceeds route's `maxBodyBytes` limit |

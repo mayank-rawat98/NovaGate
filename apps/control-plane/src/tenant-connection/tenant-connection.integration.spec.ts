@@ -81,7 +81,7 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
         `CREATE TABLE ${schema}.routes (id UUID, enabled BOOLEAN, "deletedAt" TIMESTAMP)`,
       );
       await ds.query(
-        `CREATE TABLE ${schema}.services (id UUID, name TEXT, "deletedAt" TIMESTAMP)`,
+        `CREATE TABLE ${schema}.services (id UUID, name TEXT, "healthCheckIntervalMs" INTEGER DEFAULT 1500, "unhealthyFallback" BOOLEAN DEFAULT true, "deletedAt" TIMESTAMP)`,
       );
       await ds.query(
         `CREATE TABLE ${schema}.consumers (id UUID, "revokedAt" TIMESTAMP)`,
@@ -159,7 +159,11 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
 
   it('loads persisted services and the database version at authentication', async () => {
     const { message } = await connect(apiKey);
-    expect(message.payload.config.services[0].name).toBe('persisted-service');
+    expect(message.payload.config.services[0]).toMatchObject({
+      name: 'persisted-service',
+      healthCheckIntervalMs: 1500,
+      unhealthyFallback: true,
+    });
     expect(message.payload.configVersion).toBe(8);
     expect(message.payload.tenantId).toBe(tenantId);
   });
@@ -203,7 +207,11 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
     const [data] = await next;
     const update = JSON.parse(data.toString()) as ConfigUpdateMessage;
     expect(update.version).toBe(9);
-    expect(update.payload.services[0].name).toBe('persisted-service');
+    expect(update.payload.services[0]).toMatchObject({
+      name: 'persisted-service',
+      healthCheckIntervalMs: 1500,
+      unhealthyFallback: true,
+    });
     expect(
       await ds.getRepository(PendingConfigUpdate).countBy({ tenantId }),
     ).toBe(1);

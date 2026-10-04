@@ -24,6 +24,7 @@ import type {
 const HEALTH_STYLES: Record<string, string> = {
   healthy: 'bg-green-100 text-green-700',
   unhealthy: 'bg-red-100 text-red-700',
+  degraded: 'bg-amber-100 text-amber-800',
   unknown: 'bg-gray-100 text-gray-500',
 };
 
@@ -37,6 +38,8 @@ interface FormState {
   targets: TargetRow[];
   healthCheckPath: string;
   timeoutMs: string;
+  healthCheckIntervalMs: string;
+  unhealthyFallback: boolean;
 }
 
 const EMPTY_TARGET: TargetRow = { url: '', weight: '1' };
@@ -46,11 +49,15 @@ const EMPTY_FORM: FormState = {
   targets: [{ url: '', weight: '1' }],
   healthCheckPath: '/health',
   timeoutMs: '10000',
+  healthCheckIntervalMs: '10000',
+  unhealthyFallback: false,
 };
 
 function formToDto(form: FormState): CreateServiceDto {
   return {
     name: form.name,
+    healthCheckIntervalMs: Number(form.healthCheckIntervalMs),
+    unhealthyFallback: form.unhealthyFallback,
     targets: form.targets
       .filter((t) => t.url.trim())
       .map((t) => {
@@ -107,6 +114,8 @@ export default function ServicesPage() {
       })),
       healthCheckPath: service.healthCheckPath,
       timeoutMs: String(service.timeoutMs),
+      healthCheckIntervalMs: String(service.healthCheckIntervalMs ?? 10000),
+      unhealthyFallback: service.unhealthyFallback ?? false,
     });
     setFormError(null);
     setPanelOpen(true);
@@ -416,7 +425,7 @@ export default function ServicesPage() {
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <label
-                    htmlFor="services-field-2"
+                    htmlFor="services-target-0"
                     className="text-sm font-medium text-gray-700"
                   >
                     Targets
@@ -431,7 +440,7 @@ export default function ServicesPage() {
                     <div key={i} className="flex items-center gap-2">
                       <GripVertical className="h-4 w-4 flex-shrink-0 text-gray-300" />
                       <input
-                        id="services-field-2"
+                        id={`services-target-${i}`}
                         type="url"
                         aria-label={`Target ${i + 1} URL`}
                         required
@@ -494,11 +503,15 @@ export default function ServicesPage() {
 
               {/* Health Check Path */}
               <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700">
+                <label
+                  htmlFor="services-health-path"
+                  className="text-sm font-medium text-gray-700"
+                >
                   Health Check Path
                 </label>
                 <input
                   type="text"
+                  id="services-health-path"
                   placeholder="/health"
                   value={form.healthCheckPath}
                   onChange={(e) =>
@@ -507,10 +520,58 @@ export default function ServicesPage() {
                   className="rounded-md border border-gray-300 px-3 py-2 font-mono text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                 />
                 <p className="text-xs text-gray-400">
-                  GET request sent every 10s. Target is marked unhealthy after 3
-                  consecutive failures.
+                  Only successful (2xx) responses count as healthy. Failure and
+                  recovery thresholds are controlled by the gateway operator.
                 </p>
               </div>
+
+              <div className="flex flex-col gap-1">
+                <label
+                  htmlFor="services-health-interval"
+                  className="text-sm font-medium text-gray-700"
+                >
+                  Health check interval (ms)
+                </label>
+                <input
+                  id="services-health-interval"
+                  type="number"
+                  required
+                  min={1000}
+                  max={60000}
+                  value={form.healthCheckIntervalMs}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      healthCheckIntervalMs: e.target.value,
+                    }))
+                  }
+                  className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+                />
+                <p className="text-xs text-gray-500">
+                  Choose 1–60 seconds. Shorter intervals detect failures sooner
+                  and send more probe requests.
+                </p>
+              </div>
+              <label className="flex items-start gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={form.unhealthyFallback}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      unhealthyFallback: e.target.checked,
+                    }))
+                  }
+                />
+                <span>
+                  Try failed targets when all targets are unhealthy
+                  <span className="mt-1 block text-xs text-gray-500">
+                    Disabled by default: requests receive unavailable until a
+                    target recovers. Enable only if continuing to attempt failed
+                    upstreams is appropriate for your service.
+                  </span>
+                </span>
+              </label>
 
               {/* Timeout */}
               <div className="flex flex-col gap-1">

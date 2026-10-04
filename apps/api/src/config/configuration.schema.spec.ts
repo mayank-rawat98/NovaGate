@@ -33,3 +33,33 @@ describe('Trusted reverse proxy configuration', () => {
     ).toBeDefined();
   });
 });
+
+describe('upstream health startup settings', () => {
+  it('provides bounded operational defaults', () => {
+    const result = configSchema.validate(required);
+    expect(result.error).toBeUndefined();
+    expect(result.value).toMatchObject({
+      HEALTH_DEFAULT_INTERVAL_MS: 10000,
+      HEALTH_FAILURE_THRESHOLD: 3,
+      HEALTH_RECOVERY_THRESHOLD: 2,
+      HEALTH_PROBE_TIMEOUT_MS: 3000,
+      HEALTH_PROBE_CONCURRENCY: 8,
+    });
+  });
+  it.each([
+    ['HEALTH_DEFAULT_INTERVAL_MS', 999],
+    ['HEALTH_DEFAULT_INTERVAL_MS', 60001],
+    ['HEALTH_FAILURE_THRESHOLD', 0],
+    ['HEALTH_FAILURE_THRESHOLD', 11],
+    ['HEALTH_RECOVERY_THRESHOLD', 1.5],
+    ['HEALTH_RECOVERY_THRESHOLD', 11],
+    ['HEALTH_PROBE_TIMEOUT_MS', 99],
+    ['HEALTH_PROBE_TIMEOUT_MS', 10001],
+    ['HEALTH_PROBE_CONCURRENCY', 0],
+    ['HEALTH_PROBE_CONCURRENCY', 65],
+  ])('rejects unsafe %s=%s', (name, value) => {
+    expect(
+      configSchema.validate({ ...required, [name]: value }).error,
+    ).toBeDefined();
+  });
+});

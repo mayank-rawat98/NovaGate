@@ -47,6 +47,8 @@ export interface ServiceEntity {
   name: string;
   targets: Array<{ url: string; weight: number }>;
   healthCheckPath: string;
+  healthCheckIntervalMs?: number;
+  unhealthyFallback?: boolean;
   timeoutMs: number;
   createdAt: string;
   deletedAt?: string;

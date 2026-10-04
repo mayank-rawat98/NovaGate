@@ -84,12 +84,22 @@ export class WsProxyService {
       return;
     }
 
-    const healthyUrls = this.upstreamHealth.getHealthyUrls(service.targets);
-    const targetUrl = this.loadBalancer.selectTarget(
-      service.id,
+    const healthyUrls = this.upstreamHealth.getHealthyUrls(
       service.targets,
-      healthyUrls,
+      service.id,
     );
+    let targetUrl: string;
+    try {
+      targetUrl = this.loadBalancer.selectTarget(
+        service.id,
+        service.targets,
+        healthyUrls,
+        service.unhealthyFallback === true,
+      );
+    } catch {
+      this.rejectSocket(socket, 503, 'NO_HEALTHY_TARGETS');
+      return;
+    }
 
     const handler = this.getUpgradeHandler(targetUrl, service.timeoutMs);
 

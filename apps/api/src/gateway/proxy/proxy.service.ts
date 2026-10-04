@@ -208,15 +208,19 @@ export class ProxyService {
       safeRetryMethods.includes(requestMethod) &&
       retryMethods.includes(requestMethod);
 
-    const healthyUrls = this.upstreamHealth.getHealthyUrls(service.targets);
     const useH2 = service.h2 === true;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const healthyUrls = this.upstreamHealth.getHealthyUrls(
+        service.targets,
+        service.id,
+      );
       const isLastAttempt = attempt === maxAttempts - 1;
       const targetUrl = this.loadBalancer.selectTarget(
         service.id,
         service.targets,
         healthyUrls,
+        service.unhealthyFallback === true,
       );
 
       // Reset the URL for each attempt (safe for GET/HEAD/OPTIONS which have no body)

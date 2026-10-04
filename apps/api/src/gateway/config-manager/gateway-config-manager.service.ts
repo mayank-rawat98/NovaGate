@@ -14,6 +14,22 @@ export class GatewayConfigManagerService {
 
   constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
 
+  private readonly listeners = new Set<() => void>();
+
+  subscribeConfig(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  private notifyConfig() {
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch {
+        this.logger.warn('A configuration listener failed');
+      }
+    }
+  }
+
   private loadQueue: Promise<void> = Promise.resolve();
 
   loadConfig(
@@ -66,6 +82,7 @@ export class GatewayConfigManagerService {
     this._configVersion = version ?? null;
     this._configCachedAt = cachedAt;
     this._configSource = 'live';
+    this.notifyConfig();
 
     this.logger.log(`Config loaded for tenant ${tenantId}`);
   }
@@ -103,10 +120,12 @@ export class GatewayConfigManagerService {
             ? new Date(parsed.cachedAt)
             : new Date();
           this._configSource = 'cache';
+          this.notifyConfig();
         } else {
           // Legacy format: raw config without envelope
           this.currentConfig = parsed;
           this._configSource = 'cache';
+          this.notifyConfig();
           this._configCachedAt = new Date();
         }
       } catch {

@@ -10,6 +10,7 @@ async function bootstrap() {
   // Plugins and proxying need the exact incoming bytes. A JSON parser would
   // consume/rewrite the stream before size limits and HMAC verification.
   const app = await NestFactory.create(AppModule, { bodyParser: false });
+  app.enableShutdownHooks();
   const configService = app.get(ConfigService<GatewayConfig, true>);
   const port = configService.get('port', { infer: true });
   app

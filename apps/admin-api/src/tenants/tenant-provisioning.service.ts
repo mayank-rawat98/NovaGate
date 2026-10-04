@@ -41,6 +41,8 @@ export class TenantProvisioningService {
           targets JSONB NOT NULL,
           "healthCheckPath" VARCHAR NOT NULL DEFAULT '/health',
           "timeoutMs" INTEGER DEFAULT 10000,
+          "healthCheckIntervalMs" INTEGER NOT NULL DEFAULT 10000,
+          "unhealthyFallback" BOOLEAN NOT NULL DEFAULT false,
           h2 BOOLEAN DEFAULT false,
           "supportsWebSocket" BOOLEAN DEFAULT false,
           "createdAt" TIMESTAMP DEFAULT NOW(),

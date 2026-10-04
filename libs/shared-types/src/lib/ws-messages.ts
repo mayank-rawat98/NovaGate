@@ -136,6 +136,8 @@ export interface ServiceConfig {
   name: string;
   targets: ServiceTarget[];
   healthCheckPath: string;
+  healthCheckIntervalMs?: number;
+  unhealthyFallback?: boolean;
   timeoutMs: number;
   supportsWebSocket?: boolean;
   h2?: boolean;
@@ -167,7 +169,7 @@ export interface RequestLog {
 
 export interface HealthSnapshot {
   serviceId: string;
-  status: 'healthy' | 'unhealthy' | 'unknown';
+  status: 'healthy' | 'degraded' | 'unhealthy' | 'unknown';
   latencyMs?: number;
   checkedAt: string;
   errorMessage?: string;

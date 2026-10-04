@@ -42,6 +42,7 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
   let h2target: string;
   let jwksUrl: string;
   let config: TenantConfig;
+  let allUnhealthy = false;
   let received: Array<{
     body: string;
     url: string;
@@ -153,7 +154,7 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
           provide: UpstreamHealthService,
           useValue: {
             getHealthyUrls: (targets: Array<{ url: string }>) =>
-              new Set(targets.map((t) => t.url)),
+              new Set(allUnhealthy ? [] : targets.map((t) => t.url)),
           },
         },
         {
@@ -179,6 +180,7 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
   });
 
   beforeEach(() => {
+    allUnhealthy = false;
     received = [];
     mode = { status: 200, failOnce: false };
     rateLimit.check.mockClear();
@@ -206,6 +208,21 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
       consumers: [],
       rateLimit: { windowMs: 60000, unauthMax: 100, authMax: 500 },
     };
+  });
+
+  it('returns normalized unavailable without touching failed peers, unless fallback is enabled', async () => {
+    allUnhealthy = true;
+    let response = await fetch(`${url}/api`);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: 'NO_HEALTHY_TARGETS',
+      requestId: expect.any(String),
+    });
+    expect(received).toHaveLength(0);
+    config.services[0].unhealthyFallback = true;
+    response = await fetch(`${url}/api`);
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(1);
   });
 
   afterAll(async () => {

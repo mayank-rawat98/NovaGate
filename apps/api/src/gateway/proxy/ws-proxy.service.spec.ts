@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import * as net from 'net';
 import type * as http from 'http';
 import { WsProxyService } from './ws-proxy.service';
+import { LoadBalancerService } from './load-balancer.service';
 import type { TenantConfig } from '@api-gateway/shared-types';
 
 jest.mock('http-proxy-middleware', () => ({
@@ -74,7 +75,10 @@ function makeRequest(
   } as unknown as http.IncomingMessage;
 }
 
-function makeService(configOverride?: TenantConfig): WsProxyService {
+function makeService(
+  configOverride?: TenantConfig,
+  allDown = false,
+): WsProxyService {
   const configManager = {
     getConfig: jest.fn().mockReturnValue(configOverride ?? BASE_CONFIG),
     getTenantId: jest.fn().mockReturnValue('tenant-1'),
@@ -90,7 +94,7 @@ function makeService(configOverride?: TenantConfig): WsProxyService {
   const upstreamHealth = {
     getHealthyUrls: jest
       .fn()
-      .mockReturnValue(new Set(['http://ws-downstream:4000'])),
+      .mockReturnValue(new Set(allDown ? [] : ['http://ws-downstream:4000'])),
   };
   const configService = {
     get: jest
@@ -101,13 +105,24 @@ function makeService(configOverride?: TenantConfig): WsProxyService {
   return new WsProxyService(
     configManager as never,
     metrics as never,
-    loadBalancer as never,
+    (allDown ? new LoadBalancerService() : loadBalancer) as never,
     upstreamHealth as never,
     configService as never,
   );
 }
 
 describe('WsProxyService', () => {
+  it('rejects an upgrade with unavailable when every peer has failed', () => {
+    const socket = makeSocket();
+    makeService(undefined, true).handleUpgrade(
+      makeRequest('/ws'),
+      socket as unknown as net.Socket,
+      Buffer.alloc(0),
+    );
+    expect(socket.destroyed).toBe(true);
+    expect(socket.writtenData.join('')).toContain('503');
+    expect(socket.writtenData.join('')).toContain('NO_HEALTHY_TARGETS');
+  });
   it('destroys socket for non-websocket upgrades', () => {
     const svc = makeService();
     const socket = makeSocket();

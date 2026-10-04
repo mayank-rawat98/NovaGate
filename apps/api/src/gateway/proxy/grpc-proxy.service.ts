@@ -98,12 +98,26 @@ export class GrpcProxyService {
       return;
     }
 
-    const healthyUrls = this.upstreamHealth.getHealthyUrls(service.targets);
-    const targetUrl = this.loadBalancer.selectTarget(
-      service.id,
+    const healthyUrls = this.upstreamHealth.getHealthyUrls(
       service.targets,
-      healthyUrls,
+      service.id,
     );
+    let targetUrl: string;
+    try {
+      targetUrl = this.loadBalancer.selectTarget(
+        service.id,
+        service.targets,
+        healthyUrls,
+        service.unhealthyFallback === true,
+      );
+    } catch {
+      this.sendGrpcError(
+        sendResponse,
+        14,
+        'No healthy upstream targets are available',
+      );
+      return;
+    }
 
     const { grpcService, grpcMethod } = parseGrpcPath(path);
 

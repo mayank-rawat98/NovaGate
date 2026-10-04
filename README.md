@@ -228,18 +228,23 @@ TLS and routing: the VPS is shared with squadup.in, whose Caddy owns ports 80/44
 
 ## Gateway Environment Variables
 
-| Variable                | Default  | Notes                                                                                      |
-| ----------------------- | -------- | ------------------------------------------------------------------------------------------ |
-| `GATEWAY_API_KEY`       | required | Authenticates gateway with control plane                                                   |
-| `CONTROL_PLANE_URL`     | required | `wss://ws.novagate.dev/gateway-ws`                                                         |
-| `REDIS_URL`             | required | Local Redis for config cache and rate limiting                                             |
-| `JWT_SECRET`            | required | Min 32 chars — validates consumer tokens                                                   |
-| `TRUSTED_PROXY_CIDRS`   | empty    | Comma-separated trusted reverse-proxy IPs/CIDRs; forwarding headers are ignored by default |
-| `PORT`                  | `3000`   | HTTP port                                                                                  |
-| `PROXY_TIMEOUT_MS`      | `10000`  | Downstream request timeout                                                                 |
-| `RATE_LIMIT_WINDOW_MS`  | `60000`  | Sliding window duration                                                                    |
-| `RATE_LIMIT_UNAUTH_MAX` | `100`    | Requests/window for unauthenticated clients                                                |
-| `RATE_LIMIT_AUTH_MAX`   | `500`    | Requests/window for authenticated consumers                                                |
+| Variable                     | Default  | Notes                                                                                      |
+| ---------------------------- | -------- | ------------------------------------------------------------------------------------------ |
+| `GATEWAY_API_KEY`            | required | Authenticates gateway with control plane                                                   |
+| `CONTROL_PLANE_URL`          | required | `wss://ws.novagate.dev/gateway-ws`                                                         |
+| `REDIS_URL`                  | required | Local Redis for config cache and rate limiting                                             |
+| `JWT_SECRET`                 | required | Min 32 chars — validates consumer tokens                                                   |
+| `TRUSTED_PROXY_CIDRS`        | empty    | Comma-separated trusted reverse-proxy IPs/CIDRs; forwarding headers are ignored by default |
+| `PORT`                       | `3000`   | HTTP port                                                                                  |
+| `HEALTH_DEFAULT_INTERVAL_MS` | `10000`  | Legacy service probe interval; integer 1000–60000 ms, overridden by service settings       |
+| `HEALTH_FAILURE_THRESHOLD`   | `3`      | Consecutive failures before eviction; integer 1–10                                         |
+| `HEALTH_RECOVERY_THRESHOLD`  | `2`      | Consecutive successes before a failed target recovers; integer 1–10                        |
+| `HEALTH_PROBE_TIMEOUT_MS`    | `3000`   | Absolute probe deadline including connection and headers; integer 100–10000 ms             |
+| `HEALTH_PROBE_CONCURRENCY`   | `8`      | Maximum simultaneous probes per gateway; integer 1–64                                      |
+| `PROXY_TIMEOUT_MS`           | `10000`  | Downstream request timeout                                                                 |
+| `RATE_LIMIT_WINDOW_MS`       | `60000`  | Sliding window duration                                                                    |
+| `RATE_LIMIT_UNAUTH_MAX`      | `100`    | Requests/window for unauthenticated clients                                                |
+| `RATE_LIMIT_AUTH_MAX`        | `500`    | Requests/window for authenticated consumers                                                |
 
 Use `docker/gateway.env.example` as a non-secret gateway configuration template. Only list reverse proxies you control in `TRUSTED_PROXY_CIDRS`; do not use a broad network to make client IP detection appear to work. Route IP restrictions support IPv4 and IPv6.
 
