@@ -238,6 +238,23 @@ describe('active upstream health with real network peers', () => {
     );
   });
 
+  it('does not overlap a check when the probe deadline exceeds its cadence', async () => {
+    let requests = 0;
+    const url = await listen(
+      http.createServer(() => {
+        requests++;
+      }),
+    );
+    const svc = service(url);
+    await install([svc]);
+    const health = start({ failureThreshold: 1, probeTimeoutMs: 1500 });
+    await until(() => requests === 1);
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(requests).toBe(1);
+    await until(() => health.getSnapshots([svc])[0].status === 'unhealthy');
+    expect(health.getHealthyUrls(svc.targets, svc.id)).toEqual(new Set());
+  });
+
   it('bounds stalled-header probes, obeys concurrency and cancels removed checks and shutdown', async () => {
     let active = 0;
     let maxActive = 0;
