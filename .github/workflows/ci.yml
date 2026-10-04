@@ -1,12 +1,42 @@
 name: CI
 
 on:
+  pull_request:
+    branches: ['dev']
   push:
     branches: ['dev']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NX_DAEMON: 'false'
+  NX_NO_CLOUD: 'true'
 
 jobs:
   ci:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: novagate_test
+          POSTGRES_PASSWORD: local-verification-only
+          POSTGRES_DB: novagate_test
+        ports: ['15432:5432']
+        options: >-
+          --health-cmd "pg_isready -U novagate_test -d novagate_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['16379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,15 +50,17 @@ jobs:
       - run: npm ci
 
       - name: Lint
-        run: npx nx run-many -t lint
+        run: npm exec nx run-many -- -t lint
 
       - name: Typecheck
-        run: npx nx run-many -t typecheck
+        run: npm exec nx run-many -- -t typecheck
 
       - name: Test
-        run: npx nx run-many -t test
+        run: npm exec nx run-many -- -t test --skipNxCache
         env:
           CI: 'true'
+          TEST_DATABASE_URL: postgres://novagate_test:local-verification-only@127.0.0.1:15432/novagate_test
+          TEST_REDIS_URL: redis://127.0.0.1:16379
 
       - name: Build
-        run: npx nx run-many -t build
+        run: npm exec nx run-many -- -t build

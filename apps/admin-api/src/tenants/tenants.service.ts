@@ -38,7 +38,20 @@ export class TenantsService {
   }
 
   async getTenant(id: string) {
-    return this.tenantRepo.findOneBy({ id });
+    return this.tenantRepo.findOne({
+      where: { id },
+      select: [
+        'id',
+        'name',
+        'email',
+        'planId',
+        'gatewayConfigVersion',
+        'lastSeen',
+        'createdAt',
+        'emailVerified',
+        'caCertPem',
+      ],
+    });
   }
 
   async rotateKey(tenantId: string) {

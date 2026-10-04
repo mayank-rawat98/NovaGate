@@ -25,7 +25,7 @@ CUSTOMER'S VPS                          SAAS SERVERS (novagate.dev)
 │  ControlPlaneConnector  ───┼──WSS────►│  TenantConnectionManager            │
 │  GatewayConfigManager      │          │                                      │
 │  (in-memory + Redis cache) │          │  apps/admin-api  (NestJS REST)      │
-│                            │          │  apps/dashboard  (Next.js 14)       │
+│                            │          │  apps/dashboard  (Next.js 16)       │
 │  Proxy  (live traffic)     │          │  PostgreSQL  (schema-per-tenant)    │
 │  Client → Gateway          │          │  Redis  (config.update pub/sub)     │
 │    → Downstream service    │          └─────────────────────────────────────┘
@@ -43,14 +43,14 @@ CUSTOMER'S VPS                          SAAS SERVERS (novagate.dev)
 
 ## Tech Stack
 
-| Layer                | Technology                                                      |
-| -------------------- | --------------------------------------------------------------- |
-| Gateway (data plane) | NestJS 10, TypeScript, Redis (sliding-window rate limiter)      |
-| Control plane        | NestJS, WebSocket (`ws`), Redis pub/sub                         |
-| Admin API            | NestJS, TypeORM, PostgreSQL (schema-per-tenant)                 |
-| Dashboard            | Next.js 14 App Router, Tailwind CSS, SWR                        |
+| Layer                | Technology                                                                              |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| Gateway (data plane) | NestJS 11, TypeScript, Redis (sliding-window rate limiter)                              |
+| Control plane        | NestJS, WebSocket (`ws`), Redis pub/sub                                                 |
+| Admin API            | NestJS, TypeORM, PostgreSQL (schema-per-tenant)                                         |
+| Dashboard            | Next.js 16 App Router, Tailwind CSS, SWR                                                |
 | Infrastructure       | Docker, Docker Compose, Caddy (SSL termination, shared with squadup.in), GitHub Actions |
-| Monorepo             | Nx 20 with project-boundary lint rules                          |
+| Monorepo             | Nx 22 with project-boundary lint rules                                                  |
 
 ---
 
@@ -66,7 +66,7 @@ Each tenant gets a dedicated schema (`tenant_<uuid>`) provisioned at signup. Que
 
 ### WebSocket config delivery with offline queue
 
-The control plane holds one persistent WebSocket per connected gateway. If a gateway is offline when a config change is published, the update is stored in `public.pending_config_updates` and replayed on reconnect. Gateways also persist config to local Redis so they can cold-start without a control-plane round-trip.
+The control plane holds one persistent WebSocket per connected gateway. Every configuration is stored in `public.pending_config_updates` before publication and retained until the gateway acknowledges its database version. The latest persisted tenant configuration is also loaded on authentication. Gateways also persist config to local Redis so they can cold-start without a control-plane round-trip.
 
 ### Plugin system — zero gateway.module.ts changes for new plugins
 
@@ -126,7 +126,7 @@ apps/
         mtls/             Client cert validation via ssl_client_cert header; uses tenant CA PEM
   control-plane/          WebSocket server — config push & telemetry ingestion
   admin-api/              REST API for dashboard — CRUD, analytics, auth
-  dashboard/              Next.js 14 tenant UI — route management, observability
+  dashboard/              Next.js 16 tenant UI — route management, observability
 libs/
   shared-types/           Single source of truth for WS message types, DB entities, TenantConfig, GatewayPlugin interface
 docker/
@@ -239,3 +239,19 @@ TLS and routing: the VPS is shared with squadup.in, whose Caddy owns ports 80/44
 | `RATE_LIMIT_WINDOW_MS`  | `60000`  | Sliding window duration                        |
 | `RATE_LIMIT_UNAUTH_MAX` | `100`    | Requests/window for unauthenticated clients    |
 | `RATE_LIMIT_AUTH_MAX`   | `500`    | Requests/window for authenticated consumers    |
+
+## Local regression verification
+
+Use OrbStack's Docker context. The isolated verification stack uses loopback ports 15432 and 16379, independently of production and other local projects:
+
+```sh
+docker compose -f docker/compose.verification.yml up -d --wait
+TEST_DATABASE_URL=postgres://novagate_test:local-verification-only@127.0.0.1:15432/novagate_test \
+TEST_REDIS_URL=redis://127.0.0.1:16379 \
+NX_DAEMON=false NX_NO_CLOUD=true \
+npm exec nx run-many -- -t test lint typecheck build --skipNxCache
+```
+
+The test credentials are for the isolated local stack only. Integration suites run when both TEST variables are set. CI supplies the same dependencies and runs integration suites on PRs targeting `dev`. Formal acceptance testing follows the remaining implementation phases.
+
+Fresh PostgreSQL volumes are initialized with `docker/postgres-init.sql`; admin-api performs idempotent schema upgrades for existing volumes. The control plane uses `synchronize: false` to preserve admin authentication columns. Admin-api requires `PLATFORM_JWT_SECRET` with at least 32 characters; tenant operations require a signed bearer token whose subject matches the tenant ID. Signup goes through email verification, and tenant responses exclude password and recovery tokens.

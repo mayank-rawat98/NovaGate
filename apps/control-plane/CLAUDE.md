@@ -8,7 +8,7 @@ Receives logs/health/errors/metrics from gateways. Pushes config updates down.
 1. Expect `auth` message within 5s or close(4002)
 2. Hash key SHA-256, look up in `public.api_keys`
 3. Not found → close(4001). Found → send `auth_ok` with full `TenantConfig` + `configVersion`
-4. Flush any rows from `pending_config_updates` for this tenant (deliver + delete)
+4. Flush any rows from `pending_config_updates` for this tenant (deliver + retain until config.ack)
 5. Register socket in `connections` map; set `gw:online:<tenantId>` in Redis (TTL 90s)
 
 ## Module structure
@@ -41,7 +41,7 @@ Config updates originate in the **admin-api** `ConfigPushService`:
 2. Publishes `{ tenantId, config, version }` to Redis `config.update` channel
 3. Control plane (`TenantConnectionManager`) subscribes; on message:
    - **online**: send `config.update` WS message immediately
-   - **offline**: upsert into `pending_config_updates` (flushed on next connect)
+   - **offline**: the admin API already persisted `pending_config_updates`; replay on reconnect
 
 ## Close codes (defined in `libs/shared-types/src/lib/ws-close-codes.ts`)
 
@@ -63,5 +63,5 @@ Config updates originate in the **admin-api** `ConfigPushService`:
 - NEVER retry on behalf of the gateway — reconnect is the gateway's job
 - NEVER hardcode close codes — import from `@api-gateway/shared-types`
 - NEVER skip `pending_config_updates` flush on reconnect
-- NEVER assume `config.update` is delivered — always check subscriber count and fall back to DB
+- NEVER assume `config.update` is delivered — persist before publication and retain until config.ack
 - Config version comes from the DB (`gatewayConfigVersion`) — never use `Date.now()` as the version

@@ -26,6 +26,9 @@ export class ControlPlaneConnectorService
   private reconnectIndex = 0;
   private messageBuffer: BaseWsMessage[] = [];
   private readonly MAX_BUFFER_SIZE = 10000;
+  private stopped = false;
+  private reconnectTimer?: NodeJS.Timeout;
+  private authenticated = false;
 
   constructor(
     private readonly configService: ConfigService,
@@ -38,12 +41,16 @@ export class ControlPlaneConnectorService
   }
 
   onModuleDestroy() {
+    this.stopped = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.ws) {
       this.ws.close();
     }
   }
 
   private connect() {
+    if (this.stopped) return;
+    this.authenticated = false;
     const url = this.configService.get<string>('CONTROL_PLANE_URL');
     const apiKey = this.configService.get<string>('GATEWAY_API_KEY');
 
@@ -64,12 +71,13 @@ export class ControlPlaneConnectorService
         type: 'auth',
         payload: { apiKey },
       };
-      this.send(auth);
+      this.ws?.send(JSON.stringify(auth));
     });
 
     this.ws.on('message', (data) => this.handleMessage(data));
 
     this.ws.on('close', (code) => {
+      this.authenticated = false;
       this.logger.warn(`Disconnected from control plane (code: ${code})`);
       if ([4001, 4003, 4004].includes(code)) {
         this.logger.error(
@@ -91,24 +99,29 @@ export class ControlPlaneConnectorService
     });
   }
 
-  private handleMessage(data: RawData) {
+  private async handleMessage(data: RawData) {
     try {
       const message = JSON.parse(data.toString()) as BaseWsMessage;
 
       switch (message.type) {
         case 'auth_ok': {
           const payload = (message as AuthOkMessage).payload;
-          this.gatewayConfig.loadConfig(
+          await this.gatewayConfig.loadConfig(
             payload.tenantId,
             payload.config,
             payload.configVersion,
           );
+          this.authenticated = true;
+          this.send({
+            type: 'config.ack',
+            version: payload.configVersion,
+          } as ConfigAckMessage);
           this.flushBuffer();
           break;
         }
         case 'config.update': {
           const update = message as ConfigUpdateMessage;
-          this.gatewayConfig.loadConfig(
+          await this.gatewayConfig.loadConfig(
             this.gatewayConfig.getTenantId() ?? '',
             update.payload,
             update.version,
@@ -132,9 +145,10 @@ export class ControlPlaneConnectorService
   }
 
   private scheduleReconnect() {
+    if (this.stopped) return;
     const delay = this.reconnectDelays[this.reconnectIndex];
     this.logger.log(`Reconnecting in ${delay}ms...`);
-    setTimeout(() => {
+    this.reconnectTimer = setTimeout(() => {
       this.reconnectIndex = Math.min(
         this.reconnectIndex + 1,
         this.reconnectDelays.length - 1,
@@ -144,7 +158,7 @@ export class ControlPlaneConnectorService
   }
 
   send(message: BaseWsMessage) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    if (this.authenticated && this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
     } else {
       if (this.messageBuffer.length >= this.MAX_BUFFER_SIZE) {

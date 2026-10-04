@@ -5,11 +5,6 @@ import { TenantsService } from './tenants.service';
 export class TenantsController {
   constructor(private readonly tenantsService: TenantsService) {}
 
-  @Post()
-  async create(@Body() body: { name: string; email: string }) {
-    return this.tenantsService.createTenant(body.name, body.email);
-  }
-
   @Get(':id')
   async findOne(@Param('id') id: string) {
     return this.tenantsService.getTenant(id);

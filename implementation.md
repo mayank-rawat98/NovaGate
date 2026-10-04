@@ -6,20 +6,21 @@ Each phase builds on the previous. Track implementation, regression verification
 
 The code contains substantial work for phases 0–3, but file presence does not prove production acceptance. No phase is marked complete by this audit.
 
-| Phase | Evidence in repository | Remaining work / verification |
-| --- | --- | --- |
-| 0 | Weighted balancer, active health probes, HTTP retry loop, size/CORS/IP plugins | Health interval is hardcoded; IP restriction trusts spoofable forwarding headers and lacks IPv6; verify streaming limits, retry behavior and target failover |
-| 1 | Plugin contracts, runner, registry, thirteen first-party plugins, dashboard route plugin forms | Nest does not aggregate repeated provider tokens: current registration can silently retain only one plugin; verify every plugin through the real module |
-| 2 | OIDC, client credentials, HMAC, ACL, mTLS implementations and unit tests | Verify real providers and TLS handshakes; tenant REST authorization is missing; new consumer schemas omit groups until migration |
-| 3 | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests | Verify protocol traffic with real upstreams; HTTP/2 response hooks currently run after sending the body; least-connections is absent |
-| 4 | Existing logs/health/metrics tables and REST views | Tracing, live metrics, alert delivery/history, RustFS log export and consumer aggregates remain to implement |
-| 5 | Existing REST configuration primitives | Declarative reconciliation, CLI, portal, Terraform, plugin SDK and third-party loading remain to implement |
-| 6 | No verified implementations | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement |
+| Phase | Evidence in repository                                                                         | Remaining work / verification                                                                                                                                         |
+| ----- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0     | Weighted balancer, active health probes, HTTP retry loop, size/CORS/IP plugins                 | Health interval is hardcoded; IP restriction trusts spoofable forwarding headers and lacks IPv6; verify streaming limits, retry behavior and target failover          |
+| 1     | Plugin contracts, runner, registry, thirteen first-party plugins, dashboard route plugin forms | Plugin aggregate registration and fail-closed name resolution repaired in issue #27, verified through the real Nest module; broader runtime plugin acceptance remains |
+| 2     | OIDC, client credentials, HMAC, ACL, mTLS implementations and unit tests                       | Verify real providers and TLS handshakes; Tenant-bound REST authorization and new-schema consumer groups repaired in issue #27; live provider/TLS acceptance remains  |
+| 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                      | Verify protocol traffic with real upstreams; HTTP/2 response hooks currently run after sending the body; least-connections is absent                                  |
+| 4     | Existing logs/health/metrics tables and REST views                                             | Tracing, live metrics, alert delivery/history, RustFS log export and consumer aggregates remain to implement                                                          |
+| 5     | Existing REST configuration primitives                                                         | Declarative reconciliation, CLI, portal, Terraform, plugin SDK and third-party loading remain to implement                                                            |
+| 6     | No verified implementations                                                                    | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                             |
 
 ### Prerequisites discovered by audit
 
 - Authenticate every tenant REST operation and bind the token subject to the requested tenant; remove fallback signing secrets and public tenant provisioning.
 - Use schema-qualified queries or transaction-local search paths. Pooled `SET search_path` in telemetry ingestion can cross tenant boundaries.
+- Issue #27 implements tenant REST authorization, complete plugin aggregation, schema-qualified ingestion, private tenant responses and fresh schema groups. Real Nest HTTP and PostgreSQL/Redis/WebSocket regression checks cover these prerequisites.
 - Load persisted tenant configuration at gateway authentication; preserve monotonic config versions and acknowledge persisted updates. Reject revoked gateway keys and never log keys.
 - Register all first-party plugins through an explicit aggregate factory and fail closed for unknown configured plugins.
 - Validate existing features with the actual Nest module and live PostgreSQL/Redis in OrbStack before building on them.
@@ -37,11 +38,14 @@ The code contains substantial work for phases 0–3, but file presence does not 
 
 Kong already documents [AI Gateway](https://developer.konghq.com/ai-gateway/), [OpenTelemetry](https://developer.konghq.com/gateway/otel-metrics/) and [health checks/circuit breakers](https://developer.konghq.com/gateway/traffic-control/health-checks-circuit-breakers/). Differentiate through operational simplicity, included capabilities and measured performance; do not claim these capabilities are impossible in Kong.
 
+Issue #27 also disables destructive control-plane entity synchronization and adds explicit initial public DDL, durable pre-publication snapshots, database config versions, ACK-based cleanup, revoked-key rejection, cache identity recovery and PR CI with PostgreSQL/Redis integration checks. Production acceptance remains a separate gate.
+
 Implementation sequence: reconcile baseline → repair isolation/config/plugin prerequisites → close phases 0–3 verification gaps → Phase 4 with RustFS and refreshed dashboard → phases 5–6 and additional requirements → formal acceptance. Terraform and Kubernetes code must live under this repository, not in separate repositories.
 
 ---
 
 **Legend:**
+
 - `apps/api` — gateway (runs on customer VPS)
 - `apps/admin-api` — SaaS admin REST API
 - `apps/control-plane` — SaaS WebSocket server
@@ -51,6 +55,7 @@ Implementation sequence: reconcile baseline → repair isolation/config/plugin p
 ---
 
 ## Phase 0 — Production Credibility
+
 **Duration: 4–6 weeks**
 **Goal: A team running real traffic can trust us.**
 
@@ -65,21 +70,24 @@ Without these, no engineering team will point production traffic at us. These ar
 **What to build:**
 
 `libs/shared-types` — extend `ServiceConfig`:
+
 ```typescript
 // before
-targetUrl: string
+targetUrl: string;
 
 // after
-targets: Array<{ url: string; weight: number }> // weight 1–100, defaults to equal
+targets: Array<{ url: string; weight: number }>; // weight 1–100, defaults to equal
 ```
 
 `apps/api/src/gateway/proxy/` — replace `createProxyMiddleware` with a round-robin selector:
+
 - `LoadBalancerService` — maintains a per-service counter; on each request picks `targets[counter++ % targets.length]` weighted by `weight`
 - Weighted implementation: expand targets array by weight before cycling (simple, no external lib)
 - Algorithms supported in this phase: **round-robin** and **weighted round-robin**
 - Least-connections deferred to Phase 2 (requires connection tracking)
 
 `apps/admin-api` — update `ServicesController`:
+
 - `POST /tenants/:id/services` accepts `targets: { url, weight }[]`
 - `PUT` allows adding/removing individual targets without replacing the whole service
 - Dashboard `ServiceForm` shows a dynamic target list with weight sliders
@@ -95,6 +103,7 @@ targets: Array<{ url: string; weight: number }> // weight 1–100, defaults to e
 **What to build:**
 
 `apps/api/src/gateway/health/upstream-health.service.ts`:
+
 - Runs a `setInterval` every `healthCheckIntervalMs` (default 10s, configurable per service)
 - Probes `GET {target.url}{healthCheckPath}` with a 3s timeout
 - Maintains `Map<targetUrl, { healthy: boolean; failCount: number; lastChecked: Date }>`
@@ -114,6 +123,7 @@ targets: Array<{ url: string; weight: number }> // weight 1–100, defaults to e
 **What to build:**
 
 `libs/shared-types` — add to `RouteConfig`:
+
 ```typescript
 retry?: {
   attempts: number          // default 2
@@ -123,6 +133,7 @@ retry?: {
 ```
 
 `apps/api/src/gateway/proxy/proxy.service.ts`:
+
 - Wrap the proxy call in a retry loop
 - First retry: immediate. Second retry: 100ms delay.
 - On non-idempotent methods (POST, PUT, PATCH, DELETE): only retry if route explicitly opts in via `retry.methods`
@@ -138,11 +149,13 @@ retry?: {
 **What to build:**
 
 `libs/shared-types` — add to `RouteConfig`:
+
 ```typescript
 maxBodyBytes?: number  // default unlimited; suggest 10MB as gateway default
 ```
 
 `apps/api/src/gateway/proxy/` — new `RequestSizeLimitMiddleware`:
+
 - Reads `Content-Length` header; if set and exceeds limit → 413 immediately, no read
 - If `Content-Length` absent, streams and counts bytes; aborts connection at limit
 - Applied before proxy middleware; checked per route from config
@@ -158,6 +171,7 @@ maxBodyBytes?: number  // default unlimited; suggest 10MB as gateway default
 **What to build:**
 
 `libs/shared-types` — add to `RouteConfig`:
+
 ```typescript
 cors?: {
   origins: string[]          // ['*'] or specific domains
@@ -169,6 +183,7 @@ cors?: {
 ```
 
 `apps/api/src/gateway/proxy/cors.middleware.ts`:
+
 - Handles `OPTIONS` preflight: respond 204 with correct headers, never reaches downstream
 - Injects `Access-Control-Allow-*` on actual responses
 - Per-route config from `GatewayConfigManagerService`
@@ -182,6 +197,7 @@ cors?: {
 **What to build:**
 
 `libs/shared-types` — add to `RouteConfig`:
+
 ```typescript
 ipRestriction?: {
   allow?: string[]   // CIDR notation, e.g. ['10.0.0.0/8', '203.0.113.42/32']
@@ -190,6 +206,7 @@ ipRestriction?: {
 ```
 
 `apps/api/src/gateway/proxy/ip-restriction.middleware.ts`:
+
 - Extracts IP from `X-Forwarded-For` first (gateway is behind a proxy), then `req.ip`
 - CIDR matching via `netmask` library (already a transitive dep in most setups, or add it)
 - Deny takes precedence over allow
@@ -211,6 +228,7 @@ ipRestriction?: {
 ---
 
 ## Phase 1 — Plugin System
+
 **Duration: 6–8 weeks**
 **Goal: Third-party developers can extend the gateway without forking the codebase.**
 
@@ -224,40 +242,40 @@ This is the architectural decision that separates a gateway from a reverse proxy
 // libs/shared-types/src/lib/plugin.ts
 
 export interface PluginContext {
-  req: IncomingMessage & { user?: { id: string }; requestId: string }
-  res: ServerResponse
-  route: RouteConfig
-  service: ServiceConfig | undefined
-  tenantId: string
-  logger: PluginLogger
+  req: IncomingMessage & { user?: { id: string }; requestId: string };
+  res: ServerResponse;
+  route: RouteConfig;
+  service: ServiceConfig | undefined;
+  tenantId: string;
+  logger: PluginLogger;
 }
 
 export interface PluginLogger {
-  info(msg: string, meta?: Record<string, unknown>): void
-  warn(msg: string, meta?: Record<string, unknown>): void
-  error(msg: string, meta?: Record<string, unknown>): void
+  info(msg: string, meta?: Record<string, unknown>): void;
+  warn(msg: string, meta?: Record<string, unknown>): void;
+  error(msg: string, meta?: Record<string, unknown>): void;
 }
 
 export interface GatewayPlugin {
-  name: string
+  name: string;
 
   // Called before the request reaches the proxy.
   // Return a Response to short-circuit (e.g. 403, 401, cached response).
   // Return void to continue to the next plugin.
-  onRequest?(ctx: PluginContext): Promise<PluginShortCircuit | void>
+  onRequest?(ctx: PluginContext): Promise<PluginShortCircuit | void>;
 
   // Called after the downstream responds, before the response is sent to client.
   // Can mutate response headers. Cannot change body (streaming).
-  onResponse?(ctx: PluginContext & { statusCode: number; headers: OutgoingHttpHeaders }): Promise<void>
+  onResponse?(ctx: PluginContext & { statusCode: number; headers: OutgoingHttpHeaders }): Promise<void>;
 
   // Called when the proxy encounters an error (timeout, 5xx after retries).
-  onError?(ctx: PluginContext & { error: GatewayError }): Promise<PluginShortCircuit | void>
+  onError?(ctx: PluginContext & { error: GatewayError }): Promise<PluginShortCircuit | void>;
 }
 
 export interface PluginShortCircuit {
-  status: number
-  headers?: Record<string, string>
-  body: string | Buffer
+  status: number;
+  headers?: Record<string, string>;
+  body: string | Buffer;
 }
 ```
 
@@ -266,6 +284,7 @@ export interface PluginShortCircuit {
 ### 1.2 Plugin Registry and Loader
 
 `apps/api/src/gateway/plugins/plugin-registry.service.ts`:
+
 - Map of `name → GatewayPlugin` instance
 - `register(plugin: GatewayPlugin)` — called at module init
 - `resolve(names: string[]): GatewayPlugin[]` — returns ordered plugin chain for a route
@@ -273,6 +292,7 @@ export interface PluginShortCircuit {
 - No dynamic file loading in Phase 1 (security boundary — third-party plugins are Phase 5)
 
 `apps/api/src/gateway/plugins/plugin-runner.service.ts`:
+
 - `runOnRequest(plugins, ctx)` — sequential, stops at first `ShortCircuit`
 - `runOnResponse(plugins, ctx)` — sequential, all run (errors are logged, not rethrown)
 - `runOnError(plugins, ctx)` — sequential, first `ShortCircuit` wins
@@ -283,12 +303,12 @@ export interface PluginShortCircuit {
 
 Refactor these from middleware into `GatewayPlugin` implementations:
 
-| Plugin Name | Replaces |
-|------------|---------|
-| `cors` | `cors.middleware.ts` |
-| `ip-restriction` | `ip-restriction.middleware.ts` |
-| `request-size-limit` | `RequestSizeLimitMiddleware` |
-| `rate-limit` | `RateLimitGuard` (keep guard, add plugin wrapper for per-route config) |
+| Plugin Name          | Replaces                                                               |
+| -------------------- | ---------------------------------------------------------------------- |
+| `cors`               | `cors.middleware.ts`                                                   |
+| `ip-restriction`     | `ip-restriction.middleware.ts`                                         |
+| `request-size-limit` | `RequestSizeLimitMiddleware`                                           |
+| `rate-limit`         | `RateLimitGuard` (keep guard, add plugin wrapper for per-route config) |
 
 Each plugin reads its config from `route.plugins[name]` — a `Record<string, unknown>` defined in `RouteConfig`:
 
@@ -302,6 +322,7 @@ plugins?: Array<{ name: string; config: Record<string, unknown> }>
 ### 1.4 New First-Party Plugins (Phase 1 ships these)
 
 **`request-transform` plugin**
+
 ```typescript
 config: {
   addHeaders?: Record<string, string>     // injected into upstream request
@@ -313,6 +334,7 @@ config: {
 ```
 
 **`response-transform` plugin**
+
 ```typescript
 config: {
   addHeaders?: Record<string, string>     // injected into client response
@@ -322,12 +344,14 @@ config: {
 ```
 
 **`basic-auth` plugin**
+
 ```typescript
 config: {
   credentials: Array<{ username: string; passwordHash: string }>
   realm?: string
 }
 ```
+
 Returns `WWW-Authenticate: Basic realm="..."` on missing/invalid credentials.
 
 ---
@@ -335,10 +359,12 @@ Returns `WWW-Authenticate: Basic realm="..."` on missing/invalid credentials.
 ### 1.5 Admin API + Dashboard — Plugin Config UI
 
 `apps/admin-api`:
+
 - `PUT /tenants/:id/routes/:routeId` accepts `plugins` array — stored as JSONB in `routes.plugins`
 - Validate plugin names against a registered allowlist; reject unknown plugin names
 
 `apps/dashboard` — Route edit slide-over:
+
 - "Plugins" tab lists available plugins
 - Toggling a plugin expands a config form specific to that plugin (each plugin ships a JSON Schema)
 - Schema-driven form rendering using `react-hook-form` + `zod`
@@ -357,6 +383,7 @@ Returns `WWW-Authenticate: Basic realm="..."` on missing/invalid credentials.
 ---
 
 ## Phase 2 — Auth Completeness
+
 **Duration: 5–7 weeks**
 **Goal: Replace the `Authorization` header logic for any standard protocol without custom code.**
 
@@ -367,6 +394,7 @@ Returns `WWW-Authenticate: Basic realm="..."` on missing/invalid credentials.
 **Who needs it:** Machine-to-machine APIs (microservices calling other microservices through the gateway).
 
 `apps/api/src/gateway/plugins/oauth2-client-credentials/`:
+
 - Per-route config: `{ tokenEndpoint, clientId, clientSecret, scopes }` (for upstream auth injection — gateway acts as OAuth client)
 - OR: validate inbound `Bearer` tokens by calling the token introspection endpoint
 - Token introspection result cached in Redis with TTL = token `expires_in`
@@ -379,6 +407,7 @@ Returns `WWW-Authenticate: Basic realm="..."` on missing/invalid credentials.
 **Who needs it:** Teams using Auth0, Cognito, Azure AD, Keycloak as their identity provider.
 
 `apps/api/src/gateway/plugins/oidc/`:
+
 ```typescript
 config: {
   jwksUri: string       // e.g. https://accounts.google.com/.well-known/jwks.json
@@ -387,6 +416,7 @@ config: {
   claimsToForward?: string[]  // e.g. ['sub', 'email'] injected as X-* headers
 }
 ```
+
 - JWKS fetched on first request, cached with 24h TTL, refreshed on `kid` miss (handles key rotation)
 - Validates `exp`, `iss`, `aud`, `nbf`
 - Compatible with existing `JwtMiddleware` — OIDC plugin runs after and enriches `req.user`
@@ -398,6 +428,7 @@ config: {
 **Who needs it:** Webhook senders (Stripe, GitHub, etc.) and legacy API clients that sign requests.
 
 `apps/api/src/gateway/plugins/hmac-auth/`:
+
 ```typescript
 config: {
   header: string          // header containing signature, e.g. 'X-Hub-Signature-256'
@@ -406,6 +437,7 @@ config: {
   maxClockSkewSeconds?: number  // default 300
 }
 ```
+
 - Computes `HMAC(secret, rawBody)` and compares to header value using `timingSafeEqual`
 - `rawBody` captured before any transformation plugins run
 
@@ -416,11 +448,13 @@ config: {
 **What to build:**
 
 `libs/shared-types` — add to `ConsumerConfig`:
+
 ```typescript
 groups: string[]  // e.g. ['admin', 'read-only']
 ```
 
 `libs/shared-types` — add to `RouteConfig`:
+
 ```typescript
 acl?: {
   allow?: string[]   // consumer groups allowed
@@ -429,10 +463,12 @@ acl?: {
 ```
 
 `apps/api/src/gateway/plugins/acl/`:
+
 - Reads `req.user.id`, looks up consumer from config, checks groups
 - Deny takes precedence; 403 with `ACL_DENIED` code
 
 `apps/admin-api` + `apps/dashboard`:
+
 - Consumer creation form adds optional `groups` field (comma-separated)
 - Route ACL config in plugin tab
 
@@ -443,11 +479,13 @@ acl?: {
 **Who needs it:** Financial services, healthcare, B2B APIs where both parties need to prove identity.
 
 `apps/api/src/gateway/auth/mtls.middleware.ts`:
+
 - Reads `ssl_client_cert` header (set by nginx/load balancer TLS termination) or raw TLS cert from `req.socket`
 - Validates against a per-route or global CA bundle stored in the gateway's local config
 - Extracts `CN`, `SAN` from cert; populates `req.user.certSubject`
 
 `apps/dashboard` — Settings page:
+
 - Upload CA certificate PEM per tenant; stored encrypted in DB
 
 ---
@@ -464,6 +502,7 @@ acl?: {
 ---
 
 ## Phase 3 — Protocol Expansion
+
 **Duration: 5–6 weeks**
 **Goal: Traffic of any protocol type can flow through the gateway.**
 
@@ -474,14 +513,16 @@ acl?: {
 **Why it matters:** Real-time apps (chat, live dashboards, collaborative tools) use WebSocket. Without this, those teams cannot adopt us.
 
 `apps/api/src/gateway/proxy/ws-proxy.service.ts`:
+
 - Detect `Connection: Upgrade` + `Upgrade: websocket` in request
 - Apply auth plugin chain and rate-limit **before** upgrading (rate-limit by active connection count for WS, not by request)
 - Upgrade pass-through to target URL via `http-proxy` WebSocket support
 - Telemetry: log connection open/close events; count bytes transferred (not per-message — too expensive)
 
 `libs/shared-types` — add to `ServiceConfig`:
+
 ```typescript
-supportsWebSocket: boolean  // default false; must be explicit
+supportsWebSocket: boolean; // default false; must be explicit
 ```
 
 ---
@@ -491,6 +532,7 @@ supportsWebSocket: boolean  // default false; must be explicit
 **Why it matters:** gRPC is the standard for internal microservice communication. Teams moving from Envoy or nginx need this.
 
 `apps/api/src/gateway/proxy/grpc-proxy.service.ts`:
+
 - Detect `Content-Type: application/grpc*`
 - HTTP/2 pass-through to downstream (Node.js `http2` module)
 - Auth and rate-limit apply pre-proxy (token from `authorization` metadata)
@@ -506,6 +548,7 @@ supportsWebSocket: boolean  // default false; must be explicit
 Upstream connections from gateway → downstream currently use HTTP/1.1 (`http-proxy-middleware`). Switch to HTTP/2 for services that advertise it.
 
 `apps/api/src/gateway/proxy/proxy.service.ts`:
+
 - Per-service `h2: boolean` flag; default false
 - When enabled: use `node:http2` client session pool per target URL
 - Session pool: max 10 sessions per target, idle timeout 30s
@@ -520,6 +563,7 @@ Upstream connections from gateway → downstream currently use HTTP/1.1 (`http-p
 Not transcoding yet — just awareness that a route is GraphQL so we can apply safe defaults.
 
 `libs/shared-types` — add to `RouteConfig`:
+
 ```typescript
 graphql?: {
   maxDepth?: number           // default 10; rejects deeply nested queries
@@ -529,6 +573,7 @@ graphql?: {
 ```
 
 `apps/api/src/gateway/plugins/graphql-guard/`:
+
 - Parse `query` from POST body JSON (no schema needed — just AST depth/complexity)
 - Reject before proxying if limits exceeded
 - `introspectionAllowed: false` blocks `__schema` and `__type` queries
@@ -546,6 +591,7 @@ graphql?: {
 ---
 
 ## Phase 4 — Observability Platform
+
 **Duration: 4–5 weeks**
 **Goal: Any team can debug a production incident using only our dashboard — no external tooling required.**
 
@@ -556,6 +602,7 @@ This is not a feature — it is the core product value for teams who would other
 ### 4.1 Distributed Tracing (OpenTelemetry)
 
 `apps/api/src/gateway/telemetry/otel.service.ts`:
+
 - Emit OpenTelemetry spans for every proxied request
 - Span attributes: `http.method`, `http.target`, `http.status_code`, `http.user_agent`, `net.peer.ip`, `gateway.tenant_id`, `gateway.route_id`, `gateway.service_id`, `gateway.retry_count`
 - Propagate `traceparent` header to downstream (W3C Trace Context)
@@ -563,6 +610,7 @@ This is not a feature — it is the core product value for teams who would other
 - Phase 5 will add OTLP export for third-party backends (Jaeger, Zipkin, Tempo)
 
 `apps/dashboard` — new `Traces` page:
+
 - Waterfall view: gateway span → downstream span (if downstream also sends `traceparent`)
 - Search by `traceId`, `requestId`, path, time range
 - Click a span → see attributes, timing, error if any
@@ -575,6 +623,7 @@ Currently: dashboard polls `GET /tenants/:id/metrics` on interval.
 Replace with: Server-Sent Events from admin-api; metrics pushed to dashboard as they arrive.
 
 `apps/admin-api/src/analytics/metrics-stream.controller.ts`:
+
 - `GET /tenants/:id/metrics/stream` — SSE endpoint
 - Subscribes to Redis pub/sub channel `metrics:{tenantId}`
 - Control plane publishes metrics to this channel when it receives the WS `metrics` message
@@ -587,25 +636,24 @@ Replace with: Server-Sent Events from admin-api; metrics pushed to dashboard as 
 ### 4.3 Alerting
 
 `libs/shared-types` — new `AlertRule` type:
+
 ```typescript
 interface AlertRule {
-  id: string
-  name: string
-  metric: 'error_rate' | 'p95_latency_ms' | 'rps' | 'downstream_timeout_rate'
-  operator: '>' | '<' | '>='
-  threshold: number
-  windowMinutes: number
-  channels: AlertChannel[]
-  enabled: boolean
+  id: string;
+  name: string;
+  metric: 'error_rate' | 'p95_latency_ms' | 'rps' | 'downstream_timeout_rate';
+  operator: '>' | '<' | '>=';
+  threshold: number;
+  windowMinutes: number;
+  channels: AlertChannel[];
+  enabled: boolean;
 }
 
-type AlertChannel =
-  | { type: 'webhook'; url: string; secret?: string }
-  | { type: 'email'; address: string }
-  | { type: 'slack'; webhookUrl: string }
+type AlertChannel = { type: 'webhook'; url: string; secret?: string } | { type: 'email'; address: string } | { type: 'slack'; webhookUrl: string };
 ```
 
 `apps/admin-api/src/alerts/`:
+
 - `AlertEvaluatorService` runs every 60s per tenant; queries recent metrics snapshots; fires matching rules
 - `AlertDeliveryService` sends webhook POST (signed), email via SMTP, or Slack block kit
 - Deduplication: rule cannot fire more than once per `windowMinutes`
@@ -617,6 +665,7 @@ type AlertChannel =
 ### 4.4 Log Export
 
 `apps/admin-api/src/log-export/`:
+
 - Background job (configurable schedule: real-time or hourly batch)
 - Destinations: S3-compatible (RustFS by default, AWS S3 and compatible providers), webhook (NDJSON), Datadog Logs API
 - Config per tenant: `{ destination, credentials, filter: { minStatusCode, paths } }`
@@ -631,6 +680,7 @@ type AlertChannel =
 Currently analytics are per-tenant. Add the consumer dimension.
 
 `apps/admin-api/src/analytics/analytics.controller.ts`:
+
 - Existing endpoints gain optional `?consumerId=` filter (already partially there in logs)
 - New: `GET /tenants/:id/consumers/:cid/stats` — rps, error rate, top paths, P95 latency for a specific consumer
 - Used by Developer Portal in Phase 5
@@ -648,6 +698,7 @@ Currently analytics are per-tenant. Add the consumer dimension.
 ---
 
 ## Phase 5 — Developer Ecosystem
+
 **Duration: 6–8 weeks**
 **Goal: Customers can build on top of us, not just use us.**
 
@@ -658,10 +709,12 @@ This phase turns the product from a gateway into a platform. Kong sells this as 
 ### 5.1 Declarative Config (YAML Import/Export)
 
 `apps/admin-api/src/config-import/`:
+
 - `POST /tenants/:id/import` — accepts YAML or JSON body; dry-run mode returns diff
 - `GET /tenants/:id/export` — returns current config as YAML
 
 Schema maps exactly to existing DB model (no new concepts):
+
 ```yaml
 services:
   - name: users-api
@@ -717,17 +770,20 @@ Auth: reads `GW_API_TOKEN` env var or `~/.gwx/credentials`. API calls `admin-api
 `apps/developer-portal/` — new Next.js app (separate from `apps/dashboard`):
 
 Routes:
+
 - `/` — API catalog (published routes with documentation)
 - `/keys` — consumer creates API keys for themselves; sees usage stats
 - `/docs/:routeId` — auto-generated API docs (method, path, auth requirements, rate limits)
 - `/usage` — per-key request count, error rate, quota remaining
 
 `apps/admin-api/src/portal/`:
+
 - `POST /tenants/:id/portal-settings` — enable portal; set allowed auth methods, custom domain
 - `GET /tenants/:id/portal/routes` — routes marked `portalVisible: true`
 - Public endpoint `GET /portal/:tenantId/catalog` — unauthenticated, returns visible routes
 
 `libs/shared-types` — add to `RouteConfig`:
+
 ```typescript
 portal?: {
   visible: boolean
@@ -743,12 +799,14 @@ portal?: {
 In-repository directory: `integrations/terraform-provider/` (Go, using Terraform Plugin Framework):
 
 Resources:
+
 - `gatewayx_service`
 - `gatewayx_route`
 - `gatewayx_consumer`
 - `gatewayx_alert_rule`
 
 Data sources:
+
 - `gatewayx_tenant` — read-only tenant metadata
 - `gatewayx_consumer` — look up by name
 
@@ -761,12 +819,14 @@ All resources call the same `admin-api` endpoints as the CLI.
 Extend the plugin system from Phase 1 to load plugins from npm packages.
 
 `apps/api/src/gateway/plugins/plugin-loader.service.ts`:
+
 - Config: `plugins.npm: [{ package: '@acmecorp/gatewayx-saml-auth', version: '1.2.0' }]`
 - At startup: `require(package)` — package must export a `GatewayPlugin` object as default
 - Sandboxing: Phase 5 uses trust-based model (customer explicitly configures package name)
 - Future Phase 6: WebAssembly sandbox for untrusted plugins
 
 `libs/sdk/` — new library: `@api-gateway/plugin-sdk`:
+
 - Re-exports `GatewayPlugin`, `PluginContext`, `PluginShortCircuit` from shared-types
 - Exports test helpers: `createMockContext(overrides)`, `runPlugin(plugin, ctx)`
 - Published to npm so third parties can build and test plugins independently
@@ -786,6 +846,7 @@ Extend the plugin system from Phase 1 to load plugins from npm packages.
 ---
 
 ## Phase 6 — Beyond Kong
+
 **Duration: 6–8 weeks**
 **Goal: Capabilities Kong cannot offer without asking you to run more infrastructure.**
 
@@ -798,12 +859,14 @@ This phase targets an integrated operating experience. Compare each capability a
 **Differentiation target:** Integrated configuration and operation with measurable customer benefit.
 
 `apps/control-plane/src/anomaly/`:
+
 - Rolling baseline computed per tenant per route: P50/P95 latency, error rate, RPS (15-minute windows, retained 7 days)
 - Anomaly score: z-score of current window vs 30-day baseline
 - Score threshold → auto-creates alert event (reuses Phase 4 alerting infrastructure)
 - No ML model needed for v1: pure statistical z-score is sufficient and interpretable
 
 `apps/dashboard` — Anomaly feed in dashboard overview:
+
 - "Unusual 40% spike in 5xx on `/api/orders` — baseline: 0.2%, current: 1.8%"
 - One-click to view related logs and traces
 
@@ -814,12 +877,14 @@ This phase targets an integrated operating experience. Compare each capability a
 **Differentiation target:** Integrated configuration and operation with measurable customer benefit.
 
 `apps/api/src/gateway/proxy/circuit-breaker.service.ts`:
+
 - Sliding window of last 20 requests per (tenantId, serviceId)
 - Open circuit when: failure rate > 50% AND minimum 5 requests in window
 - Half-open state: let 1 request through every 10s to probe recovery
 - Close circuit: 2 consecutive successes in half-open state
 
 `apps/control-plane/src/circuit-breaker/`:
+
 - Receives circuit state changes from gateways via new WS message type `circuit.state`
 - Dashboard shows per-service circuit breaker status in real time
 
@@ -832,6 +897,7 @@ This phase targets an integrated operating experience. Compare each capability a
 **Differentiation target:** Integrated configuration and operation with measurable customer benefit.
 
 Architecture:
+
 - Two control plane regions: primary (e.g. `us-east`) + replica (e.g. `eu-west`)
 - PostgreSQL streaming replication (primary → replica)
 - Redis Cluster or Redis Sentinel per region
@@ -849,6 +915,7 @@ Architecture:
 **Differentiation target:** Tenant and consumer usage controls with transparent, reproducible metering.
 
 `apps/admin-api/src/billing/`:
+
 - Monthly quota per plan tier: `{ requestsPerMonth, consumersMax, routesMax, logRetentionDays }`
 - `QuotaEnforcementService` — checked at request time via Redis counter `quota:{tenantId}:{month}`
 - On quota exceeded: gateway receives `config.update` with `suspended: true` → all routes return 429 with `QUOTA_EXCEEDED`
@@ -865,6 +932,7 @@ Architecture:
 In-repository directory: `integrations/k8s-controller/` (Go, using controller-runtime):
 
 CRDs:
+
 ```yaml
 apiVersion: gatewayx.io/v1
 kind: GatewayRoute
@@ -884,6 +952,7 @@ spec:
 ```
 
 Controller reconciliation loop:
+
 - Watch `GatewayRoute` and `GatewayService` CRDs
 - On create/update/delete: call `admin-api` REST API to sync
 - Status field updated with current route ID and any errors
@@ -895,6 +964,7 @@ Controller reconciliation loop:
 Extend Phase 5 plugin loading to run untrusted plugins in a WASM sandbox.
 
 `apps/api/src/gateway/plugins/wasm-loader.service.ts`:
+
 - Plugins compiled to WASM (any language with WASM target: Rust, Go, AssemblyScript, or TypeScript via Javy)
 - Executed in `@wasmer/wasm-transformer` or Wasmtime Node.js bindings
 - Sandbox limits: 50ms execution time, 10MB memory, no filesystem, no network (must use host functions for HTTP)
@@ -909,6 +979,7 @@ Extend Phase 5 plugin loading to run untrusted plugins in a WASM sandbox.
 For teams using Apollo Federation or Rover — the gateway stitches multiple subgraphs into a single endpoint.
 
 `apps/api/src/gateway/plugins/graphql-federation/`:
+
 - Receives GraphQL query at `/graphql`
 - Query plan execution: routes sub-queries to correct subgraph services registered in the gateway
 - Response merging at the gateway level
@@ -931,15 +1002,15 @@ For teams using Apollo Federation or Rover — the gateway stitches multiple sub
 
 ## Summary Timeline
 
-| Phase | Theme | Duration | End State |
-|-------|-------|----------|-----------|
-| **0** | Production Credibility | 4–6 weeks | Load balancing, retries, CORS, IP restriction |
-| **1** | Plugin System | 6–8 weeks | Extensible middleware; first-party plugin suite |
-| **2** | Auth Completeness | 5–7 weeks | OIDC, HMAC, ACL, mTLS — any auth protocol |
-| **3** | Protocol Expansion | 5–6 weeks | WebSocket, gRPC, HTTP/2, GraphQL-aware |
-| **4** | Observability Platform | 4–5 weeks | Tracing, real-time metrics, alerting, log export |
-| **5** | Developer Ecosystem | 6–8 weeks | CLI, Developer Portal, Terraform, third-party plugins |
-| **6** | Beyond Kong | 6–8 weeks | AI anomaly, circuit breaker, multi-region, K8s CRD, WASM, GraphQL federation |
+| Phase | Theme                  | Duration  | End State                                                                    |
+| ----- | ---------------------- | --------- | ---------------------------------------------------------------------------- |
+| **0** | Production Credibility | 4–6 weeks | Load balancing, retries, CORS, IP restriction                                |
+| **1** | Plugin System          | 6–8 weeks | Extensible middleware; first-party plugin suite                              |
+| **2** | Auth Completeness      | 5–7 weeks | OIDC, HMAC, ACL, mTLS — any auth protocol                                    |
+| **3** | Protocol Expansion     | 5–6 weeks | WebSocket, gRPC, HTTP/2, GraphQL-aware                                       |
+| **4** | Observability Platform | 4–5 weeks | Tracing, real-time metrics, alerting, log export                             |
+| **5** | Developer Ecosystem    | 6–8 weeks | CLI, Developer Portal, Terraform, third-party plugins                        |
+| **6** | Beyond Kong            | 6–8 weeks | AI anomaly, circuit breaker, multi-region, K8s CRD, WASM, GraphQL federation |
 
 **Total: ~9–12 months** of focused engineering.
 

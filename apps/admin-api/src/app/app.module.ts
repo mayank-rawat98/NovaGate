@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { TenantAuthGuard } from '../auth/tenant-auth.guard';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import {
@@ -44,6 +46,7 @@ import { MigrationService } from '../database/migration.service';
     AnalyticsController,
   ],
   providers: [
+    { provide: APP_GUARD, useClass: TenantAuthGuard },
     AuthService,
     EmailService,
     TenantsService,
