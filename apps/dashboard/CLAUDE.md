@@ -1,12 +1,12 @@
 # Dashboard — apps/dashboard
 
-Next.js 14 app-router frontend consumed by tenants. All data fetching goes through
+Next.js 16 app-router frontend consumed by tenants. All data fetching goes through
 `src/lib/api-client.ts` which proxies to the admin-api. No direct DB or gateway
 connections.
 
 ## Stack
 
-- Next.js 14 (app router, `'use client'` for all interactive pages)
+- Next.js 16 (app router, `'use client'` for all interactive pages)
 - Tailwind CSS — no component library, all classes inline
 - SWR for data fetching and auto-refresh
 - `lucide-react` icons only — do not add other icon packages
@@ -45,7 +45,7 @@ then the page that uses it.
 
 ## Routes page
 
-The slide-over panel is `w-[600px]` with three tabs:
+The slide-over panel fills narrow viewports and is capped at 600px, with three tabs:
 
 **Basic tab** — method (GET/POST/PUT/PATCH/DELETE/ANY), path pattern, service, auth required,
 enabled toggle, rate limit override.
@@ -73,7 +73,7 @@ enabled toggle, rate limit override.
 
 Only enabled plugins are serialized to `route.plugins[]`. If no plugins are enabled, the field is omitted.
 
-Feature badges in the routes table: Retry badge and a Plugins count badge when `plugins.length > 0`. A dimmed row means `enabled: false`.
+Feature badges in the routes table: Retry badge and a Plugins count badge when `plugins.length > 0`. A muted background means `enabled: false`.
 
 ## Consumers page
 
@@ -107,6 +107,10 @@ Docker Compose template and env var reference are static.
 - Never call `process.env` outside `api-client.ts` (`NEXT_PUBLIC_ADMIN_API_URL`)
 - SWR `refreshInterval` is 30 000ms on all lists; do not go lower
 - All forms use controlled inputs — no uncontrolled refs
-- Slide-over panels are `w-[480px]` for simple forms, `w-[560px]` for forms with advanced sections, `w-[600px]` for forms with multiple tabs (e.g. routes)
+- Use `WorkspaceDialog` for modal forms and one-time keys. Panels fill the viewport width up to 480px (simple forms) or 600px (routes). Preserve native Escape behavior, focus restoration, and explicit Tab wrapping.
+- Associate visible labels with controls. Name icon buttons and make horizontally scrolling tables keyboard accessible.
+- Use `useTenantId()` in React renders so server and initial browser snapshots agree. Use imperative session getters in the API client.
+- Browser API calls default to same-origin; both API-origin settings must remain in the Nx build inputs.
+- Run `dashboard:ui-smoke` after UI changes; it exercises the standalone production build with fixture APIs and axe checks. See the root README for local browser configuration.
 - Never import from `apps/api` or `apps/admin-api` — only `@api-gateway/shared-types`
 - Branding is **NovaGate** — never use "GatewayX" anywhere

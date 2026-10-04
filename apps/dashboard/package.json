@@ -21,7 +21,17 @@
           "production": {
             "outputPath": "dist/apps/dashboard"
           }
-        }
+        },
+        "inputs": [
+          "default",
+          "^default",
+          {
+            "env": "NEXT_PUBLIC_ADMIN_API_URL"
+          },
+          {
+            "env": "ADMIN_API_URL"
+          }
+        ]
       },
       "serve": {
         "executor": "@nx/next:server",
@@ -70,6 +80,26 @@
         "dependsOn": [
           "^typecheck"
         ]
+      },
+      "preview": {
+        "executor": "nx:run-commands",
+        "continuous": true,
+        "dependsOn": [
+          "build"
+        ],
+        "options": {
+          "command": "node tools/dashboard-preview.mjs"
+        }
+      },
+      "ui-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "preview"
+        ],
+        "options": {
+          "command": "node tools/dashboard-smoke.mjs"
+        }
       }
     }
   },

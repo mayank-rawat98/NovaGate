@@ -2,9 +2,10 @@
 
 import { useState } from 'react';
 import useSWR from 'swr';
+import { DataLoadNotice } from '../../../components/data-load-notice';
 import { ChevronDown, ChevronRight, CheckCircle } from 'lucide-react';
 import { getErrors, resolveError } from '../../../lib/api-client';
-import { getTenantId } from '../../../lib/auth';
+import { useTenantId } from '../../../lib/auth';
 import type { ErrorEvent } from '../../../lib/api-client';
 
 type ErrorEventEx = ErrorEvent & { resolved?: boolean };
@@ -31,12 +32,16 @@ function formatTs(ts: string): string {
 }
 
 export default function ErrorsPage() {
-  const tenantId = getTenantId() ?? '';
+  const tenantId = useTenantId() ?? '';
   const [showAll, setShowAll] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [resolving, setResolving] = useState<string | null>(null);
 
-  const { data: result, mutate } = useSWR(
+  const {
+    data: result,
+    error: loadError,
+    mutate,
+  } = useSWR(
     tenantId ? `errors-${tenantId}-${showAll}` : null,
     () => getErrors(tenantId, { resolved: showAll ? undefined : false }),
     { refreshInterval: 30000 },
@@ -66,8 +71,9 @@ export default function ErrorsPage() {
   }
 
   return (
-    <div className="p-8">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="p-4 sm:p-8">
+      {loadError && <DataLoadNotice label="Errors" onRetry={() => mutate()} />}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold text-gray-900">Errors</h1>
         <div className="flex rounded-lg border border-gray-200 bg-white shadow-sm">
           <button
@@ -93,7 +99,12 @@ export default function ErrorsPage() {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label="Errors table"
+        className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm"
+      >
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50">
@@ -126,7 +137,7 @@ export default function ErrorsPage() {
                   colSpan={8}
                   className="px-4 py-8 text-center text-sm text-gray-400"
                 >
-                  Loading…
+                  {loadError ? 'Data unavailable' : 'Loading…'}
                 </td>
               </tr>
             ) : errors.length === 0 ? (

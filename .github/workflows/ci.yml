@@ -67,3 +67,24 @@ jobs:
 
       - name: Build
         run: npm exec nx run-many -- -t build
+
+      - name: Install browser for dashboard checks
+        run: npm exec playwright install -- --with-deps chromium
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.local-work/playwright
+
+      - name: Dashboard browser and accessibility checks
+        run: npm exec nx run dashboard:ui-smoke
+        env:
+          NEXT_PUBLIC_ADMIN_API_URL: '/'
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.local-work/playwright
+
+      - name: Upload dashboard verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-verification
+          path: |
+            .local-work/dashboard-verification/*.png
+            .local-work/dashboard-verification/*.json
+          if-no-files-found: ignore

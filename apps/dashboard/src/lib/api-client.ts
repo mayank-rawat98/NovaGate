@@ -78,7 +78,9 @@ export type CreateConsumerDto = {
 export type UpdateConsumerDto = { groups?: string[] };
 export type CreateConsumerResult = ConsumerEntity & { apiKey: string };
 
-const BASE = 'https://api.novagate.dev';
+// Same-origin requests use the Next.js admin API rewrite in each deployment.
+// An explicit public origin remains available for installations that need it.
+const BASE = (process.env.NEXT_PUBLIC_ADMIN_API_URL ?? '').replace(/\/$/, '');
 function toQuery(
   params: Record<string, string | number | boolean | undefined>,
 ): string {

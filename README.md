@@ -270,3 +270,20 @@ The production workflow calls the same CI checks before building all release ima
 Tenant schema upgrades run in a transaction under a database migration lock. Legacy route CORS, IP restriction and body-limit fields are converted to plugins before their columns are removed; explicitly configured plugins take precedence. A failed migration rolls back and prevents admin API startup. An existing installation whose old migration already removed those fields needs its lost settings restored from a backup or re-entered; this repair cannot recover previously deleted values.
 
 Configuration PUT requests preserve omitted fields. Send `null` to clear optional route retry, GraphQL, plugin or rate-limit override policies; use an empty array to clear consumer groups. Updating a missing configuration record returns 404.
+
+### Dashboard browser verification
+
+The workspace uses a responsive ivory, mint and indigo dashboard with CSS clay illustrations. Navigation and configuration forms support keyboard focus, Escape dismissal and focus restoration. Data outages show retry controls; an unavailable gateway status is distinct from an offline gateway.
+
+Run the production standalone preview and its browser checks through Nx:
+
+```sh
+mkdir -p .local-work/t .local-work/s
+NEXT_PUBLIC_ADMIN_API_URL=/ NX_DAEMON=false NX_NO_CLOUD=true \
+TMPDIR="$PWD/.local-work/t" NX_SOCKET_DIR="$PWD/.local-work/s" \
+npm exec nx run dashboard:ui-smoke
+```
+
+The verifier uses fixture credentials and intercepts tenant API requests. It checks desktop and mobile layouts, saved-session hydration, retry recovery, navigation and form keyboard behavior, every expanded plugin form, the one-time consumer key dialog, reduced motion and axe WCAG A/AA rules. Screenshots and accessibility findings are written under `.local-work/dashboard-verification/`. It uses local Google Chrome when available; otherwise install Playwright Chromium with `PLAYWRIGHT_BROWSERS_PATH="$PWD/.local-work/playwright" npm exec playwright install -- chromium`, and use the same environment variable when running checks. `DASHBOARD_BROWSER_EXECUTABLE` can select another Chromium executable. CI runs these checks and uploads the screenshots and findings.
+
+Browser API calls default to the dashboard's same-origin `/api` rewrite. `NEXT_PUBLIC_ADMIN_API_URL` optionally selects another browser API origin at build time. Set it to `/` for a same-origin verification build when a local production env file already defines an override. `ADMIN_API_URL` selects the server-side rewrite destination. Both settings participate in the Nx build cache key. These fixture checks complement integration tests; they do not establish production or final phase acceptance.
