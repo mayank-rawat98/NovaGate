@@ -15,9 +15,17 @@ for (const file of files) {
     ignorePath: '.prettierignore',
   });
   if (info.ignored || !info.inferredParser) continue;
-  const content = execFileSync('git', ['show', `:${file}`], {
-    encoding: 'utf8',
-  });
+  let content;
+  try {
+    content = execFileSync('git', ['show', `:${file}`], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch {
+    console.error(`Could not read staged content in ${file}.`);
+    failed = true;
+    continue;
+  }
   const options = await prettier.resolveConfig(file, { editorconfig: true });
   try {
     if (await prettier.check(content, { ...options, filepath: file })) continue;

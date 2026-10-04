@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import useSWR from 'swr';
+import { DataLoadNotice } from '../../../components/data-load-notice';
 import { toast } from 'sonner';
 import { Copy, Check, Eye, EyeOff, RefreshCw, Shield, X } from 'lucide-react';
 import {
@@ -9,7 +10,7 @@ import {
   rotateGatewayKey,
   setCaCert,
 } from '../../../lib/api-client';
-import { getTenantId } from '../../../lib/auth';
+import { useTenantId } from '../../../lib/auth';
 
 const CONTROL_PLANE_WS_URL = 'wss://ws.novagate.dev/gateway-ws';
 const GATEWAY_IMAGE = 'ghcr.io/mayank-rawat98/novagate/api:latest';
@@ -63,7 +64,7 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
 }
 
 export default function SettingsPage() {
-  const tenantId = getTenantId() ?? '';
+  const tenantId = useTenantId() ?? '';
   const [apiKey, setApiKey] = useState<string>('');
   const [showKey, setShowKey] = useState(false);
   const [rotating, setRotating] = useState(false);
@@ -71,10 +72,11 @@ export default function SettingsPage() {
   const [caCertInput, setCaCertInput] = useState('');
   const [savingCert, setSavingCert] = useState(false);
 
-  const { data: tenant, mutate: mutateTenant } = useSWR(
-    tenantId ? `tenant-${tenantId}` : null,
-    () => getTenant(tenantId),
-  );
+  const {
+    data: tenant,
+    error: loadError,
+    mutate: mutateTenant,
+  } = useSWR(tenantId ? `tenant-${tenantId}` : null, () => getTenant(tenantId));
 
   useEffect(() => {
     const stored = localStorage.getItem('gw_setup_api_key');
@@ -140,11 +142,14 @@ export default function SettingsPage() {
   const dockerCompose = buildDockerCompose(apiKey || 'YOUR_GATEWAY_API_KEY');
 
   return (
-    <div className="max-w-3xl p-8">
+    <div className="max-w-4xl p-4 sm:p-8">
+      {loadError && (
+        <DataLoadNotice label="Settings" onRetry={() => mutateTenant()} />
+      )}
       <h1 className="mb-6 text-2xl font-semibold text-gray-900">Settings</h1>
 
       {/* Tenant info */}
-      <div className="mb-6 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div className="mb-6 overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="border-b border-gray-100 px-6 py-4">
           <h2 className="text-sm font-semibold text-gray-900">Tenant</h2>
         </div>
@@ -173,7 +178,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Gateway API Key */}
-      <div className="mb-6 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div className="mb-6 overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="border-b border-gray-100 px-6 py-4">
           <h2 className="text-sm font-semibold text-gray-900">
             Gateway API Key
@@ -224,7 +229,7 @@ export default function SettingsPage() {
       </div>
 
       {/* mTLS — CA Certificate */}
-      <div className="mb-6 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div className="mb-6 overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="border-b border-gray-100 px-6 py-4">
           <div className="flex items-center gap-2">
             <Shield className="h-4 w-4 text-indigo-600" />
@@ -260,6 +265,7 @@ export default function SettingsPage() {
           )}
           <form onSubmit={handleSaveCaCert} className="flex flex-col gap-3">
             <textarea
+              aria-label="CA certificate PEM"
               rows={6}
               value={caCertInput}
               onChange={(e) => setCaCertInput(e.target.value)}
@@ -282,7 +288,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Docker Compose */}
-      <div className="mb-6 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div className="mb-6 overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
           <div>
             <h2 className="text-sm font-semibold text-gray-900">
@@ -301,13 +307,22 @@ export default function SettingsPage() {
           </div>
           <CopyButton text={dockerCompose} label="Copy YAML" />
         </div>
-        <pre className="overflow-x-auto bg-gray-900 px-6 py-4 font-mono text-xs leading-relaxed text-gray-100">
+        <pre
+          tabIndex={0}
+          aria-label="Gateway connection example"
+          className="overflow-x-auto bg-gray-900 px-6 py-4 font-mono text-xs leading-relaxed text-gray-100"
+        >
           {dockerCompose}
         </pre>
       </div>
 
       {/* Environment variables */}
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label="Settings table"
+        className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm"
+      >
         <div className="border-b border-gray-100 px-6 py-4">
           <h2 className="text-sm font-semibold text-gray-900">
             Environment Variables

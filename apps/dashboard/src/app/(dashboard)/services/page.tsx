@@ -2,6 +2,9 @@
 
 import { useState } from 'react';
 import useSWR from 'swr';
+import { toast } from 'sonner';
+import { WorkspaceDialog } from '../../../components/workspace-dialog';
+import { DataLoadNotice } from '../../../components/data-load-notice';
 import { Trash2, Plus, X, Pencil, GripVertical } from 'lucide-react';
 import {
   getServices,
@@ -10,7 +13,7 @@ import {
   updateService,
   deleteService,
 } from '../../../lib/api-client';
-import { getTenantId } from '../../../lib/auth';
+import { useTenantId } from '../../../lib/auth';
 import type {
   Service,
   CreateServiceDto,
@@ -62,9 +65,13 @@ function formToDto(form: FormState): CreateServiceDto {
 }
 
 export default function ServicesPage() {
-  const tenantId = getTenantId() ?? '';
+  const tenantId = useTenantId() ?? '';
 
-  const { data: services, mutate } = useSWR(
+  const {
+    data: services,
+    error: loadError,
+    mutate,
+  } = useSWR(
     tenantId ? `services-${tenantId}` : null,
     () => getServices(tenantId),
     { refreshInterval: 30000 },
@@ -145,6 +152,8 @@ export default function ServicesPage() {
       }
       setPanelOpen(false);
       await mutate();
+    } catch {
+      setFormError('Service could not be saved. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -157,6 +166,8 @@ export default function ServicesPage() {
       await deleteService(tenantId, deleteTarget);
       setDeleteTarget(null);
       await mutate();
+    } catch {
+      toast.error('Service could not be deleted. Please try again.');
     } finally {
       setDeleting(false);
     }
@@ -175,8 +186,11 @@ export default function ServicesPage() {
   }
 
   return (
-    <div className="p-8">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="p-4 sm:p-8">
+      {loadError && (
+        <DataLoadNotice label="Services" onRetry={() => mutate()} />
+      )}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold text-gray-900">Services</h1>
         <button
           onClick={openCreate}
@@ -187,7 +201,12 @@ export default function ServicesPage() {
         </button>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label="Services table"
+        className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm"
+      >
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50">
@@ -219,7 +238,7 @@ export default function ServicesPage() {
                   colSpan={7}
                   className="px-4 py-8 text-center text-sm text-gray-400"
                 >
-                  Loading…
+                  {loadError ? 'Data unavailable' : 'Loading…'}
                 </td>
               </tr>
             ) : services.length === 0 ? (
@@ -350,17 +369,17 @@ export default function ServicesPage() {
 
       {/* Slide-over panel */}
       {panelOpen && (
-        <div className="fixed inset-0 z-40 flex justify-end">
-          <div
-            className="fixed inset-0 bg-black/20"
-            onClick={() => setPanelOpen(false)}
-          />
-          <div className="relative z-50 flex h-full w-[480px] flex-col bg-white shadow-xl">
+        <WorkspaceDialog
+          label="Services form"
+          onClose={() => setPanelOpen(false)}
+        >
+          <div className="relative z-50 flex h-full w-full max-w-[480px] flex-col bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
               <h2 className="text-base font-semibold text-gray-900">
                 {editId ? 'Edit Service' : 'Add Service'}
               </h2>
               <button
+                aria-label="Close form"
                 onClick={() => setPanelOpen(false)}
                 className="rounded p-1 text-gray-400 hover:bg-gray-100"
               >
@@ -374,10 +393,14 @@ export default function ServicesPage() {
             >
               {/* Name */}
               <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700">
+                <label
+                  htmlFor="services-field-1"
+                  className="text-sm font-medium text-gray-700"
+                >
                   Name
                 </label>
                 <input
+                  id="services-field-1"
                   type="text"
                   required
                   placeholder="user-service"
@@ -392,7 +415,10 @@ export default function ServicesPage() {
               {/* Targets */}
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
-                  <label className="text-sm font-medium text-gray-700">
+                  <label
+                    htmlFor="services-field-2"
+                    className="text-sm font-medium text-gray-700"
+                  >
                     Targets
                     <span className="ml-1 font-normal text-gray-400 text-xs">
                       (URL + weight for load balancing)
@@ -405,7 +431,9 @@ export default function ServicesPage() {
                     <div key={i} className="flex items-center gap-2">
                       <GripVertical className="h-4 w-4 flex-shrink-0 text-gray-300" />
                       <input
+                        id="services-field-2"
                         type="url"
+                        aria-label={`Target ${i + 1} URL`}
                         required
                         placeholder="http://service:4000"
                         value={target.url}
@@ -423,12 +451,14 @@ export default function ServicesPage() {
                             updateTarget(i, 'weight', e.target.value)
                           }
                           className="w-14 rounded-md border border-gray-300 px-2 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                          aria-label={`Target ${i + 1} weight`}
                           title="Weight (1–100)"
                         />
                       </div>
                       {form.targets.length > 1 && (
                         <button
                           type="button"
+                          aria-label={`Remove target ${i + 1}`}
                           onClick={() => removeTarget(i)}
                           className="flex-shrink-0 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-red-500"
                         >
@@ -449,7 +479,9 @@ export default function ServicesPage() {
                 </button>
 
                 {formError && (
-                  <p className="text-xs text-red-500">{formError}</p>
+                  <p role="alert" className="text-xs text-red-700">
+                    {formError}
+                  </p>
                 )}
 
                 {form.targets.length > 1 && (
@@ -482,11 +514,15 @@ export default function ServicesPage() {
 
               {/* Timeout */}
               <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700">
+                <label
+                  htmlFor="services-field-3"
+                  className="text-sm font-medium text-gray-700"
+                >
                   Timeout{' '}
                   <span className="font-normal text-gray-400">(ms)</span>
                 </label>
                 <input
+                  id="services-field-3"
                   type="number"
                   min={100}
                   placeholder="10000"
@@ -501,6 +537,7 @@ export default function ServicesPage() {
               <div className="mt-auto flex justify-end gap-2 pt-4">
                 <button
                   type="button"
+                  aria-label="Close form"
                   onClick={() => setPanelOpen(false)}
                   className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                 >
@@ -516,7 +553,7 @@ export default function ServicesPage() {
               </div>
             </form>
           </div>
-        </div>
+        </WorkspaceDialog>
       )}
     </div>
   );

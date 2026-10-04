@@ -1,7 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useId } from 'react';
 import useSWR from 'swr';
+import { WorkspaceDialog } from '../../../components/workspace-dialog';
+import { DataLoadNotice } from '../../../components/data-load-notice';
 import { toast } from 'sonner';
 import { Pencil, Trash2, Plus, X, Puzzle } from 'lucide-react';
 import {
@@ -11,7 +13,7 @@ import {
   updateRoute,
   deleteRoute,
 } from '../../../lib/api-client';
-import { getTenantId } from '../../../lib/auth';
+import { useTenantId } from '../../../lib/auth';
 import type { Route, Service, CreateRouteDto } from '../../../lib/api-client';
 
 const METHOD_COLORS: Record<string, string> = {
@@ -534,15 +536,20 @@ function formToDto(
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function Toggle({
+  label,
   value,
   onChange,
 }: {
+  label: string;
   value: boolean;
   onChange: (v: boolean) => void;
 }) {
   return (
     <button
       type="button"
+      aria-label={label}
+      role="switch"
+      aria-checked={value}
       onClick={() => onChange(!value)}
       className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${value ? 'bg-blue-600' : 'bg-gray-200'}`}
     >
@@ -582,7 +589,7 @@ function PluginSection({
           </div>
           <p className="text-xs text-gray-400">{description}</p>
         </div>
-        <Toggle value={enabled} onChange={onToggle} />
+        <Toggle label={`${title} plugin`} value={enabled} onChange={onToggle} />
       </div>
       {enabled && children && (
         <div className="flex flex-col gap-3 pl-1">{children}</div>
@@ -606,11 +613,15 @@ function Textarea({
   rows?: number;
   hint?: string;
 }) {
+  const id = useId();
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-xs font-medium text-gray-600">{label}</label>
+      <label htmlFor={id} className="text-xs font-medium text-gray-600">
+        {label}
+      </label>
       {hint && <p className="text-xs text-gray-400">{hint}</p>}
       <textarea
+        id={id}
         rows={rows}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -634,10 +645,14 @@ function TextInput({
   placeholder?: string;
   type?: string;
 }) {
+  const id = useId();
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-xs font-medium text-gray-600">{label}</label>
+      <label htmlFor={id} className="text-xs font-medium text-gray-600">
+        {label}
+      </label>
       <input
+        id={id}
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -717,6 +732,7 @@ function PluginsTab({
               Allow Credentials
             </span>
             <Toggle
+              label="Allow credentials"
               value={pf.corsConfig.credentials}
               onChange={(v) =>
                 setPf({ corsConfig: { ...pf.corsConfig, credentials: v } })
@@ -970,7 +986,6 @@ function PluginsTab({
         description="Validate inbound Bearer tokens using JWKS (Auth0, Cognito, Keycloak)"
         enabled={pf.oidc}
         onToggle={(v) => setPf({ oidc: v })}
-        badge="Phase 2"
       >
         <TextInput
           label="JWKS URI"
@@ -1015,7 +1030,6 @@ function PluginsTab({
         description="Validate HMAC request signatures (Stripe, GitHub webhooks)"
         enabled={pf.hmacAuth}
         onToggle={(v) => setPf({ hmacAuth: v })}
-        badge="Phase 2"
       >
         <div className="grid grid-cols-2 gap-3">
           <TextInput
@@ -1027,10 +1041,14 @@ function PluginsTab({
             placeholder="x-hub-signature-256"
           />
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-gray-600">
+            <label
+              htmlFor="routes-field-1"
+              className="text-xs font-medium text-gray-600"
+            >
               Algorithm
             </label>
             <select
+              id="routes-field-1"
               value={pf.hmacAuthConfig.algorithm}
               onChange={(e) =>
                 setPf({
@@ -1091,7 +1109,6 @@ function PluginsTab({
         description="Allow or deny access based on consumer groups"
         enabled={pf.acl}
         onToggle={(v) => setPf({ acl: v })}
-        badge="Phase 2"
       >
         <div className="grid grid-cols-2 gap-3">
           <TextInput
@@ -1122,13 +1139,13 @@ function PluginsTab({
         description="Require a client certificate signed by the tenant CA"
         enabled={pf.mtls}
         onToggle={(v) => setPf({ mtls: v })}
-        badge="Phase 2"
       >
         <div className="flex items-center justify-between rounded-md border border-gray-200 px-3 py-2">
           <span className="text-xs font-medium text-gray-600">
             Enforce (reject if no cert)
           </span>
           <Toggle
+            label="Require client certificate"
             value={pf.mtlsConfig.required}
             onChange={(v) => setPf({ mtlsConfig: { required: v } })}
           />
@@ -1145,9 +1162,13 @@ function PluginsTab({
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function RoutesPage() {
-  const tenantId = getTenantId() ?? '';
+  const tenantId = useTenantId() ?? '';
 
-  const { data: routes, mutate } = useSWR(
+  const {
+    data: routes,
+    error: loadError,
+    mutate,
+  } = useSWR(
     tenantId ? `routes-${tenantId}` : null,
     () => getRoutes(tenantId),
     { refreshInterval: 30000 },
@@ -1257,8 +1278,9 @@ export default function RoutesPage() {
   ].filter(Boolean).length;
 
   return (
-    <div className="p-8">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="p-4 sm:p-8">
+      {loadError && <DataLoadNotice label="Routes" onRetry={() => mutate()} />}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold text-gray-900">Routes</h1>
         <button
           onClick={openCreate}
@@ -1269,7 +1291,12 @@ export default function RoutesPage() {
         </button>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label="Routes table"
+        className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm"
+      >
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50">
@@ -1301,7 +1328,7 @@ export default function RoutesPage() {
                   colSpan={7}
                   className="px-4 py-8 text-center text-sm text-gray-400"
                 >
-                  Loading…
+                  {loadError ? 'Data unavailable' : 'Loading…'}
                 </td>
               </tr>
             ) : routes.length === 0 ? (
@@ -1317,7 +1344,7 @@ export default function RoutesPage() {
               routes.map((route) => (
                 <tr
                   key={route.id}
-                  className={`border-b border-gray-100 last:border-0 ${!route.enabled ? 'opacity-50' : ''}`}
+                  className={`border-b border-gray-100 last:border-0 ${!route.enabled ? 'bg-slate-50' : ''}`}
                 >
                   <td className="px-4 py-3">
                     <span
@@ -1394,12 +1421,14 @@ export default function RoutesPage() {
                       ) : (
                         <>
                           <button
+                            aria-label={`Edit ${route.method} ${route.pathPattern}`}
                             onClick={() => openEdit(route)}
                             className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
                           >
                             <Pencil className="h-4 w-4" />
                           </button>
                           <button
+                            aria-label={`Delete ${route.method} ${route.pathPattern}`}
                             onClick={() => setDeleteTarget(route.id)}
                             className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-red-600"
                           >
@@ -1418,17 +1447,17 @@ export default function RoutesPage() {
 
       {/* Slide-over panel */}
       {panelOpen && (
-        <div className="fixed inset-0 z-40 flex justify-end">
-          <div
-            className="fixed inset-0 bg-black/20"
-            onClick={() => setPanelOpen(false)}
-          />
-          <div className="relative z-50 flex h-full w-[600px] flex-col bg-white shadow-xl">
+        <WorkspaceDialog
+          label="Routes form"
+          onClose={() => setPanelOpen(false)}
+        >
+          <div className="relative z-50 flex h-full w-full max-w-[600px] flex-col bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
               <h2 className="text-base font-semibold text-gray-900">
                 {editId ? 'Edit Route' : 'Add Route'}
               </h2>
               <button
+                aria-label="Close form"
                 onClick={() => setPanelOpen(false)}
                 className="rounded p-1 text-gray-400 hover:bg-gray-100"
               >
@@ -1468,10 +1497,15 @@ export default function RoutesPage() {
                   <div className="flex flex-col gap-5">
                     {/* Method */}
                     <div className="flex flex-col gap-1">
-                      <label className="text-sm font-medium text-gray-700">
+                      <label
+                        htmlFor="routes-field-2"
+                        className="text-sm font-medium text-gray-700"
+                      >
                         Method
                       </label>
                       <select
+                        id="routes-field-2"
+                        aria-label="HTTP method"
                         value={form.method}
                         onChange={(e) => setF({ method: e.target.value })}
                         className="rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
@@ -1486,13 +1520,18 @@ export default function RoutesPage() {
 
                     {/* Path Pattern */}
                     <div className="flex flex-col gap-1">
-                      <label className="text-sm font-medium text-gray-700">
+                      <label
+                        htmlFor="routes-field-3"
+                        className="text-sm font-medium text-gray-700"
+                      >
                         Path Pattern
                       </label>
                       <input
+                        id="routes-field-3"
                         type="text"
                         required
                         placeholder="/api/users"
+                        aria-label="Path pattern"
                         value={form.pathPattern}
                         onChange={(e) => setF({ pathPattern: e.target.value })}
                         className="rounded-md border border-gray-300 px-3 py-2 font-mono text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
@@ -1504,11 +1543,16 @@ export default function RoutesPage() {
 
                     {/* Service */}
                     <div className="flex flex-col gap-1">
-                      <label className="text-sm font-medium text-gray-700">
+                      <label
+                        htmlFor="routes-field-4"
+                        className="text-sm font-medium text-gray-700"
+                      >
                         Service
                       </label>
                       <select
+                        id="routes-field-4"
                         required
+                        aria-label="Service"
                         value={form.serviceId}
                         onChange={(e) => setF({ serviceId: e.target.value })}
                         className="rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
@@ -1529,6 +1573,7 @@ export default function RoutesPage() {
                           Auth Required
                         </span>
                         <Toggle
+                          label="Authentication required"
                           value={form.authRequired}
                           onChange={(v) => setF({ authRequired: v })}
                         />
@@ -1538,6 +1583,7 @@ export default function RoutesPage() {
                           Enabled
                         </span>
                         <Toggle
+                          label="Route enabled"
                           value={form.enabled}
                           onChange={(v) => setF({ enabled: v })}
                         />
@@ -1546,16 +1592,21 @@ export default function RoutesPage() {
 
                     {/* Rate Limit Override */}
                     <div className="flex flex-col gap-1">
-                      <label className="text-sm font-medium text-gray-700">
+                      <label
+                        htmlFor="routes-field-5"
+                        className="text-sm font-medium text-gray-700"
+                      >
                         Rate Limit Override{' '}
                         <span className="font-normal text-gray-400">
                           (req/min, optional)
                         </span>
                       </label>
                       <input
+                        id="routes-field-5"
                         type="number"
                         min={1}
                         placeholder="Leave blank to use global limit"
+                        aria-label="Rate limit override"
                         value={form.rateLimitOverride}
                         onChange={(e) =>
                           setF({ rateLimitOverride: e.target.value })
@@ -1580,6 +1631,7 @@ export default function RoutesPage() {
                           </p>
                         </div>
                         <Toggle
+                          label="Retry policy"
                           value={form.retryEnabled}
                           onChange={(v) => setF({ retryEnabled: v })}
                         />
@@ -1588,13 +1640,18 @@ export default function RoutesPage() {
                         <div className="flex flex-col gap-3 pl-1">
                           <div className="grid grid-cols-2 gap-3">
                             <div className="flex flex-col gap-1">
-                              <label className="text-xs font-medium text-gray-600">
+                              <label
+                                htmlFor="routes-field-6"
+                                className="text-xs font-medium text-gray-600"
+                              >
                                 Max Attempts
                               </label>
                               <input
+                                id="routes-field-6"
                                 type="number"
                                 min={1}
                                 max={10}
+                                aria-label="Retry attempts"
                                 value={form.retryAttempts}
                                 onChange={(e) =>
                                   setF({ retryAttempts: e.target.value })
@@ -1603,12 +1660,17 @@ export default function RoutesPage() {
                               />
                             </div>
                             <div className="flex flex-col gap-1">
-                              <label className="text-xs font-medium text-gray-600">
+                              <label
+                                htmlFor="routes-field-7"
+                                className="text-xs font-medium text-gray-600"
+                              >
                                 Retry on Status Codes
                               </label>
                               <input
+                                id="routes-field-7"
                                 type="text"
                                 placeholder="502,503,504"
+                                aria-label="Retry status codes"
                                 value={form.retryOn}
                                 onChange={(e) =>
                                   setF({ retryOn: e.target.value })
@@ -1657,6 +1719,7 @@ export default function RoutesPage() {
               <div className="flex justify-end gap-2 border-t border-gray-200 p-6">
                 <button
                   type="button"
+                  aria-label="Close form"
                   onClick={() => setPanelOpen(false)}
                   className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                 >
@@ -1672,7 +1735,7 @@ export default function RoutesPage() {
               </div>
             </form>
           </div>
-        </div>
+        </WorkspaceDialog>
       )}
     </div>
   );

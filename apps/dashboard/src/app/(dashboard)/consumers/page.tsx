@@ -2,6 +2,9 @@
 
 import { useState } from 'react';
 import useSWR from 'swr';
+import { toast } from 'sonner';
+import { WorkspaceDialog } from '../../../components/workspace-dialog';
+import { DataLoadNotice } from '../../../components/data-load-notice';
 import { Plus, X, Copy, Check, Pencil } from 'lucide-react';
 import {
   getConsumers,
@@ -9,7 +12,7 @@ import {
   updateConsumer,
   deleteConsumer,
 } from '../../../lib/api-client';
-import { getTenantId } from '../../../lib/auth';
+import { useTenantId } from '../../../lib/auth';
 import type { Consumer } from '../../../lib/api-client';
 
 function formatDate(ts: string): string {
@@ -37,9 +40,13 @@ function GroupBadges({ groups }: { groups?: string[] }) {
 }
 
 export default function ConsumersPage() {
-  const tenantId = getTenantId() ?? '';
+  const tenantId = useTenantId() ?? '';
 
-  const { data: consumers, mutate } = useSWR(
+  const {
+    data: consumers,
+    error: loadError,
+    mutate,
+  } = useSWR(
     tenantId ? `consumers-${tenantId}` : null,
     () => getConsumers(tenantId),
     { refreshInterval: 30000 },
@@ -95,6 +102,8 @@ export default function ConsumersPage() {
       setName('');
       setGroupsInput('');
       await mutate();
+    } catch {
+      toast.error('Consumer could not be saved. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -110,6 +119,8 @@ export default function ConsumersPage() {
       });
       setPanelOpen(false);
       await mutate();
+    } catch {
+      toast.error('Consumer could not be saved. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -117,10 +128,15 @@ export default function ConsumersPage() {
 
   function copyKey() {
     if (!newKey) return;
-    navigator.clipboard.writeText(newKey).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    navigator.clipboard
+      .writeText(newKey)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() =>
+        toast.error('Copy failed. Select and copy the key manually.'),
+      );
   }
 
   async function handleRevoke() {
@@ -130,14 +146,19 @@ export default function ConsumersPage() {
       await deleteConsumer(tenantId, revokeTarget);
       setRevokeTarget(null);
       await mutate();
+    } catch {
+      toast.error('Consumer key could not be revoked. Please try again.');
     } finally {
       setRevoking(false);
     }
   }
 
   return (
-    <div className="p-8">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="p-4 sm:p-8">
+      {loadError && (
+        <DataLoadNotice label="Consumers" onRetry={() => mutate()} />
+      )}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold text-gray-900">Consumers</h1>
         <button
           onClick={openCreate}
@@ -148,7 +169,12 @@ export default function ConsumersPage() {
         </button>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label="Consumers table"
+        className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm"
+      >
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50">
@@ -174,7 +200,7 @@ export default function ConsumersPage() {
                   colSpan={5}
                   className="px-4 py-8 text-center text-sm text-gray-400"
                 >
-                  Loading…
+                  {loadError ? 'Data unavailable' : 'Loading…'}
                 </td>
               </tr>
             ) : consumers.length === 0 ? (
@@ -264,17 +290,17 @@ export default function ConsumersPage() {
 
       {/* Add / Edit Consumer slide-over */}
       {panelOpen && (
-        <div className="fixed inset-0 z-40 flex justify-end">
-          <div
-            className="fixed inset-0 bg-black/20"
-            onClick={() => setPanelOpen(false)}
-          />
-          <div className="relative z-50 flex h-full w-80 flex-col bg-white shadow-xl">
+        <WorkspaceDialog
+          label="Consumer form"
+          onClose={() => setPanelOpen(false)}
+        >
+          <div className="relative z-50 flex h-full w-full max-w-[480px] flex-col bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
               <h2 className="text-base font-semibold text-gray-900">
                 {panelMode === 'create' ? 'Add Consumer' : 'Edit Consumer'}
               </h2>
               <button
+                aria-label="Close form"
                 onClick={() => setPanelOpen(false)}
                 className="rounded p-1 text-gray-400 hover:bg-gray-100"
               >
@@ -287,10 +313,14 @@ export default function ConsumersPage() {
             >
               {panelMode === 'create' && (
                 <div className="flex flex-col gap-1">
-                  <label className="text-sm font-medium text-gray-700">
+                  <label
+                    htmlFor="consumers-field-1"
+                    className="text-sm font-medium text-gray-700"
+                  >
                     Name
                   </label>
                   <input
+                    id="consumers-field-1"
                     type="text"
                     required
                     autoFocus
@@ -302,11 +332,15 @@ export default function ConsumersPage() {
                 </div>
               )}
               <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700">
+                <label
+                  htmlFor="consumers-field-2"
+                  className="text-sm font-medium text-gray-700"
+                >
                   Groups{' '}
                   <span className="font-normal text-gray-400">(optional)</span>
                 </label>
                 <input
+                  id="consumers-field-2"
                   type="text"
                   placeholder="admin, read-only"
                   value={groupsInput}
@@ -320,6 +354,7 @@ export default function ConsumersPage() {
               <div className="mt-auto flex justify-end gap-2 pt-4">
                 <button
                   type="button"
+                  aria-label="Close form"
                   onClick={() => setPanelOpen(false)}
                   className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                 >
@@ -341,19 +376,23 @@ export default function ConsumersPage() {
               </div>
             </form>
           </div>
-        </div>
+        </WorkspaceDialog>
       )}
 
       {/* One-time API key modal */}
       {newKey && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/30" />
+        <WorkspaceDialog
+          label="Consumer API key"
+          centered
+          onClose={() => setNewKey(null)}
+        >
           <div className="relative z-50 w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-base font-semibold text-gray-900">
                 Consumer API Key
               </h2>
               <button
+                aria-label="Close API key"
                 onClick={() => setNewKey(null)}
                 className="rounded p-1 text-gray-400 hover:bg-gray-100"
               >
@@ -393,7 +432,7 @@ export default function ConsumersPage() {
               </button>
             </div>
           </div>
-        </div>
+        </WorkspaceDialog>
       )}
     </div>
   );

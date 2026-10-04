@@ -2,6 +2,10 @@
 
 Each phase builds on the previous. Track implementation, regression verification, and production acceptance separately. A phase is complete only after its acceptance criteria have evidence. Run feature and regression checks after each issue; perform the formal end-to-end acceptance campaign after all phases are implemented. Production deployment is a separate release gate.
 
+## Dashboard usability implementation — issue #35
+
+The workspace now has responsive grouped navigation, an ivory/mint/indigo palette, CSS clay illustrations, clear gateway loading/unavailable states, actual enabled-route counts, fetch retry controls and accessible native configuration dialogs. The browser verifier covers mobile/desktop layouts, saved-session hydration, keyboard containment/Escape/focus restoration, expanded route plugin controls, one-time consumer keys and axe WCAG A/AA rules. CI runs the verifier against a standalone production build and retains screenshots/findings. This is incremental implementation evidence; visual checks with real users, full live API acceptance and the final all-phase campaign remain required.
+
 ## Code audit — 4 October 2026
 
 The code contains substantial work for phases 0–3, but file presence does not prove production acceptance. No phase is marked complete by this audit.

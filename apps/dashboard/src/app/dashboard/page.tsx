@@ -1,6 +1,16 @@
 'use client';
 
 import useSWR from 'swr';
+import Link from 'next/link';
+import {
+  Activity,
+  Layers3,
+  Route,
+  ShieldCheck,
+  ArrowUpRight,
+  RefreshCw,
+  type LucideIcon,
+} from 'lucide-react';
 import {
   AreaChart,
   Area,
@@ -16,7 +26,7 @@ import {
   getRoutes,
   getLogs,
 } from '../../lib/api-client';
-import { getTenantId } from '../../lib/auth';
+import { useTenantId } from '../../lib/auth';
 import type {
   MetricsSnapshot,
   Route as RouteEntity,
@@ -27,13 +37,18 @@ const SWR_OPTS = { refreshInterval: 30000 };
 
 function StatCard({
   label,
+  icon: Icon,
   children,
 }: {
   label: string;
+  icon: LucideIcon;
   children: React.ReactNode;
 }) {
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div className="nova-stat-icon">
+        <Icon size={18} aria-hidden="true" />
+      </div>
       <p className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
         {label}
       </p>
@@ -47,27 +62,44 @@ function Skeleton({ className = '' }: { className?: string }) {
 }
 
 export default function DashboardPage() {
-  const tenantId = getTenantId() ?? '';
+  const tenantId = useTenantId() ?? '';
 
-  const { data: status } = useSWR(
+  const {
+    data: status,
+    error: statusError,
+    mutate: retryStatus,
+  } = useSWR(
     tenantId ? `gateway-status-${tenantId}` : null,
     () => getGatewayStatus(tenantId),
     SWR_OPTS,
   );
 
-  const { data: metrics1h, isLoading: metricsLoading } = useSWR(
+  const {
+    data: metrics1h,
+    isLoading: metricsLoading,
+    error: metricsError,
+    mutate: retryMetrics,
+  } = useSWR(
     tenantId ? `metrics-1h-${tenantId}` : null,
     () => getMetrics(tenantId, '1h'),
     SWR_OPTS,
   );
 
-  const { data: routes } = useSWR(
+  const {
+    data: routes,
+    error: routesError,
+    mutate: retryRoutes,
+  } = useSWR(
     tenantId ? `routes-${tenantId}` : null,
     () => getRoutes(tenantId),
     SWR_OPTS,
   );
 
-  const { data: logsResult } = useSWR(
+  const {
+    data: logsResult,
+    error: logsError,
+    mutate: retryLogs,
+  } = useSWR(
     tenantId ? `logs-${tenantId}` : null,
     () => getLogs(tenantId, { page: 1 }),
     SWR_OPTS,
@@ -78,7 +110,9 @@ export default function DashboardPage() {
     : [];
   const latestMetric: MetricsSnapshot | undefined =
     snapshots[snapshots.length - 1];
-  const activeRoutes: RouteEntity[] = routes ?? [];
+  const activeRoutes: RouteEntity[] = (routes ?? []).filter(
+    (route) => route.enabled,
+  );
   const recentLogs: RequestLog[] = logsResult?.items ?? [];
 
   // Aggregate top 5 routes from recent logs
@@ -116,24 +150,94 @@ export default function DashboardPage() {
     status?.online === true && (latestMetric?.errorRate ?? 0) > 0.05;
 
   return (
-    <div className="p-8">
-      <h1 className="mb-6 text-2xl font-semibold text-gray-900">Dashboard</h1>
-
-      <div className="grid grid-cols-2 gap-4">
+    <div className="p-4 sm:p-8">
+      <section
+        className="nova-overview-hero"
+        aria-labelledby="overview-heading"
+      >
+        <div className="relative z-10">
+          <p className="nova-eyebrow mb-3">Workspace overview</p>
+          <h1
+            id="overview-heading"
+            className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl"
+          >
+            Your traffic, at a glance.
+          </h1>
+          <p className="mt-3 max-w-lg text-sm leading-relaxed text-slate-600">
+            Manage your API routes and see how your gateway is doing. Everything
+            you need, in one place.
+          </p>
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <Link
+              href="/routes"
+              className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white"
+            >
+              Manage routes
+              <ArrowUpRight size={16} aria-hidden="true" />
+            </Link>
+            <Link
+              href="/logs"
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white/70 px-4 py-2.5 text-sm font-medium text-slate-700"
+            >
+              View request logs
+            </Link>
+          </div>
+        </div>
+        <div className="nova-hero-art" aria-hidden="true">
+          <span className="nova-clay-orb">
+            <Layers3 size={32} />
+          </span>
+          <span className="nova-clay-orb">
+            <ShieldCheck size={24} />
+          </span>
+          <span className="nova-clay-orb" />
+        </div>
+      </section>
+      {(statusError || metricsError || routesError || logsError) && (
+        <div
+          role="alert"
+          className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900"
+        >
+          <p>
+            Some workspace data could not be loaded. Showing the latest
+            available information.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              void retryStatus();
+              void retryMetrics();
+              void retryRoutes();
+              void retryLogs();
+            }}
+            className="inline-flex items-center gap-2 rounded-lg border border-amber-400 px-3 py-2 font-medium"
+          >
+            <RefreshCw size={15} aria-hidden="true" />
+            Try again
+          </button>
+        </div>
+      )}
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold text-slate-800">
+          Gateway activity
+        </h2>
+        <span className="text-xs text-slate-600">
+          Latest snapshots · last hour
+        </span>
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {/* Gateway Status */}
-        <StatCard label="Gateway Status">
-          {status === undefined ? (
+        <StatCard label="Gateway status" icon={ShieldCheck}>
+          {status === undefined && !statusError ? (
             <Skeleton className="h-6 w-24 mt-2" />
           ) : (
             <div className="mt-2 flex flex-col gap-1.5">
-              <GatewayStatusPill online={status.online} degraded={isDegraded} />
-              {status.online && latestMetric && (
-                <p className="text-xs text-gray-500">
-                  Config v
-                  {/* configVersion not in GatewayStatus type; placeholder */}—
-                </p>
-              )}
-              {!status.online && (
+              <GatewayStatusPill
+                online={status?.online ?? false}
+                degraded={isDegraded}
+                state={statusError && !status ? 'unknown' : undefined}
+              />
+              {status && !status.online && (
                 <p className="text-xs text-gray-500">
                   Gateway is not connected
                 </p>
@@ -143,11 +247,11 @@ export default function DashboardPage() {
         </StatCard>
 
         {/* RPS sparkline */}
-        <StatCard label="Requests / Second">
+        <StatCard label="Requests / second" icon={Activity}>
           {metricsLoading ? (
             <Skeleton className="h-16 w-full mt-2" />
           ) : snapshots.length === 0 ? (
-            <p className="mt-3 text-sm text-gray-400">No data yet</p>
+            <p className="mt-3 text-sm text-gray-400">Waiting for traffic</p>
           ) : (
             <div>
               <p className="mb-1 text-2xl font-bold text-gray-900">
@@ -162,10 +266,11 @@ export default function DashboardPage() {
                     formatter={(v) => [`${v} rps`, 'RPS']}
                   />
                   <Area
+                    isAnimationActive={false}
                     type="monotone"
                     dataKey="rps"
-                    stroke="#3b82f6"
-                    fill="#eff6ff"
+                    stroke="#6157bf"
+                    fill="#efecfa"
                     strokeWidth={1.5}
                     dot={false}
                   />
@@ -176,11 +281,11 @@ export default function DashboardPage() {
         </StatCard>
 
         {/* Error Rate */}
-        <StatCard label="Error Rate">
+        <StatCard label="Error rate" icon={Activity}>
           {metricsLoading ? (
             <Skeleton className="h-8 w-20 mt-2" />
           ) : !latestMetric ? (
-            <p className="mt-3 text-sm text-gray-400">No data yet</p>
+            <p className="mt-3 text-sm text-gray-400">Waiting for traffic</p>
           ) : (
             <div className="mt-2">
               <p
@@ -201,7 +306,7 @@ export default function DashboardPage() {
         </StatCard>
 
         {/* Active Routes */}
-        <StatCard label="Active Routes">
+        <StatCard label="Active routes" icon={Route}>
           {routes === undefined ? (
             <Skeleton className="h-8 w-12 mt-2" />
           ) : (
@@ -209,18 +314,18 @@ export default function DashboardPage() {
               <p className="text-2xl font-bold text-gray-900">
                 {activeRoutes.length}
               </p>
-              <p className="text-xs text-gray-500">configured routes</p>
+              <p className="text-xs text-gray-500">enabled routes</p>
             </div>
           )}
         </StatCard>
       </div>
 
-      {/* Top 5 Routes */}
+      {/* Recent popular routes */}
       <div className="mt-8">
         <h2 className="mb-3 text-base font-semibold text-gray-900">
-          Top 5 Routes
+          Recent popular routes
         </h2>
-        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-200 bg-gray-50">
@@ -245,7 +350,8 @@ export default function DashboardPage() {
                     colSpan={4}
                     className="px-4 py-8 text-center text-sm text-gray-400"
                   >
-                    No request data yet
+                    Your recent requests will appear here once traffic reaches
+                    the gateway.
                   </td>
                 </tr>
               ) : (
