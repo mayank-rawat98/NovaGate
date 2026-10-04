@@ -25,3 +25,33 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+  rustfs:
+    image: rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
+    environment:
+      RUSTFS_ACCESS_KEY: novagate-verification
+      RUSTFS_SECRET_KEY: local-object-storage-verification-only
+      RUSTFS_CONSOLE_ENABLE: 'false'
+      RUSTFS_REGION: us-east-1
+      RUSTFS_OBS_LOGGER_LEVEL: warn
+    volumes:
+      - rustfs-data:/data
+      - rustfs-logs:/logs
+    ports:
+      - '127.0.0.1:19000:9000'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'curl',
+          '--fail',
+          '--silent',
+          'http://127.0.0.1:9000/health/ready',
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
+
+volumes:
+  rustfs-data:
+  rustfs-logs:

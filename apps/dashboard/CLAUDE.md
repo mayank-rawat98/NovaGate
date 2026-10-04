@@ -88,6 +88,8 @@ Fetches `getTenant()` to display real tenant ID and config version.
 Gateway API key is derived from `tenant.id` and can be revealed/copied.
 Docker Compose template and env var reference are static.
 
+Settings also includes `LogExportPanel`: private NDJSON exports with UTC range/status/path filters, durable job states and authenticated downloads. Keep storage credentials and object keys out of the browser. Refresh is 30 seconds; failed reads, queue submissions and downloads must show recovery feedback. The browser verifier covers disabled/enabled storage, job states, failed submissions/downloads and an actual downloaded fixture.
+
 ## Testing
 
 - Jest with `next/jest` transformer (`jest.config.cts`)

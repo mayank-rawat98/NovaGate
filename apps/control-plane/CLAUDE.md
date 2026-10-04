@@ -65,3 +65,5 @@ Config updates originate in the **admin-api** `ConfigPushService`:
 - NEVER skip `pending_config_updates` flush on reconnect
 - NEVER assume `config.update` is delivered — persist before publication and retain until config.ack
 - Config version comes from the DB (`gatewayConfigVersion`) — never use `Date.now()` as the version
+
+Typecheck declarations and build info live under `out-tsc/typecheck`, separate from Webpack's cleaned `dist` directory so concurrent build/typecheck tasks cannot erase each other's outputs.

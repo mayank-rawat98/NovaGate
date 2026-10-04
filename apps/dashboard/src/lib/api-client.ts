@@ -6,6 +6,9 @@ import type {
   RequestLog,
   ErrorEvent,
   HealthSnapshot,
+  LogExportFilter,
+  LogExportJob,
+  LogExportList,
 } from '@api-gateway/shared-types';
 import { getToken, clearToken } from './auth';
 
@@ -96,7 +99,10 @@ function toQuery(
   );
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function authorizedFetch(
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
   const token = getToken();
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
@@ -117,6 +123,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error(text || `HTTP ${res.status}`);
   }
 
+  return res;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await authorizedFetch(path, init);
   if (res.status === 204) return undefined as unknown as T;
   return res.json() as Promise<T>;
 }
@@ -343,4 +354,35 @@ export function getMetrics(
   period: Period = '24h',
 ): Promise<MetricsSnapshot[]> {
   return request(`/tenants/${tenantId}/metrics?period=${period}`);
+}
+
+export function getLogExports(tenantId: string): Promise<LogExportList> {
+  return request(`/tenants/${tenantId}/log-exports`);
+}
+export function createLogExport(
+  tenantId: string,
+  filter: LogExportFilter,
+): Promise<LogExportJob> {
+  return request(`/tenants/${tenantId}/log-exports`, {
+    method: 'POST',
+    body: JSON.stringify(filter),
+  });
+}
+export async function downloadLogExport(
+  tenantId: string,
+  id: string,
+): Promise<void> {
+  const response = await authorizedFetch(
+    `/tenants/${tenantId}/log-exports/${id}/download`,
+  );
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `novagate-logs-${id}.ndjson`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Allow the browser to begin the download before releasing the blob URL.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { LOG_EXPORT_SCHEMA } from '../log-export/log-export-schema';
 import { tenantSchema } from '../tenants/tenant-schema';
 
 @Injectable()
@@ -30,11 +31,15 @@ export class MigrationService implements OnModuleInit {
         WHERE a."tenantId" = b."tenantId" AND (a."createdAt", a.id) < (b."createdAt", b.id)`);
       await manager.query(`CREATE UNIQUE INDEX IF NOT EXISTS pending_config_updates_tenant_unique
         ON public.pending_config_updates ("tenantId")`);
+      await manager.query(LOG_EXPORT_SCHEMA);
       const tenants = await manager.query<Array<{ id: string }>>(
         `SELECT id FROM public.tenants`,
       );
       for (const tenant of tenants) {
         const schema = tenantSchema(tenant.id);
+        await manager.query(
+          `CREATE INDEX IF NOT EXISTS request_logs_export_cursor ON ${schema}.request_logs (timestamp, id)`,
+        );
         await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.routes ADD COLUMN IF NOT EXISTS plugins JSONB`,
         );

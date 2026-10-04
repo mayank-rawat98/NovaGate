@@ -10,6 +10,7 @@ import { AppModule } from './app/app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.enableShutdownHooks();
   // Security headers (clickjacking, MIME sniffing, etc.). API serves JSON only,
   // so deny framing outright.
   app.use(

@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { chromium, expect } from '@playwright/test';
@@ -13,14 +20,14 @@ const systemChrome =
 const executablePath =
   process.env.DASHBOARD_BROWSER_EXECUTABLE ??
   (existsSync(systemChrome) ? systemChrome : undefined);
-const context = await chromium.launchPersistentContext(
-  resolve(artifacts, 'profile'),
-  {
-    executablePath,
-    headless: true,
-    viewport: { width: 1440, height: 960 },
-  },
-);
+const profile = mkdtempSync(resolve(artifacts, 'profile-'));
+const context = await chromium.launchPersistentContext(profile, {
+  executablePath,
+  headless: true,
+  acceptDownloads: true,
+  downloadsPath: resolve(artifacts, 'downloads'),
+  viewport: { width: 1440, height: 960 },
+});
 const tenant = '12345678-1234-1234-1234-123456789abc';
 const service = '23456789-1234-1234-1234-123456789abc';
 const createdAt = '2026-10-04T12:00:00.000Z';
@@ -47,6 +54,27 @@ const routes = [
     createdAt,
   },
 ];
+let archivesEnabled = true;
+let failArchiveCreate = false;
+let failArchiveDownload = false;
+const archives = ['queued', 'processing', 'completed', 'failed', 'expired'].map(
+  (status, i) => ({
+    id: `3456789${i}-1234-1234-1234-123456789abc`,
+    status,
+    filter: { from: createdAt, to: createdAt },
+    attempts: 1,
+    rowCount: status === 'completed' ? 1 : 0,
+    bytes: 64,
+    createdAt,
+    expiresAt: new Date(
+      Date.now() + (status === 'expired' ? -1 : 7) * 86400000,
+    ).toISOString(),
+    ...(status === 'failed'
+      ? { error: 'Export could not finish. Retry or use a smaller date range.' }
+      : {}),
+  }),
+);
+const newArchiveId = '45678901-1234-1234-1234-123456789abc';
 let failServices = false;
 let serviceRequests = 0;
 const violations = [];
@@ -80,6 +108,46 @@ await context.route('**/api/**', async (route) => {
   const resource = url.pathname.split('/').at(-1);
   let body = [];
   let status = 200;
+  if (url.pathname.includes('/log-exports/') && resource === 'download') {
+    await route.fulfill({
+      status: failArchiveDownload ? 503 : 200,
+      contentType: 'application/x-ndjson',
+      body: failArchiveDownload
+        ? 'Verification download outage'
+        : '{"requestId":"fixture-archive","path":"/v1/products"}\n',
+    });
+    return;
+  }
+  if (resource === 'log-exports') {
+    if (route.request().method() === 'POST') {
+      const filter = route.request().postDataJSON();
+      assert.equal(filter.minStatusCode, 500);
+      assert.equal(filter.pathPrefix, '/v1/');
+      const job = {
+        ...archives[0],
+        id: newArchiveId,
+        status: 'queued',
+        filter,
+      };
+      if (!failArchiveCreate) archives.unshift(job);
+      await route.fulfill({
+        status: failArchiveCreate ? 503 : 201,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          failArchiveCreate ? { message: 'Verification queue outage' } : job,
+        ),
+      });
+    } else
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          enabled: archivesEnabled,
+          retentionDays: 7,
+          jobs: archives,
+        }),
+      });
+    return;
+  }
   if (route.request().method() === 'POST' && resource === 'services') {
     await route.fulfill({
       status: 503,
@@ -366,6 +434,90 @@ try {
     );
     await audit(path);
   }
+  const archivePanel = page.getByRole('region', {
+    name: 'Log archives',
+    exact: true,
+  });
+  await expect(archivePanel.getByText('queued', { exact: true })).toBeVisible();
+  await expect(
+    archivePanel.getByText('processing', { exact: true }),
+  ).toBeVisible();
+  await expect(archivePanel.getByText('failed', { exact: true })).toBeVisible();
+  await expect(
+    archivePanel.getByText('expired', { exact: true }),
+  ).toBeVisible();
+  await archivePanel
+    .getByLabel('Minimum status code', { exact: true })
+    .selectOption('500');
+  await archivePanel
+    .getByLabel('Path prefix (optional)', { exact: true })
+    .fill('/v1/');
+  failArchiveCreate = true;
+  await archivePanel
+    .getByRole('button', { name: 'Create archive', exact: true })
+    .click();
+  await expect(archivePanel.getByRole('alert')).toContainText(
+    'Archive could not be queued',
+  );
+  await expect(
+    archivePanel.getByLabel('Path prefix (optional)', { exact: true }),
+  ).toHaveValue('/v1/');
+  failArchiveCreate = false;
+  await archivePanel
+    .getByRole('button', { name: 'Create archive', exact: true })
+    .click();
+  await expect(archivePanel.getByRole('status')).toContainText(
+    'Archive queued',
+  );
+  archives[0].status = 'completed';
+  archives[0].rowCount = 1;
+  await page
+    .getByRole('button', { name: 'Refresh archives', exact: true })
+    .click();
+  const downloadButton = page.getByRole('button', {
+    name: `Download archive ${newArchiveId}`,
+    exact: true,
+  });
+  await expect(downloadButton).toBeVisible();
+  failArchiveDownload = true;
+  await downloadButton.click();
+  await expect(archivePanel.getByRole('alert')).toContainText(
+    'Download is temporarily unavailable',
+  );
+  failArchiveDownload = false;
+  const downloadPromise = page.waitForEvent('download');
+  await downloadButton.click();
+  const downloaded = await downloadPromise;
+  assert.equal(
+    downloaded.suggestedFilename(),
+    `novagate-logs-${newArchiveId}.ndjson`,
+  );
+  await downloaded.saveAs(resolve(artifacts, 'downloaded-archive.ndjson'));
+  assert.equal(
+    JSON.parse(
+      readFileSync(resolve(artifacts, 'downloaded-archive.ndjson'), 'utf8'),
+    ).requestId,
+    'fixture-archive',
+  );
+  await audit('log archives enabled and completed');
+  await page.screenshot({
+    path: resolve(artifacts, 'mobile-archives.png'),
+    fullPage: true,
+  });
+  archivesEnabled = false;
+  await page
+    .getByRole('button', { name: 'Refresh archives', exact: true })
+    .click();
+  await expect(
+    archivePanel.getByText(
+      'Log archives are not enabled for this installation.',
+      { exact: false },
+    ),
+  ).toBeVisible();
+  await expect(
+    archivePanel.getByRole('button', { name: 'Create archive', exact: true }),
+  ).not.toBeVisible();
+  await audit('log archives disabled');
   writeFileSync(
     resolve(artifacts, 'accessibility.json'),
     JSON.stringify(violations, null, 2),
@@ -391,4 +543,5 @@ try {
   throw error;
 } finally {
   await context.close();
+  rmSync(profile, { recursive: true, force: true });
 }

@@ -71,7 +71,7 @@ integration('Configuration upgrades and updates on PostgreSQL', () => {
       await root.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
       await root.destroy();
     }
-  });
+  }, 30000);
   beforeEach(() => publish.mockClear());
 
   it('retains all legacy protections alongside configured plugins', async () => {
