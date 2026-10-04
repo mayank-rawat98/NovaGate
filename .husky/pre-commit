@@ -1,3 +1,1 @@
-npx prettier --write .
-git add -A
-npm run check
+node tools/check-staged-format.mjs

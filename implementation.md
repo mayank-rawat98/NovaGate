@@ -44,6 +44,8 @@ Issue #29 adds real upstream HTTP/HTTP2 regression tests for CORS preflight, Bas
 
 Reference review: Mailtr remote `dev` (`db4a0cc3d5184e67208d0c6c196c045e518b1664`) supports reusable CI before deployment and build artifact reuse. Medhank in the local `examinator` checkout has cached `origin/dev` (`c87c366fb34a4c08c1a24a0ed164bcfce2668bfe`, 3 October 2026): migration immutability, runtime image dependency checks, compose validation, bundle budgets and atomic tenant/cache patterns are relevant. Remote Medhank access through the selected personal identity was denied, so this is a cached reference. Adapt safeguards to NovaGate; do not copy credentials, cloud workspace identifiers or unrelated domain code.
 
+Issue #31 applies reference release safeguards: reusable CI before image builds, immutable revision deployment, release concurrency, deterministic Node 24/npm-ci Docker builds and read-only staged formatting checks. Container builds and smoke checks are required before merge.
+
 Implementation sequence: reconcile baseline → repair isolation/config/plugin prerequisites → close phases 0–3 verification gaps → Phase 4 with RustFS and refreshed dashboard → phases 5–6 and additional requirements → formal acceptance. Terraform and Kubernetes code must live under this repository, not in separate repositories.
 
 ---

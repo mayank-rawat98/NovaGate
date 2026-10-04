@@ -6,68 +6,27 @@ on:
     tags: ['v*.*.*']
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   OWNER: ${{ github.repository_owner }}
 
 jobs:
-  # ── Detect which apps are affected by this push ────────────────────────────
-  detect:
-    name: Detect affected apps
-    runs-on: ubuntu-latest
-    outputs:
-      gateway: ${{ steps.check.outputs.gateway }}
-      control-plane: ${{ steps.check.outputs.control-plane }}
-      admin-api: ${{ steps.check.outputs.admin-api }}
-      dashboard: ${{ steps.check.outputs.dashboard }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-
-      - run: npm install
-
-      - id: check
-        run: |
-          # On tags or manual trigger: always build everything
-          if [[ "${{ github.ref_type }}" == "tag" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "gateway=true"        >> $GITHUB_OUTPUT
-            echo "control-plane=true"  >> $GITHUB_OUTPUT
-            echo "admin-api=true"      >> $GITHUB_OUTPUT
-            echo "dashboard=true"      >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # First-ever push to main (no previous SHA): build everything
-          BEFORE="${{ github.event.before }}"
-          if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
-            echo "gateway=true"        >> $GITHUB_OUTPUT
-            echo "control-plane=true"  >> $GITHUB_OUTPUT
-            echo "admin-api=true"      >> $GITHUB_OUTPUT
-            echo "dashboard=true"      >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # Otherwise use Nx affected to find what changed
-          AFFECTED=$(npx nx show projects --affected --base=$BEFORE --head=HEAD 2>/dev/null || echo "api control-plane admin-api dashboard")
-          echo "$AFFECTED"
-
-          echo "gateway=$(echo "$AFFECTED"       | grep -qw 'api'           && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "control-plane=$(echo "$AFFECTED" | grep -qw 'control-plane' && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "admin-api=$(echo "$AFFECTED"     | grep -qw 'admin-api'     && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "dashboard=$(echo "$AFFECTED"     | grep -qw 'dashboard'     && echo true || echo false)" >> $GITHUB_OUTPUT
+  verify:
+    name: Verify release
+    uses: ./.github/workflows/ci.yml
 
   # ── Build gateway image (public — customers pull this) ─────────────────────
   build-gateway:
     name: Build gateway
     runs-on: ubuntu-latest
-    needs: [detect]
-    if: needs.detect.outputs.gateway == 'true'
+    needs: [verify]
     permissions:
       packages: write
       contents: read
@@ -87,7 +46,7 @@ jobs:
         with:
           images: ghcr.io/${{ env.OWNER }}/novagate/api
           tags: |
-            type=sha,prefix=sha-
+            type=sha,prefix=sha-,format=long
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -106,8 +65,7 @@ jobs:
   build-control-plane:
     name: Build control-plane
     runs-on: ubuntu-latest
-    needs: [detect]
-    if: needs.detect.outputs.control-plane == 'true'
+    needs: [verify]
     permissions:
       packages: write
       contents: read
@@ -127,7 +85,7 @@ jobs:
         with:
           images: ghcr.io/${{ env.OWNER }}/control-plane
           tags: |
-            type=sha,prefix=sha-
+            type=sha,prefix=sha-,format=long
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=semver,pattern={{version}}
 
@@ -145,8 +103,7 @@ jobs:
   build-admin-api:
     name: Build admin-api
     runs-on: ubuntu-latest
-    needs: [detect]
-    if: needs.detect.outputs.admin-api == 'true'
+    needs: [verify]
     permissions:
       packages: write
       contents: read
@@ -166,7 +123,7 @@ jobs:
         with:
           images: ghcr.io/${{ env.OWNER }}/admin-api
           tags: |
-            type=sha,prefix=sha-
+            type=sha,prefix=sha-,format=long
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=semver,pattern={{version}}
 
@@ -180,12 +137,11 @@ jobs:
           cache-from: type=gha,scope=admin-api
           cache-to: type=gha,scope=admin-api,mode=max
 
-  # ── Build dashboard (NEXT_PUBLIC_ADMIN_API_URL baked in at build time) ─────
+  # ── Build dashboard (internal ADMIN_API_URL baked in at build time) ─────
   build-dashboard:
     name: Build dashboard
     runs-on: ubuntu-latest
-    needs: [detect]
-    if: needs.detect.outputs.dashboard == 'true'
+    needs: [verify]
     permissions:
       packages: write
       contents: read
@@ -205,7 +161,7 @@ jobs:
         with:
           images: ghcr.io/${{ env.OWNER }}/dashboard
           tags: |
-            type=sha,prefix=sha-
+            type=sha,prefix=sha-,format=long
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=semver,pattern={{version}}
 
@@ -222,11 +178,10 @@ jobs:
   # ── Deploy SaaS stack to production server ─────────────────────────────────
   deploy:
     name: Deploy to production
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     needs:
       [build-gateway, build-control-plane, build-admin-api, build-dashboard]
-    # Run even if some build jobs were skipped, but not if any failed
-    if: always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     environment: production
     steps:
       - uses: appleboy/ssh-action@v1
@@ -235,20 +190,25 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          envs: ENV_PRODUCTION,GHCR_PAT,GHCR_USER
+          envs: ENV_PRODUCTION,GHCR_PAT,GHCR_USER,RELEASE_SHA,IMAGE_OWNER
           script: |
+            set -eu
+            umask 077
             echo "$GHCR_PAT" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-
             cd /root/app
-            git pull origin main
-
+            git diff --quiet
+            git diff --cached --quiet
+            git fetch origin "$RELEASE_SHA"
+            git checkout --detach "$RELEASE_SHA"
             printf '%s' "$ENV_PRODUCTION" > .env.production
-
-            docker compose --env-file .env.production pull
-            docker compose --env-file .env.production --profile production up -d --remove-orphans
-
-            docker image prune -f
+            export NOVAGATE_IMAGE_TAG="sha-$RELEASE_SHA"
+            export NOVAGATE_IMAGE_OWNER="$IMAGE_OWNER"
+            docker compose --env-file .env.production --profile production config --quiet
+            docker compose --env-file .env.production --profile production pull
+            docker compose --env-file .env.production --profile production up -d --wait --wait-timeout 180
         env:
           ENV_PRODUCTION: ${{ secrets.ENV_PRODUCTION }}
           GHCR_PAT: ${{ secrets.GHCR_PAT }}
           GHCR_USER: ${{ github.actor }}
+          RELEASE_SHA: ${{ github.sha }}
+          IMAGE_OWNER: ${{ github.repository_owner }}

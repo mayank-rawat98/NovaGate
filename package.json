@@ -3,16 +3,17 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "docker:up": "docker-compose -f docker-compose.single-user.yml --env-file .env.local up --build --watch",
-    "docker:down": "docker-compose -f docker-compose.single-user.yml down",
-    "docker:up:dev": "docker-compose -f docker-compose.yml --env-file .env.example up --build --watch",
-    "check": "nx run-many -t lint build typecheck --all",
+    "docker:up": "docker compose -f docker/compose.verification.yml up -d --wait",
+    "docker:down": "docker compose -f docker/compose.verification.yml down",
+    "docker:up:dev": "docker compose -f docker/compose.verification.yml up -d --wait",
+    "check": "nx run-many -t lint typecheck test build",
     "format": "nx format:write --all",
-    "lint": "nx lint --all",
-    "test": "nx test --all",
-    "typecheck": "nx typecheck --all",
-    "build": "nx build --all",
-    "prepare": "husky"
+    "lint": "nx run-many -t lint",
+    "test": "nx run-many -t test",
+    "typecheck": "nx run-many -t typecheck",
+    "build": "nx run-many -t build",
+    "prepare": "husky",
+    "format:check": "node tools/check-staged-format.mjs"
   },
   "private": true,
   "dependencies": {
