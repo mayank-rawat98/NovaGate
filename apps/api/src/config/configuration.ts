@@ -6,6 +6,7 @@ export interface ProxyServiceConfig {
 
 export interface GatewayConfig {
   port: number;
+  trustedProxies?: string[];
   database: {
     url: string;
   };
@@ -37,6 +38,10 @@ const parseProxyServices = (): ProxyServiceConfig[] => {
 
 export default (): GatewayConfig => ({
   port: parseInt(process.env.PORT ?? '3000', 10) || 3000,
+  trustedProxies: (process.env.TRUSTED_PROXY_CIDRS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
   database: {
     url: process.env.DATABASE_URL ?? '',
   },

@@ -19,6 +19,9 @@ export interface PluginContext {
   tenantId: string;
   requestId: string;
   logger: PluginLogger;
+  /** Set only after a plugin has verified inbound credentials. External
+   * subjects are distinct from gateway consumer UUIDs used for analytics. */
+  authentication?: { method: string; subject?: string };
 }
 
 export interface PluginShortCircuit {

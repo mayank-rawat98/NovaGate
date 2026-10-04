@@ -7,9 +7,18 @@ import type { GatewayConfig } from './config/configuration';
 import { WsProxyService } from './gateway/proxy/ws-proxy.service';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // Plugins and proxying need the exact incoming bytes. A JSON parser would
+  // consume/rewrite the stream before size limits and HMAC verification.
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
   const configService = app.get(ConfigService<GatewayConfig, true>);
   const port = configService.get('port', { infer: true });
+  app
+    .getHttpAdapter()
+    .getInstance()
+    .set(
+      'trust proxy',
+      configService.get('trustedProxies', { infer: true }) ?? false,
+    );
 
   await app.listen(port);
 

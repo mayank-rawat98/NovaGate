@@ -80,7 +80,7 @@ export class ProxyService {
 
   async forward(request: Request, response: ResponseWithLocals): Promise<void> {
     const originalUrl = request.originalUrl ?? request.url ?? '';
-    const [pathWithoutQuery, query] = originalUrl.split('?');
+    const [pathWithoutQuery] = originalUrl.split('?');
     const baseUrl = request.baseUrl ?? '';
     const normalizedPath =
       baseUrl && pathWithoutQuery.startsWith(baseUrl)
@@ -96,18 +96,22 @@ export class ProxyService {
       );
     }
 
-    const route = matchRoute(request.method, normalizedPath, config.routes);
+    const preflightMethod =
+      request.method === 'OPTIONS' && request.headers.origin
+        ? request.headers['access-control-request-method']
+        : undefined;
+    const isPreflight = typeof preflightMethod === 'string';
+    const route = matchRoute(
+      isPreflight ? preflightMethod : request.method,
+      normalizedPath,
+      config.routes,
+    );
     if (!route) {
       throw new GatewayError(
         'SERVICE_NOT_FOUND',
         'No downstream service matches the path',
         404,
       );
-    }
-
-    const user = (request as RequestWithUser).user;
-    if (route.authRequired && !user) {
-      throw new GatewayError('TOKEN_INVALID', 'Authentication required', 401);
     }
 
     const service = config.services.find(
@@ -131,7 +135,21 @@ export class ProxyService {
     response.locals.downstreamService = service.name;
 
     // Run plugin onRequest hooks before proxying
-    const pluginEntries = route.plugins ?? [];
+    let pluginEntries = route.plugins ?? [];
+    if (isPreflight) {
+      pluginEntries = pluginEntries.filter((entry) => entry.name === 'cors');
+      if (!pluginEntries.length)
+        throw new GatewayError(
+          'SERVICE_NOT_FOUND',
+          'CORS is not configured for this route',
+          404,
+        );
+    } else if (
+      route.graphql &&
+      !pluginEntries.some((entry) => entry.name === 'graphql-guard')
+    ) {
+      pluginEntries = [...pluginEntries, { name: 'graphql-guard', config: {} }];
+    }
     const activePlugins = this.pluginRegistry.resolve(pluginEntries);
 
     if (activePlugins.length > 0) {
@@ -158,10 +176,23 @@ export class ProxyService {
       } satisfies PluginState;
     }
 
+    const pluginAuthentication = (request as unknown as GwRequest).__gw_plugins
+      ?.ctx.authentication;
+    if (
+      route.authRequired &&
+      !(request as RequestWithUser).user &&
+      !pluginAuthentication
+    ) {
+      throw new GatewayError('TOKEN_INVALID', 'Authentication required', 401);
+    }
+
     const start = Date.now();
 
     // Strip prefix once and reuse across all retry attempts
     const strippedPath = this.stripPrefix(normalizedPath, route.pathPattern);
+    const modifiedUrl = request.url ?? originalUrl;
+    const queryIndex = modifiedUrl.indexOf('?');
+    const query = queryIndex < 0 ? '' : modifiedUrl.slice(queryIndex + 1);
     const finalUrl = query ? `${strippedPath}?${query}` : strippedPath;
 
     const retryConfig = route.retry;
@@ -207,7 +238,7 @@ export class ProxyService {
             service,
             request,
             response,
-            isLastAttempt,
+            !canRetry || isLastAttempt,
             retryOn,
           );
 
@@ -326,8 +357,6 @@ export class ProxyService {
           if (v !== undefined) response.setHeader(k, v as string | string[]);
         }
         response.statusCode = h2res.statusCode;
-        response.end(h2res.body);
-
         // Run onResponse plugins
         const pluginState = (request as unknown as GwRequest).__gw_plugins;
         if (pluginState?.plugins.length) {
@@ -337,6 +366,7 @@ export class ProxyService {
             headers: response.getHeaders() as OutgoingHttpHeaders,
           });
         }
+        response.end(h2res.body);
       }
 
       return h2res.statusCode;
@@ -389,7 +419,7 @@ export class ProxyService {
       }
       // Bodyless request (e.g. GET/HEAD) or a stream already drained by an
       // upstream parser — attaching 'data'/'end' here would wait forever.
-      if (request.readableEnded || request.complete) {
+      if (request.readableEnded) {
         resolve(Buffer.alloc(0));
         return;
       }
@@ -411,7 +441,8 @@ export class ProxyService {
     targetUrl: string,
     timeoutMs: number,
   ): RequestHandler<http.IncomingMessage, http.ServerResponse> {
-    const cached = this.handlers.get(targetUrl);
+    const cacheKey = `${targetUrl}:${timeoutMs}`;
+    const cached = this.handlers.get(cacheKey);
     if (cached) return cached;
 
     const options: Options = {
@@ -434,6 +465,8 @@ export class ProxyService {
           const rawBody = (req as http.IncomingMessage & { rawBody?: Buffer })
             .rawBody;
           if (rawBody) {
+            // Incoming chunked framing cannot accompany a replayed fixed-size body.
+            proxyReq.removeHeader('transfer-encoding');
             proxyReq.setHeader('Content-Length', rawBody.length);
             proxyReq.write(rawBody);
             proxyReq.end();
@@ -598,7 +631,7 @@ export class ProxyService {
       http.IncomingMessage,
       http.ServerResponse
     >;
-    this.handlers.set(targetUrl, handler);
+    this.handlers.set(cacheKey, handler);
     return handler;
   }
 

@@ -24,10 +24,18 @@ apps/api/src/
       proxy.middleware.spec.ts
       proxy.controller.ts
       proxy.service.ts              -- forwards requests; retry loop; LB integration
+      proxy.integration.spec.ts     -- real HTTP/HTTP2 upstream regression tests
       load-balancer.service.ts      -- weighted round-robin target selection
-      cors.middleware.ts            -- per-route CORS headers + preflight
-      ip-restriction.middleware.ts  -- CIDR allow/deny per route
-      request-size-limit.middleware.ts -- Content-Length / stream byte cap
+      http2-session-pool.service.ts
+      ws-proxy.service.ts
+      grpc-proxy.service.ts
+    plugins/                        -- registry, ordered runner, first-party plugins
+      plugins.module.ts
+      plugin-registry.service.ts
+      plugin-runner.service.ts
+      <plugin-name>/
+        <plugin-name>.plugin.ts
+        <plugin-name>.plugin.spec.ts
     logging/
       logging.interceptor.ts
       logging.interceptor.spec.ts
@@ -82,29 +90,24 @@ do not dump files in the `gateway/` root.
 
 ---
 
-## Middleware Pipeline Order
+## HTTP Pipeline Order
 
-The pipeline order in `GatewayModule.configure()` and global providers must always be:
+The current Nest pipeline is:
 
-```
-1. CorsMiddleware           (handles OPTIONS preflights before auth touches the request)
-2. IpRestrictionMiddleware  (blocks denied IPs early, before rate-limit work)
-3. JwtMiddleware            (attaches req.user, never blocks)
-4. RequestSizeLimitMiddleware (rejects oversized bodies before proxy reads the stream)
-5. RateLimitGuard           (reads req.user for tier — must run after JWT)
-6. LoggingInterceptor       (wraps full request lifecycle including downstream latency)
-7. ProxyMiddleware          (forwards to downstream via ProxyService)
-```
+1. `JwtMiddleware` verifies gateway consumer JWTs and attaches `req.user`.
+2. `RateLimitGuard` checks the consumer tier. Browser CORS preflights bypass quota consumption.
+3. `LoggingInterceptor` wraps the controller/proxy lifecycle.
+4. `ProxyService` matches the route and executes configured plugin request hooks in order.
+5. After plugins verify credentials, `authRequired` accepts a verified gateway consumer or `ctx.authentication` set by an authentication plugin.
+6. The upstream proxy runs response hooks before sending headers/body; error hooks run on proxy failures.
 
-This order is load-bearing:
+CORS preflights match the requested method, run only the CORS plugin and terminate before upstream forwarding or route authentication. GraphQL routes automatically include their guard. Other request plugins retain the configured order.
 
-- CORS must be first so `OPTIONS` preflights return 204 without auth or rate-limit processing
-- IP restriction before JWT avoids wasting JWT verification on blocked IPs
-- RequestSizeLimitMiddleware before proxy prevents reading oversized streams
-- RateLimitGuard must run after JwtMiddleware so it can read `req.user`
-- LoggingInterceptor must wrap ProxyMiddleware so downstream latency is captured
-- Never insert a new middleware/guard/interceptor without specifying its position
-  relative to this pipeline in the PR description
+Create Nest with `bodyParser: false`: preserve binary bytes and signatures, and let body-aware plugins buffer under their configured limits. Replaying a buffered request must remove `Transfer-Encoding` before setting `Content-Length`. Never trust forwarding headers directly; Express uses the validated `TRUSTED_PROXY_CIDRS` policy, and raw protocol handlers use the socket peer.
+
+External authentication subjects belong in `ctx.authentication`, not `req.user.id`: the latter is a gateway consumer UUID used in tenant telemetry. A plugin must set authentication only after credential verification.
+
+Changes to pipeline order require runtime regression tests and an explanation in the PR.
 
 ---
 
@@ -162,7 +165,7 @@ Rules:
 - Never read `process.env` directly outside of `configuration.ts`
 - Never hardcode threshold numbers, URLs, or secrets in guard/service/middleware files
 - Adding a new config key requires a corresponding Joi rule in `configuration.schema.ts`
-- Adding a new environment variable requires updating `.env.example` and the README table
+- Adding a new environment variable requires updating the tracked `docker/gateway.env.example` and the README table
 
 ---
 

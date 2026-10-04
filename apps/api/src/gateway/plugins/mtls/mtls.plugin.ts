@@ -74,6 +74,7 @@ export class MtlsPlugin implements GatewayPlugin {
     }
 
     // Extract subject info and forward as headers
+    ctx.authentication = { method: this.name, subject: verifyResult.subject };
     if (verifyResult.subject) {
       req.headers['x-ssl-client-subject'] = verifyResult.subject;
     }
