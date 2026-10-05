@@ -1,3 +1,6 @@
+import { TracesController } from '../proxy-config/traces.controller';
+import { TracesService } from '../proxy-config/traces.service';
+import { validateTraceQueryConfiguration } from '../proxy-config/traces.configuration';
 import { LogExportModule } from '../log-export/log-export.module';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
@@ -25,7 +28,10 @@ import { MigrationService } from '../database/migration.service';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validate: validateTraceQueryConfiguration,
+    }),
     LogExportModule,
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
@@ -46,6 +52,7 @@ import { MigrationService } from '../database/migration.service';
     ServicesController,
     ConsumersController,
     AnalyticsController,
+    TracesController,
   ],
   providers: [
     { provide: APP_GUARD, useClass: TenantAuthGuard },
@@ -55,6 +62,7 @@ import { MigrationService } from '../database/migration.service';
     TenantProvisioningService,
     ConfigPushService,
     MigrationService,
+    TracesService,
   ],
 })
 export class AppModule {}

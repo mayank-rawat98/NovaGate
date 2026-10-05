@@ -1,7 +1,8 @@
-import { Injectable, Logger, NestMiddleware } from '@nestjs/common';
+import { Injectable, Logger, NestMiddleware, Optional } from '@nestjs/common';
 import type { NextFunction } from 'express';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
+import { OtelService } from '../telemetry/otel.service';
 import { MetricsService } from '../metrics/metrics.service';
 import { GatewayTelemetryService } from '../telemetry/gateway-telemetry.service';
 import type { RequestLog } from '@api-gateway/shared-types';
@@ -31,6 +32,7 @@ export class LoggingMiddleware implements NestMiddleware {
   constructor(
     private readonly metrics: MetricsService,
     private readonly telemetry: GatewayTelemetryService,
+    @Optional() private readonly tracing?: OtelService,
   ) {}
 
   use(
@@ -51,6 +53,13 @@ export class LoggingMiddleware implements NestMiddleware {
     response.locals.requestId = requestId;
     response.locals.requestStart = Date.now();
     response.setHeader('X-Request-ID', requestId);
+    if (this.tracing)
+      this.observe(() => {
+        response.locals.trace = this.tracing?.startServer(
+          request.headers,
+          requestId,
+        );
+      });
     this.observe(() => this.metrics.incrementActiveConnections());
     let completed = false;
     const finish = () => {
@@ -60,7 +69,9 @@ export class LoggingMiddleware implements NestMiddleware {
       response.off('close', finish);
       // 499 is an internal incomplete-response outcome, including downstream truncation.
       const statusCode = response.writableFinished ? response.statusCode : 499;
-      const responseTimeMs = Math.max(0, performance.now() - started);
+      const responseTimeMs = Math.round(
+        Math.max(0, performance.now() - started),
+      );
       const method = METHODS.has(request.method) ? request.method : 'OTHER';
       const path = response.locals.routePattern ?? 'unmatched';
       this.observe(() => this.metrics.decrementActiveConnections());
@@ -70,10 +81,23 @@ export class LoggingMiddleware implements NestMiddleware {
       this.observe(() =>
         this.metrics.observeRequestDuration(method, path, responseTimeMs),
       );
+      this.observe(() => {
+        response.locals.trace?.set({
+          'http.request.method': method,
+          'http.route': path,
+        });
+        response.locals.trace?.end(statusCode);
+      });
       const entry: RequestLog = {
         id: randomUUID(),
         timestamp: new Date().toISOString(),
         requestId,
+        ...(response.locals.trace
+          ? {
+              traceId: response.locals.trace.traceId,
+              spanId: response.locals.trace.spanId,
+            }
+          : {}),
         method,
         path,
         statusCode,

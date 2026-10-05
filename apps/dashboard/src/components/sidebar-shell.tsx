@@ -16,6 +16,7 @@ import {
   Menu,
   X,
   Layers3,
+  Activity,
   ArrowUpRight,
 } from 'lucide-react';
 import { containDialogFocus } from './workspace-dialog';
@@ -47,6 +48,12 @@ const NAV_ITEMS = [
     href: '/logs',
     label: 'Request logs',
     icon: ScrollText,
+    group: 'Observability',
+  },
+  {
+    href: '/traces',
+    label: 'Traces',
+    icon: Activity,
     group: 'Observability',
   },
   {

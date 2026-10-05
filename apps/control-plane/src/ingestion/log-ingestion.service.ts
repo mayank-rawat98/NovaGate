@@ -25,29 +25,28 @@ export class LogIngestionService {
     try {
       const schema = this.tenantSchema(tenantId);
 
-      const values = logs.map((log) => [
-        log.id,
-        log.consumerId,
-        log.method,
-        log.path,
-        log.statusCode,
-        log.responseTimeMs,
-        log.requestId,
-        log.downstreamService,
-        log.downstreamLatencyMs,
-        log.clientIp,
-        log.userAgent,
-        log.errorCode,
-        log.timestamp,
-      ]);
-
+      const rows = logs.map((log) => ({
+        id: log.id,
+        consumerId: log.consumerId,
+        method: log.method,
+        path: log.path,
+        statusCode: log.statusCode,
+        responseTimeMs: log.responseTimeMs,
+        requestId: log.requestId,
+        downstreamService: log.downstreamService,
+        downstreamLatencyMs: log.downstreamLatencyMs,
+        clientIp: log.clientIp,
+        userAgent: log.userAgent,
+        errorCode: log.errorCode,
+        timestamp: log.timestamp,
+        traceId: log.traceId ?? null,
+        spanId: log.spanId ?? null,
+      }));
+      // Table record conversion ignores new optional correlation fields on legacy schemas.
+      // Tenant selection remains server-owned and schema-qualified.
       await this.dataSource.query(
-        `INSERT INTO ${schema}.request_logs (
-          id, "consumerId", method, path, "statusCode", 
-          "responseTimeMs", "requestId", "downstreamService", 
-          "downstreamLatencyMs", "clientIp", "userAgent", "errorCode", timestamp
-        ) VALUES ${values.map((_, i) => `($${i * 13 + 1}, $${i * 13 + 2}, $${i * 13 + 3}, $${i * 13 + 4}, $${i * 13 + 5}, $${i * 13 + 6}, $${i * 13 + 7}, $${i * 13 + 8}, $${i * 13 + 9}, $${i * 13 + 10}, $${i * 13 + 11}, $${i * 13 + 12}, $${i * 13 + 13})`).join(', ')} ON CONFLICT (id) DO NOTHING`,
-        values.flat(),
+        `INSERT INTO ${schema}.request_logs SELECT * FROM jsonb_populate_recordset(NULL::${schema}.request_logs, $1::jsonb) ON CONFLICT (id) DO NOTHING`,
+        [JSON.stringify(rows)],
       );
     } catch (err) {
       this.logger.error(

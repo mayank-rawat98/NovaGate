@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto';
+import { ConfigService } from '@nestjs/config';
+import { TracesService } from '../proxy-config/traces.service';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { DataSource } from 'typeorm';
@@ -74,6 +76,121 @@ integration('Configuration upgrades and updates on PostgreSQL', () => {
   }, 30000);
   beforeEach(() => publish.mockClear());
 
+  it('upgrades trace storage and log correlation idempotently without losing existing logs or spans', async () => {
+    const id = randomUUID();
+    await ds.query(
+      `INSERT INTO ${schema}.request_logs (id, "responseTimeMs", timestamp) VALUES ($1, 2, NOW())`,
+      [id],
+    );
+    await ds.query(
+      `ALTER TABLE ${schema}.request_logs DROP COLUMN "traceId", DROP COLUMN "spanId"`,
+    );
+    await ds.query(`DROP TABLE ${schema}.trace_spans`);
+    await new MigrationService(ds).onModuleInit();
+    expect(
+      (
+        await ds.query(
+          `SELECT "responseTimeMs", "traceId", "spanId" FROM ${schema}.request_logs WHERE id = $1`,
+          [id],
+        )
+      )[0],
+    ).toEqual({ responseTimeMs: 2, traceId: null, spanId: null });
+    await ds.query(
+      `INSERT INTO ${schema}.trace_spans ("traceId", "spanId", name, kind, timestamp, "durationMs", status, attributes) VALUES ('0123456789abcdef0123456789abcdef', '0123456789abcdef', 'Gateway request', 'server', NOW(), 1.25, 'ok', '{}')`,
+    );
+    await new MigrationService(ds).onModuleInit();
+    expect(
+      (await ds.query(`SELECT "durationMs" FROM ${schema}.trace_spans`))[0]
+        .durationMs,
+    ).toBe(1.25);
+  });
+  it('queries real trace waterfalls with tenant isolation, filtering and stable keyset pagination', async () => {
+    await ds.query(`DELETE FROM ${schema}.trace_spans`);
+    const first = '1123456789abcdef0123456789abcdef';
+    const second = '2123456789abcdef0123456789abcdef';
+    const requestId = randomUUID();
+    const timestamp = new Date(Date.now() - 1000).toISOString();
+    const attributes = JSON.stringify({
+      'http.route': '/orders',
+      'gateway.request.id': requestId,
+    });
+    for (const traceId of [first, second]) {
+      await ds.query(
+        `INSERT INTO ${schema}.trace_spans ("traceId", "spanId", "parentSpanId", name, kind, timestamp, "durationMs", status, attributes)
+        VALUES ($1, '0123456789abcdef', NULL, 'Gateway request', 'server', $2, 2.125, 'ok', $3),
+          ($1, '1123456789abcdef', '0123456789abcdef', 'upstream HTTP1', 'client', $2, 1.25, $4, $3)`,
+        [traceId, timestamp, attributes, traceId === first ? 'error' : 'ok'],
+      );
+    }
+    const queries = new TracesService(
+      ds,
+      new ConfigService({ traceQueries: { pageSize: 1 } }),
+    );
+    const page = await queries.list(tenant, { route: '/orders', requestId });
+    expect(page.traces).toEqual([
+      expect.objectContaining({
+        traceId: second,
+        spanCount: 2,
+        durationMs: 2.125,
+        status: 'ok',
+        requestId,
+        route: '/orders',
+      }),
+    ]);
+    expect(page.nextCursor).not.toBeNull();
+    const next = await queries.list(tenant, {
+      route: '/orders',
+      requestId,
+      cursor: page.nextCursor,
+    });
+    expect(next.traces).toEqual([
+      expect.objectContaining({ traceId: first, status: 'error' }),
+    ]);
+    expect(next.nextCursor).toBeNull();
+    expect(
+      (await queries.list(tenant, { errorsOnly: 'true' })).traces[0].traceId,
+    ).toBe(first);
+    expect((await queries.list(tenant, { route: '/missing' })).traces).toEqual(
+      [],
+    );
+    const waterfall = await queries.detail(tenant, first);
+    expect(waterfall.truncated).toBe(false);
+    expect(waterfall.spans).toHaveLength(2);
+    expect(waterfall.spans[0].parentSpanId).toBeUndefined();
+    expect(waterfall.spans[1]).toMatchObject({
+      parentSpanId: '0123456789abcdef',
+      durationMs: 1.25,
+      status: 'error',
+    });
+    await ds.query(
+      `UPDATE ${schema}.trace_spans SET timestamp = NOW() - INTERVAL '8 days' WHERE "traceId" = $1`,
+      [first],
+    );
+    await expect(queries.detail(tenant, first)).rejects.toThrow('not found');
+    const wideQueries = new TracesService(
+      ds,
+      new ConfigService({ traceQueries: { maxRangeDays: 30 } }),
+    );
+    expect(
+      (
+        await wideQueries.list(tenant, {
+          from: new Date(Date.now() - 10 * 86400000).toISOString(),
+          to: new Date().toISOString(),
+        })
+      ).traces.map((trace) => trace.traceId),
+    ).toEqual([second]);
+    const other = randomUUID();
+    await ds.query(`CREATE SCHEMA ${tenantSchema(other)}`);
+    try {
+      await ds.query(
+        `CREATE TABLE ${tenantSchema(other)}.trace_spans (LIKE ${schema}.trace_spans INCLUDING ALL)`,
+      );
+      expect((await queries.list(other, {})).traces).toEqual([]);
+      await expect(queries.detail(other, first)).rejects.toThrow('not found');
+    } finally {
+      await ds.query(`DROP SCHEMA ${tenantSchema(other)} CASCADE`);
+    }
+  });
   it('retains all legacy protections alongside configured plugins', async () => {
     const [row] = await ds.query(
       `SELECT plugins FROM ${schema}.routes WHERE id = $1`,

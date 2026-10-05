@@ -43,6 +43,8 @@ let trustedCalls = 0;
 const webhookBodies = [];
 const graphqlRequests = [];
 const requestLogs = [];
+const traceSpans = [];
+const traceHeaders = [];
 const h2Requests = [];
 const fallbackRequests = [];
 let untrustedCalls = 0;
@@ -159,6 +161,7 @@ async function upstream(tls, count, healthRequests = []) {
         stream.end(Buffer.from([0, 0, 0, 0, 2, 8, 1]));
       });
     } else {
+      traceHeaders.push({ protocol: 'grpc', headers });
       count();
       if (headers[':path'] === '/test.Mtls/Watch')
         stream.write(frame(replyMessage));
@@ -223,6 +226,7 @@ async function websocketUpstream(tls, count) {
   server.on('upgrade', (req, socket, head) => {
     count();
     receivedWsUrls.push(req.url);
+    traceHeaders.push({ protocol: 'websocket', headers: req.headers });
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.on('error', () => ws.terminate());
       ws.on('message', (data, binary) => ws.send(data, { binary }));
@@ -462,6 +466,7 @@ try {
     stream.once('end', () => {
       const body = Buffer.concat(chunks);
       h2Requests.push({ path: headers[':path'], body: body.toString('hex') });
+      traceHeaders.push({ protocol: 'http', headers });
       if (headers[':path'] === '/reset') {
         stream.close(http2.constants.NGHTTP2_CANCEL);
         return;
@@ -493,6 +498,7 @@ try {
     req.once('end', () => {
       const body = Buffer.concat(chunks);
       fallbackRequests.push({ path: req.url, body: body.toString('hex') });
+      traceHeaders.push({ protocol: 'http', headers: req.headers });
       res.setHeader('x-fallback-verified', 'yes');
       if (req.url === '/stall') {
         const timer = setInterval(() => res.write('x'), 25);
@@ -563,6 +569,11 @@ try {
       }
       if (message.type === 'config.ack') acknowledged = message.version;
       if (message.type === 'logs') requestLogs.push(...message.payload);
+      if (message.type === 'traces') {
+        assert.ok(message.payload.length <= 32);
+        assert.ok(Buffer.byteLength(bytes) <= 65536);
+        traceSpans.push(...message.payload);
+      }
     });
   });
   docker(
@@ -602,6 +613,8 @@ try {
     `CONTROL_PLANE_URL=ws://host.docker.internal:${plane.address().port}`,
     '-e',
     'GATEWAY_API_KEY=container-verification-api-key',
+    '-e',
+    'TRACING_SAMPLE_RATE=1',
     '-e',
     'GRPC_ENABLED=true',
     '-e',
@@ -1396,9 +1409,16 @@ try {
       JSON.stringify({ type: 'config.update', version: 9, payload: config }),
     );
   await until(() => acknowledged === 9, 'HTTP2 config ACK');
+  const incomingTrace = '0123456789abcdef0123456789abcdef';
+  const incomingParent = '1123456789abcdef';
+  const tracingHeaders = {
+    traceparent: `00-${incomingTrace}-${incomingParent}-01`,
+    baggage: 'private=packaged-private-marker',
+  };
   const exactBytes = Buffer.from([0, 255, 13, 10, 1, 32]);
   const exactH2 = await fetch(`https://127.0.0.1:${httpPort}/h2/echo`, {
     method: 'POST',
+    headers: tracingHeaders,
     body: exactBytes,
   });
   assert.equal(exactH2.status, 200);
@@ -1560,6 +1580,80 @@ try {
     !JSON.stringify(requestLogs).includes(privateMarker.replaceAll('-', '_')),
   );
 
+  await until(() => {
+    const roots = traceSpans.filter(
+      (span) => span.traceId === incomingTrace && span.kind === 'server',
+    );
+    return (
+      roots.length === 1 &&
+      roots[0].status === 'ok' &&
+      ['grpc', 'websocket', 'http'].every((protocol) =>
+        traceSpans.some(
+          (span) =>
+            span.kind === 'client' &&
+            span.attributes['gateway.protocol'] === protocol,
+        ),
+      )
+    );
+  }, 'packaged distributed trace flush');
+  const parentRoot = traceSpans.find(
+    (span) => span.traceId === incomingTrace && span.kind === 'server',
+  );
+  assert.equal(parentRoot.parentSpanId, incomingParent);
+  const parentChild = traceSpans.find(
+    (span) => span.traceId === incomingTrace && span.kind === 'client',
+  );
+  assert.equal(parentChild.parentSpanId, parentRoot.spanId);
+  assert.notEqual(parentChild.spanId, parentRoot.spanId);
+  for (const protocol of ['grpc', 'websocket', 'http']) {
+    const propagated = traceHeaders.filter(
+      (entry) => entry.protocol === protocol,
+    );
+    assert.ok(propagated.length > 0);
+    for (const { headers } of propagated) {
+      assert.match(headers.traceparent, /^00-[a-f0-9]{32}-[a-f0-9]{16}-01$/);
+      assert.equal(headers.baggage, undefined);
+    }
+    assert.ok(
+      propagated.some(({ headers }) => {
+        const [, traceId, spanId] = headers.traceparent.split('-');
+        return traceSpans.some(
+          (span) =>
+            span.traceId === traceId &&
+            span.spanId === spanId &&
+            span.kind === 'client' &&
+            span.attributes['gateway.protocol'] === protocol,
+        );
+      }),
+      `${protocol} propagated context must identify the exported client span`,
+    );
+  }
+  for (const [id, code] of [
+    [busyRequestId, 499],
+    [authRequestId, 401],
+    [rejectedRequestId, 400],
+  ]) {
+    const log = requestLogs.find((item) => item.requestId === id);
+    await until(
+      () =>
+        traceSpans.some(
+          (span) => span.traceId === log.traceId && span.spanId === log.spanId,
+        ),
+      'correlated final trace export',
+    );
+    const span = traceSpans.find(
+      (item) => item.traceId === log.traceId && item.spanId === log.spanId,
+    );
+    assert.equal(span.attributes['http.response.status_code'], code);
+    assert.equal(span.status, 'error');
+    assert.ok(Number.isInteger(log.responseTimeMs));
+  }
+  assert.ok(!JSON.stringify(traceSpans).includes(privateMarker));
+  assert.ok(
+    !JSON.stringify(traceSpans).includes(privateMarker.replaceAll('-', '_')),
+  );
+  assert.ok(traceSpans.some((span) => span.name === 'upstream HTTP1 fallback'));
+
   const healthCommand = JSON.parse(
     docker(
       'inspect',
@@ -1609,7 +1703,9 @@ try {
         identityCalls,
         inactiveIdentityCalls,
         outboundIdentityCalls,
+        traceSpans: traceSpans.length,
         checks: [
+          'SDK-W3C-parent-child-propagation-HTTP-gRPC-WebSocket-bounded-private-correlated-outcomes',
           'HTTP-finish-close-exactly-once-401-400-499-normalized-private-telemetry',
           'least-connections-concurrent-busy-H2-target-verified-HTTP1-fallback-cancel-recovery',
           'HTTP2-verified-HTTPS-exact-binary-POST-and-predispatch-HTTP1-fallback',

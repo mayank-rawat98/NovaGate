@@ -15,9 +15,14 @@ Receives logs/health/errors/metrics from gateways. Pushes config updates down.
 
 ```text
 ingestion/
+  trace-ingestion.service.ts   validated bounded trace batches, tenant storage and retention
+  trace-ingestion.service.spec.ts
   log-ingestion.service.ts     writes logs/health/errors/metrics to tenant_<id> schema tables
 tenant-connection/
   tenant-connection.manager.ts WebSocket server, auth, heartbeat, inbound message dispatch
+config/
+  tracing.configuration.ts     validated ingestion and socket admission budgets
+  tracing.configuration.spec.ts
 database/
   entities/                    TypeORM entities for public schema (Tenant, ApiKey, PendingConfigUpdate)
 ```
@@ -67,3 +72,7 @@ Config updates originate in the **admin-api** `ConfigPushService`:
 - Config version comes from the DB (`gatewayConfigVersion`) — never use `Date.now()` as the version
 
 Typecheck declarations and build info live under `out-tsc/typecheck`, separate from Webpack's cleaned `dist` directory so concurrent build/typecheck tasks cannot erase each other's outputs.
+
+Issue #61 adds trace ingestion under authenticated socket tenant IDs. Trace payloads cannot choose a tenant. Bound WebSocket message bytes, queued messages/bytes and global active ingestion; reject malformed trace batches before SQL. Each tenant trace write takes a transaction-scoped lock with statement/lock deadlines and enforces retention plus a hard row bound. Gateway trace export is best effort. New schema creation belongs to admin provisioning/migrations; control-plane ingestion never creates tenant tables.
+
+Trace retention also runs for idle tenants: a single non-overlapping lifecycle timer visits at most 64 trace tables per tick using a schema cursor. Discovery and deletion use statement deadlines, shared ingestion admission and the same per-tenant advisory lock. Clear the timer and await in-flight cleanup on shutdown. Never interpolate a discovered schema without validating its canonical tenant UUID shape.

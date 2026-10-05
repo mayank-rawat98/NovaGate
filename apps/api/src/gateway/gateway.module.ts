@@ -21,6 +21,7 @@ import { ControlPlaneConnectorService } from './connector/control-plane-connecto
 import { GatewayTelemetryService } from './telemetry/gateway-telemetry.service';
 import { UpstreamHealthService } from './health/upstream-health.service';
 import { PluginsModule } from './plugins/plugins.module';
+import { OtelService } from './telemetry/otel.service';
 
 @Module({
   imports: [RedisModule, ConfigManagerModule, PluginsModule],
@@ -48,6 +49,7 @@ import { PluginsModule } from './plugins/plugins.module';
       provide: APP_FILTER,
       useClass: GatewayExceptionFilter,
     },
+    OtelService,
   ],
   exports: [WsProxyService, GrpcProxyService],
 })

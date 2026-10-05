@@ -1,3 +1,7 @@
+import { OtelService } from '../telemetry/otel.service';
+import { MetricsService } from '../metrics/metrics.service';
+import type { GatewayTelemetryService } from '../telemetry/gateway-telemetry.service';
+import type { TraceSpan } from '@api-gateway/shared-types';
 import * as http2 from 'node:http2';
 import { once } from 'node:events';
 import * as net from 'node:net';
@@ -59,7 +63,22 @@ describe('native gRPC through a real listener and upstream', () => {
     setGrpcActiveCalls: jest.fn(),
   };
   const upstreamSessions = new Set<http2.ServerHttp2Session>();
+  let tracing: OtelService;
+  const traceServices = new Set<OtelService>();
+  const exported: TraceSpan[] = [];
   function makeGateway(settings: Partial<GrpcSettings> = {}) {
+    tracing = new OtelService(
+      new ConfigService({ tracing: { sampleRate: 1 } }),
+      manager,
+      {
+        sendTraces: (batch: TraceSpan[]) => {
+          exported.push(...batch);
+          return true;
+        },
+      } as unknown as GatewayTelemetryService,
+      new MetricsService(),
+    );
+    traceServices.add(tracing);
     const registry = new PluginRegistryService([
       new BasicAuthPlugin(),
       new GraphqlGuardPlugin(new ConfigService({})),
@@ -93,6 +112,7 @@ describe('native gRPC through a real listener and upstream', () => {
       quota as never,
       registry,
       new PluginRunnerService(),
+      tracing,
     );
   }
   async function restart(settings: Partial<GrpcSettings>, ca?: Buffer) {
@@ -150,6 +170,7 @@ describe('native gRPC through a real listener and upstream', () => {
     return { stream, finished };
   }
   beforeEach(async () => {
+    exported.length = 0;
     version = 0;
     received = [];
     closures = 0;
@@ -283,10 +304,37 @@ describe('native gRPC through a real listener and upstream', () => {
   afterEach(async () => {
     client?.destroy();
     await gateway?.onModuleDestroy();
+    for (const service of traceServices) await service.onModuleDestroy();
+    traceServices.clear();
     for (const session of upstreamSessions) session.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
+  it('propagates a distinct child context and records actual gRPC trailer status after closure', async () => {
+    const traceId = '0123456789abcdef0123456789abcdef';
+    const call = request({
+      traceparent: `00-${traceId}-0123456789abcdef-01`,
+      baggage: 'authorization=private-trace-marker',
+    });
+    call.stream.end(frame('trace'));
+    expect((await call.finished).status).toBe('0');
+    await until(() => tracing.activeSpans === 0);
+    tracing.flush();
+    const spans = exported.filter((span) => span.traceId === traceId);
+    expect(spans).toHaveLength(2);
+    const root = spans.find((span) => span.kind === 'server');
+    const child = spans.find((span) => span.kind === 'client');
+    expect(child?.parentSpanId).toBe(root?.spanId);
+    expect(received[0].traceparent).toBe(`00-${traceId}-${child?.spanId}-01`);
+    expect(received[0].baggage).toBeUndefined();
+    expect(
+      spans.every(
+        (span) =>
+          span.attributes['rpc.grpc.status_code'] === 0 && span.status === 'ok',
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(spans)).not.toContain('private-trace-marker');
+  });
   it('retains admission capacity while timed-out quota work is still pending', async () => {
     await restart({ maxActiveCalls: 1 });
     let release!: (value: { allowed: boolean }) => void;

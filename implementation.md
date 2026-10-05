@@ -680,7 +680,7 @@ Fresh test/lint/typecheck/build gates pass across all five projects with 691 tes
 
 `apps/api/src/gateway/telemetry/otel.service.ts`:
 
-- Emit OpenTelemetry spans for every proxied request
+- Create request context for proxied requests and record spans according to parent-aware sampling and admission budgets
 - Span attributes use current OpenTelemetry semantic conventions with normalized route patterns, final response status and tenant/route/service/retry identifiers. Do not export raw targets, query strings, authorization, bodies, user agents or client IPs by default.
 - Validate W3C `traceparent` and bounded `tracestate`; generate valid context for missing/malformed headers, propagate across each upstream attempt and correlate logs. Do not forward arbitrary baggage by default.
 - Export bounded batches through a typed control-plane message with authenticated tenant attribution, schema/byte/count/deadline validation, retention and per-tenant storage/query budgets. The gateway response must not wait for export; queues need explicit drop/backpressure metrics and shutdown cleanup.
@@ -689,7 +689,7 @@ Fresh test/lint/typecheck/build gates pass across all five projects with 691 tes
 
 `apps/dashboard` — new `Traces` page:
 
-- Waterfall view: gateway span → downstream span (if downstream also sends `traceparent`)
+- Waterfall view: gateway request span → actual upstream attempt spans; external downstream span ingestion is deferred to phase 5 OTLP integration
 - Search by `traceId`, `requestId`, path, time range
 - Click a span → see attributes, timing, error if any
 
@@ -1119,3 +1119,15 @@ The branch adds weighted least-connections selection, idempotent target reservat
 Reservations follow actual HTTP/1 request, HTTP/2 and native gRPC stream, and WebSocket tunnel closure; safe predispatch fallback retains its reservation. Real concurrent protocol tests verify busy-target avoidance and recovery after cancellation. Fresh test/lint/typecheck/build gates pass across all five projects: 682 tests (514 gateway, 157 admin, 10 control plane, 1 dashboard). Production browser checks save both policies, reload/reopen forms, retain selection on failed saves and pass desktop/mobile accessibility checks.
 
 A rebuilt OrbStack image passes the retained HTTP/gRPC/WebSocket TLS/auth/config suite plus concurrent least-connections dispatch, verified HTTP/1 fallback, cancellation and target recovery at config version 10. Delivery follows the issue-linked PR workflow against dev. Final protocol acceptance, full phase acceptance and the all-phase campaign remain separate requirements. Legacy service records with invalid fractional weights, embedded URL credentials or canonical duplicate URLs need correction before adopting strict validation; a production upgrade audit must include these records.
+
+## Distributed tracing implementation and verification — issue #61
+
+Phase 4.1 now includes pinned manual OpenTelemetry request/attempt spans across HTTP, native gRPC and WebSocket lifecycles, validated W3C context propagation, request-log correlation, parent-aware sampling, finite admission/export budgets and drop metrics. Children retain their parent request's tenant; delayed spans from a replaced tenant are discarded. Retries produce distinct attempt spans under one root; verified HTTP/1 fallback has its own span. Raw queries, payloads, credentials, user agents, client IPs and arbitrary baggage are omitted. Log durations remain integer milliseconds for legacy PostgreSQL storage while spans preserve fractional timings.
+
+Authenticated control-plane ingestion validates schema, attributes, count and UTF-8 byte limits before SQL, ignores wire tenant IDs, caps concurrent work and socket admission, and applies transaction-local statement/lock deadlines. Admin provisioning and idempotent migrations create indexed tenant trace tables and optional log correlation fields. Tenant writes serialize retention and row trimming under one advisory lock. A single non-overlapping one-minute cleanup timer visits at most 64 trace tables per tick, continues after individual tenant failures, shares ingestion admission and waits for active cleanup on shutdown. Query-side age filtering hides expired spans immediately; physical cleanup completes over multiple ticks at larger tenant counts.
+
+The authenticated tenant API provides bounded UTC time ranges, exact trace/request/route filters, error filtering, keyset pagination and capped span details. The dashboard adds a Traces navigation item, controlled filters, expandable span attributes, timing waterfall, ID copying, log links, 30-second refresh and empty/loading/error/retry states. It explains sampling and partial/truncated timelines. External downstream instrumentation is not yet ingested; phase 5 OTLP integration remains required.
+
+Fresh issue-level regression verification passes **775 tests** (546 gateway, 181 admin, 47 control plane, 1 dashboard), all available five-project lint/typecheck/build targets and the standalone production-browser desktop/mobile keyboard/axe checks. Real PostgreSQL/Redis/WebSocket tests cover authenticated tenant attribution, replay deduplication, concurrent row limits, expiry without new traffic, legacy/upgraded log storage, pagination, fractional timings and cross-schema isolation. Real RustFS tests pass. Browser checks exercise filters, pagination, timing attributes, truncation, direct trace links and empty/error recovery alongside retained navigation/form regressions.
+
+The rebuilt OrbStack production gateway image `sha256:1fd6bf2954977e4fc5ac5cf52eb08406958512812b5259ae87aeb174bc9ad037` runs as UID 1000 on Node 24.21.0 without PostgreSQL. At configuration version 10 it passes retained TLS/auth/config/HTTP/gRPC/WebSocket streaming checks plus 108 exported spans, bounded trace batches, remote parent causality, actual propagated upstream context matching exported client IDs, fallback spans, privacy and correlated final 401/400/499 outcomes. Disposable fixtures remove their resources. This is issue-level implementation evidence; full phase acceptance, comparative benchmarks and the final all-phase campaign remain pending.

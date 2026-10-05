@@ -16,6 +16,7 @@ import type {
 import { GatewayError } from '../shared/gateway-error';
 import type {
   RequestWithUser,
+  GatewayTraceHandle,
   ResponseWithLocals,
 } from '../shared/request-context';
 import { MetricsService } from '../metrics/metrics.service';
@@ -43,6 +44,8 @@ interface RetryContext {
   abort?: (error: NodeJS.ErrnoException) => void;
   lease?: TargetLease;
   upstreamStarted?: boolean;
+  trace?: GatewayTraceHandle;
+  outcome?: number;
 }
 
 interface PluginState {
@@ -147,6 +150,11 @@ export class ProxyService {
     }
 
     response.locals.routePattern = route.pathPattern;
+    response.locals.trace?.set({
+      'gateway.route.id': route.id,
+      'gateway.service.id': service.id,
+      'http.route': route.pathPattern,
+    });
     response.locals.downstreamService = service.name;
     // Certificate assertions are not downstream identity. mTLS reads original rawHeaders only after source verification.
     for (const name of Object.keys(request.headers))
@@ -253,6 +261,16 @@ export class ProxyService {
         service.loadBalancing,
       );
       const targetUrl = lease.url;
+      const attemptTrace = response.locals.trace?.child(
+        useH2 ? 'upstream HTTP2' : 'upstream HTTP1',
+        {
+          'gateway.route.id': route.id,
+          'gateway.service.id': service.id,
+          'gateway.retry.count': attempt,
+          'http.request.method': request.method,
+          'http.route': route.pathPattern,
+        },
+      );
 
       // Reset the URL for each attempt (safe for GET/HEAD/OPTIONS which have no body)
       request.url = finalUrl;
@@ -268,6 +286,7 @@ export class ProxyService {
             canRetry && !isLastAttempt,
             retryOn,
             lease,
+            attemptTrace,
           )
         : await this.callProxy(
             targetUrl,
@@ -278,6 +297,7 @@ export class ProxyService {
             retryOn,
             undefined,
             lease,
+            attemptTrace,
           );
 
       if (canRetry && !isLastAttempt && retryOn.includes(statusCode)) {
@@ -302,6 +322,7 @@ export class ProxyService {
     retryOn: number[],
     absoluteTimeoutMs?: number,
     lease?: TargetLease,
+    attemptTrace?: GatewayTraceHandle,
   ): Promise<number> {
     const retryContext: RetryContext = {
       retryOn,
@@ -310,6 +331,8 @@ export class ProxyService {
       resolve: () => undefined,
       lease,
       upstreamStarted: false,
+      trace: attemptTrace,
+      outcome: 499,
     };
     return new Promise<number>((resolve) => {
       let settled = false;
@@ -318,6 +341,7 @@ export class ProxyService {
       const resolveOnce = (code: number) => {
         if (!settled) {
           settled = true;
+          retryContext.outcome = code;
           cleanup();
           delete (request as unknown as GwRequest).__gw_retry;
           resolve(code);
@@ -335,7 +359,7 @@ export class ProxyService {
         retryContext.abort?.(
           Object.assign(new Error('Caller cancelled'), { code: 'ECANCELED' }),
         );
-        resolveOnce(response.statusCode ?? 200);
+        resolveOnce(response.writableFinished ? response.statusCode : 499);
       };
       cleanup = () => {
         clearTimeout(deadline);
@@ -393,7 +417,10 @@ export class ProxyService {
         },
       );
     }).finally(() => {
-      if (!retryContext.upstreamStarted) lease?.release();
+      if (!retryContext.upstreamStarted) {
+        lease?.release();
+        attemptTrace?.end(retryContext.outcome);
+      }
     });
   }
 
@@ -408,6 +435,7 @@ export class ProxyService {
     retriesRemaining: boolean,
     retryOn: number[],
     lease: TargetLease,
+    attemptTrace?: GatewayTraceHandle,
   ): Promise<number> {
     const requestId = this.getRequestIdFromRequest(request, response);
 
@@ -418,6 +446,7 @@ export class ProxyService {
     let started = performance.now();
     let dispatched = false,
       handedOff = false;
+    let outcome = 499;
 
     // Build forward headers (strip hop-by-hop)
     const forwardHeaders: Record<string, string | string[]> = {};
@@ -425,6 +454,12 @@ export class ProxyService {
       if (HOP_BY_HOP.has(k.toLowerCase()) || k.toLowerCase() === 'host')
         continue;
       if (v !== undefined) forwardHeaders[k] = v as string | string[];
+    }
+    if (attemptTrace) {
+      delete forwardHeaders.traceparent;
+      delete forwardHeaders.tracestate;
+      delete forwardHeaders.baggage;
+      Object.assign(forwardHeaders, attemptTrace.headers());
     }
     forwardHeaders['x-request-id'] = requestId;
     const fwd = this.getForwardedForFromRequest(request);
@@ -445,10 +480,14 @@ export class ProxyService {
           onDispatch: () => {
             dispatched = true;
           },
-          onClose: lease.release,
+          onClose: (status) => {
+            lease.release();
+            attemptTrace?.end(status);
+          },
         },
       );
 
+      outcome = h2res.statusCode;
       // A retryable status with attempts left: don't commit the response —
       // let the outer loop retry, mirroring the HTTP/1 proxy path.
       if (retriesRemaining && retryOn.includes(h2res.statusCode)) {
@@ -482,6 +521,16 @@ export class ProxyService {
           (service.timeoutMs ?? 10000) - (performance.now() - started);
         if (remaining > 0) {
           handedOff = true;
+          attemptTrace?.end(502);
+          const fallbackTrace = response.locals.trace?.child(
+            'upstream HTTP1 fallback',
+            {
+              'gateway.route.id': route.id,
+              'gateway.service.id': service.id,
+              'http.request.method': request.method,
+              'http.route': route.pathPattern,
+            },
+          );
           return this.callProxy(
             targetUrl,
             { ...service, timeoutMs: remaining },
@@ -491,6 +540,7 @@ export class ProxyService {
             retryOn,
             remaining,
             lease,
+            fallbackTrace,
           );
         }
         failure = new Http2PoolError(504, 'DOWNSTREAM_TIMEOUT');
@@ -503,6 +553,7 @@ export class ProxyService {
         failure instanceof Http2PoolError || failure instanceof BodyCaptureError
           ? failure.code
           : 'DOWNSTREAM_ERROR';
+      outcome = status;
       if (status === 504)
         this.metricsService.incrementDownstreamTimeout(service.name);
       this.logger.warn(
@@ -537,7 +588,10 @@ export class ProxyService {
       }
       return status;
     } finally {
-      if (!dispatched && !handedOff) lease.release();
+      if (!dispatched && !handedOff) {
+        lease.release();
+        attemptTrace?.end(outcome);
+      }
       this.bodies.releaseDetached(ctx);
     }
   }
@@ -576,7 +630,18 @@ export class ProxyService {
           const retryContext = (req as unknown as GwRequest).__gw_retry;
           if (retryContext) {
             retryContext.upstreamStarted = true;
-            proxyReq.once('close', () => retryContext.lease?.release());
+            proxyReq.once('close', () => {
+              retryContext.lease?.release();
+              retryContext.trace?.end(retryContext.outcome);
+            });
+            if (retryContext.trace) {
+              for (const header of ['traceparent', 'tracestate', 'baggage'])
+                proxyReq.removeHeader(header);
+              for (const [header, value] of Object.entries(
+                retryContext.trace.headers(),
+              ))
+                proxyReq.setHeader(header, value);
+            }
             retryContext.abort = (error) => proxyReq.destroy(error);
           }
           const requestId = this.getRequestId(req, res);
@@ -606,6 +671,7 @@ export class ProxyService {
           const retryCtx: RetryContext | undefined = (
             req as unknown as GwRequest
           ).__gw_retry;
+          if (retryCtx) retryCtx.outcome = statusCode;
           const requestId = this.getRequestId(req, res);
 
           if (

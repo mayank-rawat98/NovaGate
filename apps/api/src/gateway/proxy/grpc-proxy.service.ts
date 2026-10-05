@@ -1,7 +1,10 @@
+import { OtelService } from '../telemetry/otel.service';
+import type { GatewayTraceHandle } from '../shared/request-context';
 import { bindTenantClientTrust } from '../shared/tls-client-trust';
 import { listenerTlsOptions } from '../../config/tls-options';
 import {
   Injectable,
+  Optional,
   Logger,
   OnModuleInit,
   OnApplicationBootstrap,
@@ -51,6 +54,8 @@ interface Call {
   certificateTrust?: string;
   target?: string;
   releaseTarget?: () => void;
+  upstreamTrace?: GatewayTraceHandle;
+  rpcStatus?: number;
   upstream?: http2.ClientHttp2Stream;
   request: http2.Http2ServerRequest;
   response: http2.Http2ServerResponse;
@@ -80,6 +85,10 @@ export function isGrpcRequest(headers: http2.IncomingHttpHeaders): boolean {
 export class GrpcProxyService
   implements OnModuleInit, OnApplicationBootstrap, OnModuleDestroy
 {
+  private readonly traceStates = new WeakMap<
+    http2.Http2ServerResponse,
+    { trace?: GatewayTraceHandle; status?: number }
+  >();
   private readonly logger = new Logger(GrpcProxyService.name);
   private readonly settings: GrpcSettings;
   private readonly pool = new Map<string, SessionEntry[]>();
@@ -102,6 +111,7 @@ export class GrpcProxyService
     private readonly rateLimit: RateLimitService,
     private readonly registry: PluginRegistryService,
     private readonly runner: PluginRunnerService,
+    @Optional() private readonly tracing?: OtelService,
   ) {
     this.settings = configService.get('grpc', { infer: true }) ?? DEFAULT_GRPC;
   }
@@ -386,6 +396,11 @@ export class GrpcProxyService
     }
   }
   private error(response: http2.Http2ServerResponse, error: GrpcFailure) {
+    const traceState = this.traceStates.get(response);
+    if (traceState) {
+      traceState.status = error.status;
+      traceState.trace?.set({ 'rpc.grpc.status_code': error.status });
+    }
     if (response.destroyed || response.writableEnded) return;
     // Drain buffered input while the error is sent; wantTrailers closes an
     // unfinished upload, so rejection never leaves a paused stream retained.
@@ -409,6 +424,30 @@ export class GrpcProxyService
     request: http2.Http2ServerRequest,
     response: http2.Http2ServerResponse,
   ): Promise<void> {
+    const requestId = randomUUID();
+    const traceState = {
+      trace: this.tracing?.startServer(request.headers, requestId, 'grpc'),
+      status: undefined as number | undefined,
+    };
+    this.traceStates.set(response, traceState);
+    response.once('close', () => {
+      const status = traceState.status;
+      traceState.trace?.set({
+        'rpc.system.name': 'grpc',
+        'rpc.grpc.status_code': status,
+      });
+      traceState.trace?.end(
+        status === 0
+          ? 200
+          : status === 1
+            ? 499
+            : status === undefined
+              ? response.statusCode >= 400
+                ? response.statusCode
+                : 499
+              : 502,
+      );
+    });
     request.pause();
     request.on('error', () => response.destroy());
     response.on('error', () => request.destroy());
@@ -467,6 +506,12 @@ export class GrpcProxyService
       return;
     }
     const labels = parseGrpcPath(route.pathPattern);
+    traceState.trace?.set({
+      'gateway.route.id': route.id,
+      'gateway.service.id': service.id,
+      'rpc.service': labels.grpcService,
+      'rpc.method': labels.grpcMethod,
+    });
     let timer: NodeJS.Timeout | undefined;
     let requestFrames: GrpcFrameValidator | undefined;
     let responseFrames: GrpcFrameValidator | undefined;
@@ -494,6 +539,8 @@ export class GrpcProxyService
       finish: (status) => {
         if (call.done) return;
         call.done = true;
+        call.rpcStatus = status;
+        traceState.status = status;
         clearTimeout(timer);
         call.abort.abort();
         this.calls.delete(call);
@@ -557,14 +604,14 @@ export class GrpcProxyService
         delete request.headers[name];
       const ctx: PluginContext = {
         req: Object.assign(request, {
-          requestId: randomUUID(),
+          requestId,
         }) as unknown as PluginContext['req'],
         res: response as unknown as PluginContext['res'],
         route,
         service,
         signal: call.abort.signal,
         tenantId: call.tenantId ?? '',
-        requestId: randomUUID(),
+        requestId,
         logger: {
           info: (msg) => this.logger.log(msg),
           warn: (msg) => this.logger.warn(msg),
@@ -643,6 +690,18 @@ export class GrpcProxyService
           'grpc-timeout': `${remaining}m`,
           te: 'trailers',
         };
+        call.upstreamTrace = traceState.trace?.child('upstream gRPC', {
+          'rpc.system.name': 'grpc',
+          'rpc.service': labels.grpcService,
+          'rpc.method': labels.grpcMethod,
+          'gateway.service.id': service.id,
+        });
+        if (call.upstreamTrace) {
+          delete headers.traceparent;
+          delete headers.tracestate;
+          delete headers.baggage;
+          Object.assign(headers, call.upstreamTrace.headers());
+        }
         upstream = entry.session.request(headers);
       } catch (error) {
         entry.active--;
@@ -653,6 +712,11 @@ export class GrpcProxyService
       call.upstream = upstream;
       upstream.once('close', () => {
         call.releaseTarget?.();
+        const rpcStatus = call.rpcStatus ?? status;
+        call.upstreamTrace?.set({ 'rpc.grpc.status_code': rpcStatus });
+        call.upstreamTrace?.end(
+          rpcStatus === 0 ? 200 : rpcStatus === 1 ? 499 : 502,
+        );
         entry.active = Math.max(0, entry.active - 1);
         entry.lastUsed = Date.now();
         if (entry.retiring && !entry.active) entry.session.destroy();
@@ -756,7 +820,13 @@ export class GrpcProxyService
           : new GrpcFailure(14, 'Upstream unavailable'),
       );
     } finally {
-      if (!call.upstream) call.releaseTarget?.();
+      if (!call.upstream) {
+        call.releaseTarget?.();
+        call.upstreamTrace?.set({
+          'rpc.grpc.status_code': call.rpcStatus ?? 14,
+        });
+        call.upstreamTrace?.end(502);
+      }
       call.admitting = false;
       this.detachedAdmissions.delete(call);
       this.metricsService.setGrpcActiveCalls(this.occupiedCalls);

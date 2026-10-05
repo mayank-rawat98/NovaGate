@@ -1,3 +1,4 @@
+import configuration from './configuration';
 import { configSchema } from './configuration.schema';
 
 const required = {
@@ -289,6 +290,37 @@ describe('balancer state startup bounds', () => {
   ])('rejects unsafe %s=%s', (name, value) => {
     expect(
       configSchema.validate({ ...required, [name]: value }).error,
+    ).toBeDefined();
+  });
+});
+
+describe('bounded tracing startup settings', () => {
+  it('keeps case-insensitive disabled settings consistent between validation and runtime', () => {
+    const before = process.env.TRACING_ENABLED;
+    try {
+      process.env.TRACING_ENABLED = 'FALSE';
+      expect(
+        configSchema.validate({ ...required, TRACING_ENABLED: 'FALSE' }).value
+          .TRACING_ENABLED,
+      ).toBe(false);
+      expect(configuration().tracing.enabled).toBe(false);
+    } finally {
+      if (before === undefined) delete process.env.TRACING_ENABLED;
+      else process.env.TRACING_ENABLED = before;
+    }
+  });
+  it.each([
+    { TRACING_SAMPLE_RATE: 1.1 },
+    { TRACING_SAMPLE_RATE: -0.1 },
+    { TRACING_MAX_ACTIVE_SPANS: 0 },
+    { TRACING_MAX_QUEUED_SPANS: 100000 },
+    { TRACING_MAX_BATCH_SPANS: 129 },
+    { TRACING_MAX_BATCH_BYTES: 65537 },
+    { TRACING_FLUSH_INTERVAL_MS: 99 },
+    { TRACING_ENABLED: 'sometimes' },
+  ])('rejects invalid tracing limits %j', (values) => {
+    expect(
+      configSchema.validate({ ...required, ...values }).error,
     ).toBeDefined();
   });
 });

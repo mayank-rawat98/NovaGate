@@ -157,6 +157,23 @@ export class ControlPlaneConnectorService
     }, delay);
   }
 
+  sendTransient(message: BaseWsMessage, maxBufferedBytes: number): boolean {
+    if (!this.authenticated || this.ws?.readyState !== WebSocket.OPEN)
+      return false;
+    try {
+      const serialized = JSON.stringify(message);
+      if (
+        this.ws.bufferedAmount + Buffer.byteLength(serialized) >
+        maxBufferedBytes
+      )
+        return false;
+      this.ws.send(serialized);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   send(message: BaseWsMessage) {
     if (this.authenticated && this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));

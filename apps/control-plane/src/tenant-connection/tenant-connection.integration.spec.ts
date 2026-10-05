@@ -1,3 +1,6 @@
+import { ConfigService } from '@nestjs/config';
+import { TraceIngestionService } from '../ingestion/trace-ingestion.service';
+import { GatewayCloseCode, type TraceSpan } from '@api-gateway/shared-types';
 import { randomUUID, createHash } from 'crypto';
 import { once } from 'events';
 import { readFileSync } from 'fs';
@@ -30,6 +33,7 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
   let tenantId: string;
   let secondId: string;
   let apiKey: string;
+  let traceIngestion: TraceIngestionService;
   const sockets: WebSocket[] = [];
   const previousRedis = process.env.REDIS_URL;
   const previousPort = process.env.WS_PORT;
@@ -43,6 +47,22 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
     const [data] = await message;
     return { ws, message: JSON.parse(data.toString()) as AuthOkMessage };
   }
+
+  it('expires idle-tenant traces without a new gateway batch and preserves recent data', async () => {
+    const schema = `tenant_${secondId.replace(/-/g, '_')}`;
+    await ds.query(`INSERT INTO ${schema}.trace_spans ("traceId", "spanId", name, kind, timestamp, "durationMs", status, attributes)
+      VALUES ('3123456789abcdef0123456789abcdef', '0123456789abcdef', 'old', 'server', NOW() - INTERVAL '8 days', 1.25, 'ok', '{}'),
+      ('4123456789abcdef0123456789abcdef', '0123456789abcdef', 'recent', 'server', NOW(), 1.25, 'ok', '{}')`);
+    await traceIngestion.cleanupExpired();
+    expect(
+      await ds.query(
+        `SELECT "traceId" FROM ${schema}.trace_spans WHERE "traceId" IN ('3123456789abcdef0123456789abcdef', '4123456789abcdef0123456789abcdef') ORDER BY "traceId"`,
+      ),
+    ).toEqual([{ traceId: '4123456789abcdef0123456789abcdef' }]);
+    await ds.query(
+      `DELETE FROM ${schema}.trace_spans WHERE "traceId" = '4123456789abcdef0123456789abcdef'`,
+    );
+  });
 
   beforeAll(async () => {
     ds = new DataSource({
@@ -89,6 +109,18 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
       await ds.query(
         `CREATE TABLE ${schema}.metrics_snapshots (rps FLOAT, "p50Ms" INTEGER, "p95Ms" INTEGER, "p99Ms" INTEGER, "errorRate" FLOAT, timestamp TIMESTAMP)`,
       );
+      await ds.query(`CREATE TABLE ${schema}.trace_spans (
+        "traceId" VARCHAR(32), "spanId" VARCHAR(16), "parentSpanId" VARCHAR(16), name VARCHAR(128), kind VARCHAR,
+        timestamp TIMESTAMPTZ, "durationMs" DOUBLE PRECISION, status VARCHAR, attributes JSONB,
+        PRIMARY KEY ("traceId", "spanId"))`);
+      await ds.query(
+        `CREATE INDEX trace_time_cursor ON ${schema}.trace_spans (timestamp DESC, "traceId", "spanId")`,
+      );
+      await ds.query(`CREATE TABLE ${schema}.request_logs (
+        id UUID PRIMARY KEY, "consumerId" UUID, method VARCHAR, path VARCHAR, "statusCode" INTEGER,
+        "responseTimeMs" INTEGER, "requestId" VARCHAR, "downstreamService" VARCHAR, "downstreamLatencyMs" INTEGER,
+        "clientIp" VARCHAR, "userAgent" VARCHAR, "errorCode" VARCHAR, timestamp TIMESTAMP
+        ${id === tenantId ? ', "traceId" VARCHAR(32), "spanId" VARCHAR(16)' : ''})`);
       await ds.query(
         `CREATE TABLE ${schema}.error_events (id UUID PRIMARY KEY, "requestId" TEXT, "errorCode" TEXT, message TEXT, "serviceId" UUID, path TEXT, "statusCode" INTEGER, timestamp TIMESTAMP)`,
       );
@@ -106,12 +138,18 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
     process.env.REDIS_URL = process.env.TEST_REDIS_URL;
     process.env.WS_PORT = '0';
     redis = new Redis(process.env.TEST_REDIS_URL as string);
+    traceIngestion = new TraceIngestionService(
+      ds,
+      new ConfigService({ traceIngestion: { maxRowsPerTenant: 128 } }),
+    );
     manager = new TenantConnectionManager(
       ds.getRepository(Tenant),
       ds.getRepository(ApiKey),
       ds.getRepository(PendingConfigUpdate),
       new LogIngestionService(ds),
       ds,
+      traceIngestion,
+      new ConfigService({ socketAdmission: { maxQueuedMessages: 2 } }),
     );
     manager.onModuleInit();
     const wss = (manager as unknown as { wss: WebSocketServer }).wss;
@@ -246,6 +284,158 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
     expect(code).toBe(4001);
   });
 
+  async function connectTraceGateway() {
+    const key = randomUUID();
+    await ds.getRepository(ApiKey).save({
+      tenantId,
+      keyHash: createHash('sha256').update(key).digest('hex'),
+      label: 'trace-verification',
+    });
+    return connect(key);
+  }
+  function trace(index = 1): TraceSpan {
+    return {
+      traceId: '0123456789abcdef0123456789abcdef',
+      spanId: index.toString(16).padStart(16, '0'),
+      name: 'Gateway request',
+      kind: 'server',
+      timestamp: new Date().toISOString(),
+      durationMs: 2.125,
+      status: 'ok',
+      attributes: { 'http.route': '/users/:id' },
+    };
+  }
+  async function until(predicate: () => Promise<boolean>) {
+    const end = Date.now() + 5000;
+    while (!(await predicate())) {
+      if (Date.now() > end) throw new Error('Trace condition did not converge');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  it('attributes trace batches to the authenticated tenant and deduplicates replays', async () => {
+    const { ws } = await connectTraceGateway();
+    const message = { type: 'traces', tenantId: secondId, payload: [trace()] };
+    ws.send(JSON.stringify(message));
+    const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
+    await until(
+      async () =>
+        Number(
+          (await ds.query(`SELECT COUNT(*) FROM ${schema}.trace_spans`))[0]
+            .count,
+        ) === 1,
+    );
+    ws.send(JSON.stringify(message));
+    // A second valid span proves the serialized replay has been processed.
+    ws.send(JSON.stringify({ type: 'traces', payload: [trace(2)] }));
+    await until(
+      async () =>
+        Number(
+          (await ds.query(`SELECT COUNT(*) FROM ${schema}.trace_spans`))[0]
+            .count,
+        ) === 2,
+    );
+    const rows = await ds.query(
+      `SELECT * FROM ${schema}.trace_spans ORDER BY "spanId"`,
+    );
+    expect(rows[0].durationMs).toBe(2.125);
+    expect(
+      Number(
+        (
+          await ds.query(
+            `SELECT COUNT(*) FROM tenant_${secondId.replace(/-/g, '_')}.trace_spans`,
+          )
+        )[0].count,
+      ),
+    ).toBe(0);
+  });
+  it('enforces expiry and a hard tenant row bound across concurrent writers', async () => {
+    const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
+    await ds.query(`TRUNCATE ${schema}.trace_spans`);
+    const expired = trace(1000);
+    await ds.query(
+      `INSERT INTO ${schema}.trace_spans ("traceId", "spanId", name, kind, timestamp, "durationMs", status, attributes) VALUES ($1, $2, $3, $4, NOW() - INTERVAL '8 days', $5, $6, $7)`,
+      [
+        expired.traceId,
+        expired.spanId,
+        expired.name,
+        expired.kind,
+        expired.durationMs,
+        expired.status,
+        JSON.stringify(expired.attributes),
+      ],
+    );
+    await Promise.all([
+      traceIngestion.ingest(
+        tenantId,
+        Array.from({ length: 100 }, (_, i) => trace(i + 1)),
+      ),
+      traceIngestion.ingest(
+        tenantId.toUpperCase(),
+        Array.from({ length: 100 }, (_, i) => trace(i + 101)),
+      ),
+    ]);
+    expect(
+      Number(
+        (await ds.query(`SELECT COUNT(*) FROM ${schema}.trace_spans`))[0].count,
+      ),
+    ).toBe(128);
+    expect(
+      await ds.query(
+        `SELECT * FROM ${schema}.trace_spans WHERE "spanId" = $1`,
+        [expired.spanId],
+      ),
+    ).toHaveLength(0);
+  });
+  it('stores correlated integer-duration logs in both upgraded and legacy schemas', async () => {
+    const ingestion = new LogIngestionService(ds);
+    for (const id of [tenantId, secondId]) {
+      const log = {
+        id: randomUUID(),
+        method: 'GET',
+        path: '/users/:id',
+        statusCode: 200,
+        responseTimeMs: 2,
+        requestId: randomUUID(),
+        clientIp: '127.0.0.1',
+        timestamp: new Date().toISOString(),
+        traceId: trace().traceId,
+        spanId: trace().spanId,
+      };
+      await ingestion.ingestLogs(id, [log]);
+      const rows = await ds.query(
+        `SELECT * FROM tenant_${id.replace(/-/g, '_')}.request_logs WHERE id = $1`,
+        [log.id],
+      );
+      expect(rows[0].responseTimeMs).toBe(2);
+      if (id === tenantId) expect(rows[0].traceId).toBe(log.traceId);
+    }
+  });
+  it('closes oversized frames and bounded queues instead of accumulating pending trace writes', async () => {
+    const large = await connectTraceGateway();
+    const oversizedClosed = once(large.ws, 'close');
+    large.ws.send(' '.repeat(131073));
+    expect((await oversizedClosed)[0]).toBe(GatewayCloseCode.MESSAGE_TOO_LARGE);
+    const runner = ds.createQueryRunner();
+    await runner.connect();
+    await runner.startTransaction();
+    try {
+      await runner.query(
+        `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+        [`trace-ingestion:${tenantId}`],
+      );
+      const { ws } = await connectTraceGateway();
+      ws.send(JSON.stringify({ type: 'traces', payload: [trace(999)] }));
+      await until(async () => traceIngestion.activeIngestions === 1);
+      const closed = once(ws, 'close');
+      for (let i = 0; i < 10; i++)
+        ws.send(JSON.stringify({ type: 'traces', payload: [trace(1001 + i)] }));
+      expect((await closed)[0]).toBe(GatewayCloseCode.RESOURCE_LIMIT);
+    } finally {
+      await runner.rollbackTransaction();
+      await runner.release();
+    }
+    await until(async () => traceIngestion.activeIngestions === 0);
+  });
   it('stores replayed error batches only once', async () => {
     const ingestion = new LogIngestionService(ds);
     const errors = [

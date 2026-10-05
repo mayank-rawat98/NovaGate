@@ -478,3 +478,23 @@ Issue #57 adds bounded per-replica balancing state and a persisted service `load
 | `LOAD_BALANCER_MAX_ACTIVE_RESERVATIONS` | 4096    | 1–65536 reservations, including detached generations |
 
 The admin API accepts at most 256 unique HTTP/HTTPS targets per service, without embedded credentials and with URLs bounded to 2048 UTF-8 bytes. Weights must be integers from 1 to 100. Least-connections compares active work divided by weight; equal load uses weighted rotation. Core reservations release once and retain their original generation, so stale completion cannot decrement new target counters. Capacity exhaustion returns 503; invalid gateway balancing configuration returns 500. Dispatch must retain reservations until actual upstream request/stream/tunnel closure.
+
+## Distributed tracing
+
+Manual tracing uses the pinned OpenTelemetry JavaScript SDK and validated W3C trace context. It does not extract baggage or export raw request targets, queries, credentials, user agents or payloads. Recording admission, SDK attributes/events/links, queue count/bytes, batch count/bytes and WebSocket buffered bytes are finite. Explicit per-request context avoids cross-request global state; old tenant generations cannot export into replacement tenant connections. Export is best effort and never adds a waiting queue to responses. HTTP, native gRPC and WebSocket request/attempt spans reach authenticated tenant storage and the dashboard Traces explorer. Open traces from correlated request logs, or search by time preset, exact trace/request ID, route and error outcome. Timelines show received gateway/attempt spans and explain sampling, missing parents and truncation; external downstream span ingestion is planned with phase 5 OTLP support.
+
+| Variable                     | Default | Accepted range                                                             |
+| ---------------------------- | ------- | -------------------------------------------------------------------------- |
+| `TRACING_ENABLED`            | true    | boolean                                                                    |
+| `TRACING_SAMPLE_RATE`        | 0.1     | 0–1 for new roots; respects valid parent decisions within admission limits |
+| `TRACING_MAX_ACTIVE_SPANS`   | 1024    | 1–16384                                                                    |
+| `TRACING_MAX_QUEUED_SPANS`   | 512     | 1–8192                                                                     |
+| `TRACING_MAX_QUEUE_BYTES`    | 1048576 | 8192–16777216 bytes                                                        |
+| `TRACING_MAX_BATCH_SPANS`    | 32      | 1–128                                                                      |
+| `TRACING_MAX_BATCH_BYTES`    | 65536   | 8192–65536 bytes                                                           |
+| `TRACING_FLUSH_INTERVAL_MS`  | 1000    | 100–30000 ms                                                               |
+| `TRACING_MAX_BUFFERED_BYTES` | 131072  | 8192–1048576 bytes, including the next batch                               |
+
+The shared trace wire contract allows 16 whitelisted scalar attributes, at most 256 UTF-8 bytes each, 8192 bytes per span, and 128 spans/65536 bytes per batch. Capacity and transport drops have bounded reason labels in Prometheus. Logs retain integer milliseconds for existing PostgreSQL schemas; trace spans preserve fractional timing. See the [OpenTelemetry trace SDK](https://github.com/open-telemetry/opentelemetry-js/blob/main/packages/sdk-trace/README.md) for manual instrumentation concepts.
+
+Control-plane and admin query limits are documented in [docker/tracing.env.example](docker/tracing.env.example). By default each tenant retains up to 100,000 spans for seven days; ingestion admits eight concurrent transactions with 5-second statement/1-second lock deadlines. Idle cleanup visits up to 64 tenant tables each minute. Admin trace queries admit eight concurrent transactions, use a 3-second statement deadline, allow seven-day ranges, return 50 traces per page and at most 256 detail spans. `TRACE_RETENTION_DAYS` must match across the control plane and admin API. Queries immediately hide expired spans; background physical deletion can take multiple ticks. Trace delivery is best effort, so use durable audit facilities for audit requirements.
