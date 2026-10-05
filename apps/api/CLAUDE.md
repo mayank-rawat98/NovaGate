@@ -15,7 +15,7 @@ Communicates with control plane via outbound WebSocket only.
 ## Middleware pipeline (order is load-bearing)
 
 ```text
-JwtMiddleware → [RateLimitGuard] → [LoggingInterceptor] → ProxyMiddleware
+LoggingMiddleware → JwtMiddleware → [RateLimitGuard] → ProxyMiddleware
                                                                ↓
                                                        PluginRunner.onRequest
                                                        → forward to downstream
@@ -24,7 +24,7 @@ JwtMiddleware → [RateLimitGuard] → [LoggingInterceptor] → ProxyMiddleware
 
 - `JwtMiddleware` — attaches `req.user`; never blocks
 - `RateLimitGuard` (global guard) — sliding-window Redis check; reads `req.user` for tier
-- `LoggingInterceptor` (global interceptor) — captures downstream latency
+- `LoggingMiddleware` (before authentication) — records actual response finish/close exactly once
 - `ProxyMiddleware` → `ProxyService.forward()` — resolves plugins, runs hooks, forwards to downstream
 
 CORS, IP restriction, rate limiting, body size limits, header transforms, and basic-auth are all
@@ -48,7 +48,7 @@ gateway/
     health.controller.ts            GET /health
     upstream-health.service.ts      polls targets every 10s; marks unhealthy after 3 fails
   logging/
-    logging.interceptor.ts          logs request/response with latency
+    logging.middleware.ts           logs actual response completion/cancellation
   metrics/
     metrics.service.ts              prom-client counters/histograms
     metrics.controller.ts           GET /metrics (Prometheus scrape endpoint)
@@ -126,3 +126,5 @@ Use shared `RequestBodyService` for original bytes, absolute deadlines and reque
 HTTP/2 forwarding uses validated `http2` configuration, peer SETTINGS-aware admission and bounded original body capture. Keep stream capacity until close, use absolute deadlines, bound responses/headers and destroy inactive/drained sockets. Configuration removal/tenant changes revoke pooled origins. Only typed predispatch protocol/connection errors permit verified HTTP/1 fallback with remaining deadline; dispatched POSTs and trust failures must never fall back. Proxy handler caching is bounded by `proxy.maxHandlerCacheEntries`.
 
 Load balancing uses `acquireTarget()` leases with bounded service/target/global reservation state and `ServiceConfig.loadBalancing` (weighted round robin by default, or weighted least connections). Hold leases through actual upstream closure, including native gRPC and WebSocket tunnels; safe predispatch HTTP/1 fallback inherits its lease. Every release is idempotent and tied to its original target generation. Current tenant configuration overrides stale hook snapshots. Operator bounds are validated through `loadBalancer` configuration. Never replace runtime leases with nonreserving `selectTarget()`.
+
+HTTP request accounting belongs only in pre-authentication `LoggingMiddleware`. Observe finish/close, never RxJS finalization. Completed responses record the actual final status; incomplete/truncated responses record internal 499 without rewriting the wire response. Use monotonic duration, bounded method labels, normalized configured route patterns (or unmatched for early failures), validated UUID request IDs and no URL/query/user-agent payloads. Rate-limit guards only record quota-specific metrics. Observer/connector failures must not alter authentication or response behavior. Telemetry uses one unreferenced flush timer and clears it while flushing its bounded tail on shutdown.

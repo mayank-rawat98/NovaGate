@@ -1,5 +1,5 @@
 import { Global, INestApplication, Module } from '@nestjs/common';
-import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { createHmac, createHash, generateKeyPairSync } from 'crypto';
@@ -12,7 +12,7 @@ import { ProxyMiddleware } from './proxy.middleware';
 import { ProxyService } from './proxy.service';
 import { LoadBalancerService } from './load-balancer.service';
 import { Http2SessionPool } from './http2-session-pool.service';
-import { LoggingInterceptor } from '../logging/logging.interceptor';
+import { LoggingMiddleware } from '../logging/logging.middleware';
 import { MetricsService } from '../metrics/metrics.service';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 import { ConfigManagerModule } from '../config-manager/config-manager.module';
@@ -73,6 +73,8 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
     incrementHttpRequests: jest.fn(),
     observeRequestDuration: jest.fn(),
     incrementDownstreamTimeout: jest.fn(),
+    incrementRateLimitHit: jest.fn(),
+    incrementRateLimitRedisError: jest.fn(),
     incrementProxyRetry: jest.fn(),
   };
   const keys = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -198,7 +200,7 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
         },
         { provide: APP_FILTER, useClass: GatewayExceptionFilter },
         { provide: APP_GUARD, useClass: RateLimitGuard },
-        { provide: APP_INTERCEPTOR, useClass: LoggingInterceptor },
+        LoggingMiddleware,
         RateLimitService,
       ],
     })
@@ -208,6 +210,8 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
       .useValue(rateLimit)
       .compile();
     app = module.createNestApplication({ bodyParser: false });
+    const logging = module.get(LoggingMiddleware);
+    app.use(logging.use.bind(logging));
     const jwt = module.get(JwtMiddleware);
     app.use(jwt.use.bind(jwt));
     await app.listen(0, '127.0.0.1');
@@ -863,6 +867,73 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
     ).toBe(500);
     expect(received).toHaveLength(0);
   });
+  it('records authentication middleware and quota guard rejections exactly once without raw URLs', async () => {
+    const privatePath = '/api?token=private-telemetry-marker';
+    const expired = sign(
+      { sub: 'consumer' },
+      'test-secret-with-more-than-32-characters',
+      { expiresIn: -1 },
+    );
+    expect(
+      (
+        await fetch(`${url}${privatePath}`, {
+          headers: { authorization: `Bearer ${expired}` },
+        })
+      ).status,
+    ).toBe(401);
+    expect(telemetry.logRequest).toHaveBeenCalledTimes(1);
+    expect(telemetry.logRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({ statusCode: 401, path: 'unmatched' }),
+    );
+    rateLimit.check.mockResolvedValueOnce({
+      allowed: false,
+      retryAfterMs: 1000,
+    });
+    expect((await fetch(`${url}${privatePath}`)).status).toBe(429);
+    expect(telemetry.logRequest).toHaveBeenCalledTimes(2);
+    expect(telemetry.logRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({ statusCode: 429, path: 'unmatched' }),
+    );
+    expect(metrics.incrementActiveConnections).toHaveBeenCalledTimes(2);
+    expect(metrics.decrementActiveConnections).toHaveBeenCalledTimes(2);
+    expect(metrics.incrementHttpRequests.mock.calls).toEqual([
+      ['GET', 'unmatched', 401],
+      ['GET', 'unmatched', 429],
+    ]);
+    expect(JSON.stringify(telemetry.logRequest.mock.calls)).not.toContain(
+      'private-telemetry-marker',
+    );
+    expect(received).toHaveLength(0);
+  });
+  it('keeps a real streamed HTTP response active until client cancellation and logs one incomplete outcome', async () => {
+    h1Trickle = true;
+    const { request, response } = await new Promise<{
+      request: http.ClientRequest;
+      response: http.IncomingMessage;
+    }>((resolve, reject) => {
+      const request = http.get(`${url}/api`, (response) => {
+        response.on('error', () => undefined);
+        response.once('data', () => resolve({ request, response }));
+      });
+      request.on('error', reject);
+    });
+    try {
+      expect(response.statusCode).toBe(200);
+      expect(metrics.incrementActiveConnections).toHaveBeenCalledTimes(1);
+      expect(metrics.decrementActiveConnections).not.toHaveBeenCalled();
+      expect(telemetry.logRequest).not.toHaveBeenCalled();
+    } finally {
+      response.destroy();
+      request.destroy();
+    }
+    for (let i = 0; i < 100 && !telemetry.logRequest.mock.calls.length; i++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(telemetry.logRequest).toHaveBeenCalledTimes(1);
+    expect(telemetry.logRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/api', statusCode: 499 }),
+    );
+    expect(metrics.decrementActiveConnections).toHaveBeenCalledTimes(1);
+  });
   it('keeps GraphQL query/header payloads out of request/error telemetry and normalized metric labels', async () => {
     const marker = 'private-query-marker';
     config.routes[0].graphql = {};
@@ -898,6 +969,14 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
         path: '/api',
         errorCode: 'PLUGIN_CONFIG_INVALID',
       }),
+    );
+    expect(telemetry.logRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({ path: '/api', statusCode: 500 }),
+    );
+    expect(metrics.incrementHttpRequests).toHaveBeenLastCalledWith(
+      'GET',
+      '/api',
+      500,
     );
     expect(JSON.stringify(telemetry.sendError.mock.calls)).not.toContain(
       marker,

@@ -1,0 +1,120 @@
+import { EventEmitter } from 'node:events';
+import { Logger } from '@nestjs/common';
+import { LoggingMiddleware } from './logging.middleware';
+import type { MetricsService } from '../metrics/metrics.service';
+import type { GatewayTelemetryService } from '../telemetry/gateway-telemetry.service';
+import type {
+  RequestWithUser,
+  ResponseWithLocals,
+} from '../shared/request-context';
+
+describe('HTTP response lifetime observation', () => {
+  beforeEach(() =>
+    jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined),
+  );
+  afterEach(() => jest.restoreAllMocks());
+  function fixture() {
+    const metrics = {
+      incrementActiveConnections: jest.fn(),
+      decrementActiveConnections: jest.fn(),
+      incrementHttpRequests: jest.fn(),
+      observeRequestDuration: jest.fn(),
+    };
+    const telemetry = { logRequest: jest.fn() };
+    const middleware = new LoggingMiddleware(
+      metrics as unknown as MetricsService,
+      telemetry as unknown as GatewayTelemetryService,
+    );
+    const req = {
+      method: 'GET',
+      headers: {
+        'x-request-id': 'private-token',
+        'user-agent': 'private-agent',
+      },
+      originalUrl: '/users/private?token=secret',
+      ip: '127.0.0.1',
+    } as unknown as RequestWithUser;
+    const res = Object.assign(new EventEmitter(), {
+      locals: {},
+      setHeader: jest.fn(),
+      statusCode: 200,
+      writableFinished: false,
+    }) as unknown as ResponseWithLocals;
+    const next = jest.fn();
+    middleware.use(req, res, next);
+    return { middleware, metrics, telemetry, req, res, next };
+  }
+  it('holds active accounting until response finish and records the final filter status once', () => {
+    const f = fixture();
+    expect(f.next).toHaveBeenCalledTimes(1);
+    expect(f.metrics.incrementActiveConnections).toHaveBeenCalledTimes(1);
+    expect(f.telemetry.logRequest).not.toHaveBeenCalled();
+    f.res.locals.routePattern = '/users/:id';
+    f.res.statusCode = 500;
+    Object.defineProperty(f.res, 'writableFinished', { value: true });
+    f.res.emit('finish');
+    f.res.emit('close');
+    expect(f.metrics.decrementActiveConnections).toHaveBeenCalledTimes(1);
+    expect(f.telemetry.logRequest).toHaveBeenCalledTimes(1);
+    expect(f.metrics.incrementHttpRequests).toHaveBeenCalledWith(
+      'GET',
+      '/users/:id',
+      500,
+    );
+    expect(f.res.listenerCount('finish')).toBe(0);
+    expect(f.res.listenerCount('close')).toBe(0);
+    expect(JSON.stringify(f.telemetry.logRequest.mock.calls)).not.toMatch(
+      /private|secret|user-agent/,
+    );
+  });
+  it('classifies a response closed before finish as incomplete rather than a successful 200', () => {
+    const f = fixture();
+    f.res.emit('close');
+    f.res.emit('finish');
+    expect(f.metrics.incrementHttpRequests).toHaveBeenCalledWith(
+      'GET',
+      'unmatched',
+      499,
+    );
+    expect(f.metrics.decrementActiveConnections).toHaveBeenCalledTimes(1);
+    expect(f.telemetry.logRequest).toHaveBeenCalledTimes(1);
+  });
+  it('does not attach duplicate observation when invoked twice', () => {
+    const f = fixture();
+    f.middleware.use(f.req, f.res, f.next);
+    f.res.emit('close');
+    expect(f.metrics.incrementActiveConnections).toHaveBeenCalledTimes(1);
+    expect(f.telemetry.logRequest).toHaveBeenCalledTimes(1);
+    expect(f.next).toHaveBeenCalledTimes(2);
+  });
+  it('uses monotonic duration despite wall-clock changes and bounds method labels', () => {
+    const f = fixture();
+    f.req.method = 'CUSTOM_PRIVATE_METHOD';
+    jest.spyOn(Date, 'now').mockReturnValue(-1e12);
+    f.res.emit('close');
+    expect(f.metrics.observeRequestDuration).toHaveBeenCalledWith(
+      'OTHER',
+      'unmatched',
+      expect.any(Number),
+    );
+    expect(
+      f.telemetry.logRequest.mock.calls[0][0].responseTimeMs,
+    ).toBeGreaterThanOrEqual(0);
+    expect(f.telemetry.logRequest.mock.calls[0][0].responseTimeMs).toBeLessThan(
+      1000,
+    );
+  });
+  it('isolates failed observation operations and still releases accounting', () => {
+    const f = fixture();
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    f.metrics.incrementHttpRequests.mockImplementation(() => {
+      throw new Error('private');
+    });
+    f.telemetry.logRequest.mockImplementation(() => {
+      throw new Error('private');
+    });
+    expect(() => f.res.emit('close')).not.toThrow();
+    expect(f.metrics.decrementActiveConnections).toHaveBeenCalledTimes(1);
+    expect(f.metrics.observeRequestDuration).toHaveBeenCalledTimes(1);
+  });
+});

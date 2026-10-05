@@ -1,8 +1,8 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
-import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { JwtMiddleware } from './auth/jwt.middleware';
 import { HealthController } from './health/health.controller';
-import { LoggingInterceptor } from './logging/logging.interceptor';
+import { LoggingMiddleware } from './logging/logging.middleware';
 import { MetricsController } from './metrics/metrics.controller';
 import { MetricsService } from './metrics/metrics.service';
 import { ProxyController } from './proxy/proxy.controller';
@@ -36,17 +36,13 @@ import { PluginsModule } from './plugins/plugins.module';
     Http2SessionPool,
     RateLimitService,
     RateLimitGuard,
-    LoggingInterceptor,
+    LoggingMiddleware,
     ControlPlaneConnectorService,
     GatewayTelemetryService,
     UpstreamHealthService,
     {
       provide: APP_GUARD,
       useClass: RateLimitGuard,
-    },
-    {
-      provide: APP_INTERCEPTOR,
-      useClass: LoggingInterceptor,
     },
     {
       provide: APP_FILTER,
@@ -57,6 +53,6 @@ import { PluginsModule } from './plugins/plugins.module';
 })
 export class GatewayModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(JwtMiddleware).forRoutes('*');
+    consumer.apply(LoggingMiddleware, JwtMiddleware).forRoutes('*');
   }
 }

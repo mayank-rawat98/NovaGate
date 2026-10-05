@@ -344,3 +344,7 @@ Bound targets, sessions, streams, pending setup, headers and response bytes. Pee
 ## Rule 21 — Balancing reservations follow actual upstream lifetime
 
 Acquire an atomic weighted target reservation immediately before dispatch. Release exactly once after actual HTTP request, HTTP/2 or gRPC stream, or WebSocket tunnel closure; failures before dispatch release after admission settles. Preserve the reservation across safe negotiation fallback. Bound service, target and global active state, including removed generations. Late releases retain captured target objects and cannot decrement replacement configurations. Current tenant topology is authoritative after awaited hooks; health filtering and explicit fallback remain mandatory. Least-connections counts work per gateway replica, not fleet-wide sockets.
+
+## Rule 22 — Observe responses after they finish
+
+Attach HTTP observation before authentication and guards. Hold active request accounting through actual response finish/close, emit once and remove listeners. Record final filter status after completed responses; use internal 499 for interrupted responses rather than false success. Duration is monotonic. Labels use known methods and configured route patterns, never caller URLs, queries or user agents. Validate request IDs before use. Guards must not duplicate general logging/counters. Observation failures cannot change request outcomes; telemetry timers and batches have explicit shutdown cleanup. These are best-effort logs, not a durable audit trail.

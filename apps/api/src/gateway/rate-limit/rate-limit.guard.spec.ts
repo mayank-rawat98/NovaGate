@@ -92,8 +92,6 @@ describe('RateLimitGuard', () => {
       'Retry-After',
       expect.any(Number),
     );
-    expect(res.once).toHaveBeenCalledWith('finish', expect.any(Function));
-    expect(res.once).toHaveBeenCalledWith('close', expect.any(Function));
   });
 
   it('fails open on Redis errors', async () => {

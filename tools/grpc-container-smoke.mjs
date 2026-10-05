@@ -42,6 +42,7 @@ let networkCreated = false;
 let trustedCalls = 0;
 const webhookBodies = [];
 const graphqlRequests = [];
+const requestLogs = [];
 const h2Requests = [];
 const fallbackRequests = [];
 let untrustedCalls = 0;
@@ -561,6 +562,7 @@ try {
         );
       }
       if (message.type === 'config.ack') acknowledged = message.version;
+      if (message.type === 'logs') requestLogs.push(...message.payload);
     });
   });
   docker(
@@ -1470,8 +1472,10 @@ try {
     (request) => request.path === '/stall',
   ).length;
   const busyAbort = new AbortController();
+  const busyRequestId = randomUUID();
   const busy = fetch(`https://127.0.0.1:${httpPort}/least/stall`, {
     signal: busyAbort.signal,
+    headers: { 'x-request-id': busyRequestId },
   }).catch((error) => {
     if (error.name !== 'AbortError') throw error;
     return null;
@@ -1500,6 +1504,61 @@ try {
     assert.equal(recovered.status, 200);
     return recovered.headers.get('x-h2-verified') === 'yes';
   }, 'least-connections cancelled target recovery');
+
+  const authRequestId = randomUUID();
+  const rejectedRequestId = randomUUID();
+  const privateMarker = 'packaged-private-marker';
+  assert.equal(
+    (
+      await fetch(
+        `https://127.0.0.1:${httpPort}/graphql?token=${privateMarker}`,
+        {
+          headers: {
+            authorization: 'Bearer',
+            'x-request-id': authRequestId,
+            'user-agent': privateMarker,
+          },
+        },
+      )
+    ).status,
+    401,
+  );
+  assert.equal(
+    (
+      await fetch(
+        `https://127.0.0.1:${httpPort}/graphql?query=${encodeURIComponent(`{ ${privateMarker.replaceAll('-', '_')}: a { b { c { d } } } }`)}`,
+        {
+          headers: {
+            'x-request-id': rejectedRequestId,
+            'user-agent': privateMarker,
+          },
+        },
+      )
+    ).status,
+    400,
+  );
+  await until(
+    () =>
+      [busyRequestId, authRequestId, rejectedRequestId].every((id) =>
+        requestLogs.some((log) => log.requestId === id),
+      ),
+    'request completion telemetry flush',
+  );
+  for (const [id, status, path] of [
+    [busyRequestId, 499, '/least'],
+    [authRequestId, 401, 'unmatched'],
+    [rejectedRequestId, 400, '/graphql'],
+  ]) {
+    const logs = requestLogs.filter((log) => log.requestId === id);
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].statusCode, status);
+    assert.equal(logs[0].path, path);
+    assert.ok(logs[0].responseTimeMs >= 0);
+  }
+  assert.ok(!JSON.stringify(requestLogs).includes(privateMarker));
+  assert.ok(
+    !JSON.stringify(requestLogs).includes(privateMarker.replaceAll('-', '_')),
+  );
 
   const healthCommand = JSON.parse(
     docker(
@@ -1551,6 +1610,7 @@ try {
         inactiveIdentityCalls,
         outboundIdentityCalls,
         checks: [
+          'HTTP-finish-close-exactly-once-401-400-499-normalized-private-telemetry',
           'least-connections-concurrent-busy-H2-target-verified-HTTP1-fallback-cancel-recovery',
           'HTTP2-verified-HTTPS-exact-binary-POST-and-predispatch-HTTP1-fallback',
           'HTTP2-response-bound-absolute-deadline-reset-no-mutation-replay-recovery',
