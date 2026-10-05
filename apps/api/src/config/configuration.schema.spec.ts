@@ -234,4 +234,19 @@ describe('native TLS and mTLS trust policy startup', () => {
       configSchema.validate({ ...required, ...settings }).error,
     ).toBeDefined();
   });
+  it.each([
+    { GRAPHQL_MAX_QUERY_BYTES: 127 },
+    { GRAPHQL_MAX_TOKENS: 15 },
+    { GRAPHQL_MAX_LEXICAL_DEPTH: 257 },
+    { GRAPHQL_MAX_BODY_BYTES: 127 },
+    { GRAPHQL_BODY_TIMEOUT_MS: 99 },
+    { GRAPHQL_MAX_PENDING_REQUESTS: 0 },
+    { BODY_CAPTURE_MAX_BODY_BYTES: 0 },
+    { BODY_CAPTURE_TIMEOUT_MS: 99 },
+    { BODY_CAPTURE_MAX_PENDING_REQUESTS: 0 },
+  ])('rejects unsafe GraphQL/body capture settings %j', (settings) => {
+    expect(
+      configSchema.validate({ ...required, ...settings }).error,
+    ).toBeDefined();
+  });
 });

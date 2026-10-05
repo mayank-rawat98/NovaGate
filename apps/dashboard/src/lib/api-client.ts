@@ -65,6 +65,7 @@ export type CreateRouteDto = Pick<
   enabled?: boolean;
   retry?: RouteEntity['retry'];
   plugins?: RouteEntity['plugins'];
+  graphql?: RouteEntity['graphql'];
 };
 export type UpdateRouteDto = Partial<CreateRouteDto>;
 export type CreateServiceDto = Pick<ServiceEntity, 'name' | 'targets'> & {
@@ -416,3 +417,5 @@ export type {
 export type { MtlsPluginConfig } from '@api-gateway/shared-types';
 
 export type { HmacPluginConfig } from '@api-gateway/shared-types';
+
+export type { GraphqlPolicy } from '@api-gateway/shared-types';

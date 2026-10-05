@@ -16,6 +16,7 @@ import { GatewayConfigManagerService } from '../config-manager/gateway-config-ma
 import { LoadBalancerService } from './load-balancer.service';
 import { PluginRegistryService } from '../plugins/plugin-registry.service';
 import { PluginRunnerService } from '../plugins/plugin-runner.service';
+import { GraphqlGuardPlugin } from '../plugins/graphql-guard/graphql-guard.plugin';
 import { BasicAuthPlugin } from '../plugins/basic-auth/basic-auth.plugin';
 import { AclPlugin } from '../plugins/acl/acl.plugin';
 import { IpRestrictionPlugin } from '../plugins/ip-restriction/ip-restriction.plugin';
@@ -86,6 +87,7 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
       quota as never,
       new PluginRegistryService([
         new BasicAuthPlugin(),
+        new GraphqlGuardPlugin(new ConfigService({})),
         new AclPlugin(manager),
         new IpRestrictionPlugin(),
         new OidcPlugin(provider),
@@ -804,5 +806,18 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
     } finally {
       await new Promise<void>((resolve) => provider.close(() => resolve()));
     }
+  });
+  it('closes active tunnels and rejects upgrades when an HTTP GraphQL policy is enabled', async () => {
+    const ws = connect();
+    await once(ws, 'open');
+    const closed = once(ws, 'close');
+    config.routes[0].graphql = {};
+    await install();
+    await closed;
+    const blocked = await reject();
+    expect(blocked.status).toBe(500);
+    expect(blocked.body.error).toBe('WS_PLUGIN_UNSUPPORTED');
+    expect(received).toHaveLength(1);
+    expect(gateway.occupiedConnections).toBe(0);
   });
 });

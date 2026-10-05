@@ -46,6 +46,8 @@ interface SessionEntry {
 interface Call {
   tenantId: string | null;
   serviceId: string;
+  routeId: string;
+  routePolicy: string;
   certificateTrust?: string;
   target?: string;
   upstream?: http2.ClientHttp2Stream;
@@ -219,6 +221,14 @@ export class GrpcProxyService
             createHash('sha256')
               .update(config?.caCertPem ?? '')
               .digest('hex')) ||
+        call.routePolicy !==
+          createHash('sha256')
+            .update(
+              JSON.stringify(
+                config?.routes.find((route) => route.id === call.routeId),
+              ) ?? '',
+            )
+            .digest('hex') ||
         call.tenantId !== tenantId ||
         !retained.has(call.serviceId) ||
         (call.target && !retained.get(call.serviceId)?.has(call.target))
@@ -462,6 +472,10 @@ export class GrpcProxyService
     const call: Call = {
       tenantId: this.configManager.getTenantId(),
       serviceId: service.id,
+      routeId: route.id,
+      routePolicy: createHash('sha256')
+        .update(JSON.stringify(route))
+        .digest('hex'),
       ...(route.plugins?.some(
         (plugin) => plugin.name === 'mtls' && plugin.config.required === true,
       )
@@ -558,7 +572,11 @@ export class GrpcProxyService
       };
       ctx.req.requestId = ctx.requestId;
       this.authenticate(ctx);
-      const plugins = this.registry.resolve(route.plugins ?? []);
+      const entries =
+        route.graphql && !route.plugins?.some((p) => p.name === 'graphql-guard')
+          ? [...(route.plugins ?? []), { name: 'graphql-guard', config: {} }]
+          : (route.plugins ?? []);
+      const plugins = this.registry.resolve(entries);
       if (plugins.some((plugin) => !plugin.protocols?.includes('grpc')))
         throw new GrpcFailure(12, 'A configured plugin does not support gRPC');
       const stopped = await this.runner.runOnRequest(plugins, ctx);

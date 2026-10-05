@@ -1,4 +1,5 @@
 import { Test } from '@nestjs/testing';
+import { RequestBodyService } from '../../shared/request-body.service';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
@@ -66,6 +67,7 @@ describe('HmacAuthPlugin', () => {
     const module = await Test.createTestingModule({
       providers: [
         HmacAuthPlugin,
+        RequestBodyService,
         { provide: ConfigService, useValue: new ConfigService({}) },
       ],
     }).compile();

@@ -1,6 +1,7 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 
 export type GatewayErrorCode =
+  | 'PLUGIN_CONFIG_INVALID'
   | 'TOKEN_EXPIRED'
   | 'TOKEN_INVALID'
   | 'RATE_LIMIT_EXCEEDED'

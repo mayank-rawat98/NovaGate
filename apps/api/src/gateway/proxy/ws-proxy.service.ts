@@ -383,7 +383,11 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
       this.authenticate(ctx);
       active.principal = ctx.req.user?.id;
       active.policy = this.policy(route, service, active.principal);
-      const plugins = this.registry.resolve(route.plugins ?? []);
+      const entries =
+        route.graphql && !route.plugins?.some((p) => p.name === 'graphql-guard')
+          ? [...(route.plugins ?? []), { name: 'graphql-guard', config: {} }]
+          : (route.plugins ?? []);
+      const plugins = this.registry.resolve(entries);
       if (plugins.some((plugin) => !plugin.protocols?.includes('websocket')))
         throw new WsFailure(
           500,

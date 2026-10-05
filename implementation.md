@@ -631,9 +631,17 @@ graphql?: {
 
 `apps/api/src/gateway/plugins/graphql-guard/`:
 
-- Parse `query` from POST body JSON (no schema needed — just AST depth/complexity)
-- Reject before proxying if limits exceeded
-- `introspectionAllowed: false` blocks `__schema` and `__type` queries
+- Parse GET query parameters, JSON POST and raw GraphQL POST with the pinned official AST parser.
+- Bound query/body bytes, lexical nesting, tokens, upload duration and concurrent admission. Share original body capture with HMAC and request-size policies.
+- Select operations explicitly; detect duplicate definitions, missing/cyclic fragments and introspection inside spreads. Memoize fragment summaries to bound repeated-spread analysis without expanding exponential trees.
+- Count alias/repeated-spread cost conservatively; revalidate after ordered transformations before forwarding.
+- Reject batches, persisted queries and subscriptions until their dedicated policies exist; forbid GET mutations.
+- Validate route/plugin policies in the admin API, reject duplicate plugins, and show one editable dashboard policy with explicit clearing behavior.
+- Reject HTTP-only policies on native protocols and cancel existing calls/tunnels after policy changes.
+
+Issue #53 verifies these protections with 624 tests (gateway 465, admin 148, control plane 10, dashboard 1), build/lint/typecheck gates, desktop/mobile browser accessibility checks and the packaged nonroot OrbStack image. Existing provider, HMAC, mTLS, native gRPC/WebSocket and private RustFS regressions also pass. The first combined run timed out in admin fixture setup; connection checks and the complete admin rerun passed. Formal phase acceptance remains pending.
+
+**Additional requirements to exceed a basic schema-free guard:** implement versioned persisted-operation manifests, schema-aware resolver/pagination cost multipliers, total batch budgets, subscription message/rate policies and response-size bounds. These must integrate with developer tooling and federation rather than silently allowing unanalyzed operations.
 
 ---
 

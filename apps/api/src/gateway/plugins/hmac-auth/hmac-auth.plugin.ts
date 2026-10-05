@@ -19,29 +19,25 @@ import {
   HmacSettings,
 } from '../../../config/configuration';
 
+import {
+  BodyCaptureError,
+  RequestBodyService,
+} from '../../shared/request-body.service';
 type RawRequest = IncomingMessage & { rawBody?: Buffer };
-class BodyFailure extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-  ) {
-    super(code);
-  }
-}
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
 @Injectable()
 export class HmacAuthPlugin implements GatewayPlugin {
   readonly name = 'hmac-auth';
   readonly protocols = ['http'] as const;
-  private pending = 0;
-  private readonly prepared = new WeakMap<
-    IncomingMessage,
-    { release: () => void; lifecycle: boolean }
-  >();
   private readonly settings: HmacSettings;
 
-  constructor(configService: ConfigService<GatewayConfig, true>) {
+  constructor(
+    configService: ConfigService<GatewayConfig, true>,
+    private readonly bodies: RequestBodyService = new RequestBodyService(
+      configService,
+    ),
+  ) {
     this.settings = {
       ...DEFAULT_HMAC,
       ...configService.get('hmac', { infer: true }),
@@ -50,7 +46,7 @@ export class HmacAuthPlugin implements GatewayPlugin {
 
   async prepareRequest(ctx: PluginContext): Promise<PluginShortCircuit | void> {
     const entry = ctx.route.plugins?.find((p) => p.name === this.name);
-    if (!entry || this.prepared.has(ctx.req)) return;
+    if (!entry) return;
     const cfg = entry.config as unknown as HmacPluginConfig;
     if (!this.validConfig(cfg))
       return this.failure(ctx, 500, 'HMAC_CONFIG_INVALID');
@@ -63,38 +59,13 @@ export class HmacAuthPlugin implements GatewayPlugin {
           ? 'HMAC_SIGNATURE_MISSING'
           : 'HMAC_SIGNATURE_INVALID',
       );
-    if (this.pending >= this.settings.maxPendingRequests)
-      return this.failure(ctx, 503, 'HMAC_CAPACITY_EXCEEDED');
-    this.pending++;
-    let released = false;
-    const lifecycle = typeof ctx.res.once === 'function';
-    const release = () => {
-      if (released) return;
-      released = true;
-      this.pending--;
-      this.prepared.delete(ctx.req);
-      if (lifecycle) {
-        ctx.res.off('finish', release);
-        ctx.res.off('close', release);
-      }
-      ctx.signal?.removeEventListener('abort', release);
-    };
-    if (lifecycle) {
-      ctx.res.once('finish', release);
-      ctx.res.once('close', release);
-    }
-    ctx.signal?.addEventListener('abort', release, { once: true });
     try {
-      await this.readBody(ctx.req as RawRequest, ctx.signal, ctx);
-      if (released || ctx.signal?.aborted)
-        throw new BodyFailure(400, 'HMAC_BODY_READ_ERROR');
-      this.prepared.set(ctx.req, { release, lifecycle });
+      await this.bodies.read(ctx);
     } catch (error) {
-      release();
       const failure =
-        error instanceof BodyFailure
+        error instanceof BodyCaptureError
           ? error
-          : new BodyFailure(400, 'HMAC_BODY_READ_ERROR');
+          : new BodyCaptureError(400, 'HMAC_BODY_READ_ERROR');
       return this.failure(ctx, failure.status, failure.code);
     }
   }
@@ -158,11 +129,11 @@ export class HmacAuthPlugin implements GatewayPlugin {
     const preparation = await this.prepareRequest(ctx);
     if (preparation) return preparation;
     try {
-      const body = req.rawBody;
+      const body = await this.bodies.read(ctx);
       if (!Buffer.isBuffer(body))
-        throw new BodyFailure(400, 'HMAC_BODY_READ_ERROR');
+        throw new BodyCaptureError(400, 'HMAC_BODY_READ_ERROR');
       if (ctx.signal?.aborted)
-        throw new BodyFailure(400, 'HMAC_BODY_READ_ERROR');
+        throw new BodyCaptureError(400, 'HMAC_BODY_READ_ERROR');
       // Recheck after upload: a slow body must not extend the freshness window.
       if (
         timestamp !== undefined &&
@@ -185,13 +156,12 @@ export class HmacAuthPlugin implements GatewayPlugin {
       ctx.authentication = { method: this.name };
     } catch (error) {
       const failure =
-        error instanceof BodyFailure
+        error instanceof BodyCaptureError
           ? error
-          : new BodyFailure(400, 'HMAC_BODY_READ_ERROR');
+          : new BodyCaptureError(400, 'HMAC_BODY_READ_ERROR');
       return this.failure(ctx, failure.status, failure.code);
     } finally {
-      const preparation = this.prepared.get(req);
-      if (preparation && !preparation.lifecycle) preparation.release();
+      this.bodies.releaseDetached(ctx);
     }
   }
 
@@ -263,83 +233,6 @@ export class HmacAuthPlugin implements GatewayPlugin {
       Number.isSafeInteger(Number(timestamp)) &&
       Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp)) <= tolerance
     );
-  }
-
-  private readBody(
-    req: RawRequest,
-    signal: AbortSignal | undefined,
-    ctx: PluginContext,
-  ): Promise<Buffer> {
-    const routeLimit = ctx.route.plugins?.find(
-      (p) => p.name === 'request-size-limit',
-    )?.config.maxBodyBytes;
-    const limit =
-      typeof routeLimit === 'number' &&
-      Number.isSafeInteger(routeLimit) &&
-      routeLimit >= 0
-        ? Math.min(routeLimit, this.settings.maxBodyBytes)
-        : this.settings.maxBodyBytes;
-    const length = req.headers['content-length'];
-    if (
-      length !== undefined &&
-      (!/^[0-9]+$/.test(length) || Number(length) > limit)
-    )
-      return Promise.reject(new BodyFailure(413, 'REQUEST_TOO_LARGE'));
-    if (signal?.aborted || req.aborted)
-      return Promise.reject(new BodyFailure(400, 'HMAC_BODY_READ_ERROR'));
-    if (req.rawBody !== undefined) {
-      if (!Buffer.isBuffer(req.rawBody) || req.rawBody.length > limit)
-        return Promise.reject(new BodyFailure(413, 'REQUEST_TOO_LARGE'));
-      return Promise.resolve(req.rawBody);
-    }
-    // A previously consumed stream without cached bytes cannot prove the original body.
-    if (req.readableEnded || req.destroyed)
-      return Promise.reject(new BodyFailure(400, 'HMAC_BODY_READ_ERROR'));
-    return new Promise((resolve, reject) => {
-      const chunks: Buffer[] = [];
-      let bytes = 0;
-      const cleanup = () => {
-        clearTimeout(timer);
-        req.off('data', onData);
-        req.off('end', onEnd);
-        req.off('error', onError);
-        req.off('aborted', onAbort);
-        req.off('close', onClose);
-        signal?.removeEventListener('abort', onAbort);
-      };
-      const fail = (status: number, code: string) => {
-        req.pause();
-        cleanup();
-        reject(new BodyFailure(status, code));
-      };
-      const onAbort = () => fail(400, 'HMAC_BODY_READ_ERROR');
-      const onClose = () => {
-        if (!req.readableEnded) onAbort();
-      };
-      const onError = () => fail(400, 'HMAC_BODY_READ_ERROR');
-      const onData = (chunk: Buffer) => {
-        if (!Buffer.isBuffer(chunk)) return fail(400, 'HMAC_BODY_READ_ERROR');
-        bytes += chunk.length;
-        if (bytes > limit) return fail(413, 'REQUEST_TOO_LARGE');
-        chunks.push(chunk);
-      };
-      const onEnd = () => {
-        cleanup();
-        req.rawBody = Buffer.concat(chunks, bytes);
-        resolve(req.rawBody);
-      };
-      const timer = setTimeout(
-        () => fail(408, 'HMAC_BODY_TIMEOUT'),
-        this.settings.bodyTimeoutMs,
-      );
-      timer.unref();
-      req.on('data', onData);
-      req.once('end', onEnd);
-      req.once('error', onError);
-      req.once('aborted', onAbort);
-      req.once('close', onClose);
-      signal?.addEventListener('abort', onAbort, { once: true });
-    });
   }
 
   private failure(

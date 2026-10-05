@@ -118,3 +118,7 @@ gateway/
 - Path labels in Prometheus must be normalized patterns, never raw URLs
 - Retry only fires on GET/HEAD/OPTIONS by default — never POST/PUT/DELETE unless route opts in
 - Health check unknown state = healthy (avoids dropping traffic at startup)
+
+## GraphQL and body policy invariants
+
+Use shared `RequestBodyService` for original bytes, absolute deadlines and request-lifetime admission. HMAC preparation must run before body consumers. GraphQL uses pinned official AST parsing with lexical/token/byte bounds and memoized fragment DAG summaries; never replace it with regex analysis. Null legacy route policy is disabled. Intersect explicit route/plugin bounds and permit introspection only when all configured policies allow it. Final pure validation follows ordered request hooks. Native protocols reject HTTP-only GraphQL policy and reconcile active streams on policy changes. Log route patterns, never query strings or user agents; request IDs must be validated UUIDs.

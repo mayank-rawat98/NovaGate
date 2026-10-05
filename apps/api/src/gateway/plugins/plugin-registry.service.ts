@@ -21,7 +21,11 @@ export class PluginRegistryService {
   resolve(
     pluginEntries: Array<{ name: string; config: Record<string, unknown> }>,
   ): GatewayPlugin[] {
+    const seen = new Set<string>();
     return pluginEntries.map((entry) => {
+      if (seen.has(entry.name))
+        throw new Error(`Duplicate configured plugin: ${entry.name}`);
+      seen.add(entry.name);
       const plugin = this.pluginMap.get(entry.name);
       if (!plugin) throw new Error(`Unknown configured plugin: ${entry.name}`);
       return plugin;

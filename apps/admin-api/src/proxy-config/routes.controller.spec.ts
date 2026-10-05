@@ -210,4 +210,48 @@ describe('RoutesController', () => {
     expect(ds.query).toHaveBeenCalled();
     expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
   });
+  it.each([
+    { maxDepth: 0 },
+    { maxDepth: 101 },
+    { maxDepth: '10' },
+    { maxComplexity: 0 },
+    { maxComplexity: 100001 },
+    { introspectionAllowed: 'false' },
+    { unknown: true },
+  ])(
+    'rejects unsafe route and plugin GraphQL policies before persistence %j',
+    async (policy) => {
+      const { controller, ds, cp } = await build();
+      await expect(
+        controller.create(TENANT, { graphql: policy as never }),
+      ).rejects.toThrow();
+      await expect(
+        controller.create(TENANT, {
+          plugins: [{ name: 'graphql-guard', config: policy }],
+        }),
+      ).rejects.toThrow();
+      expect(ds.query).not.toHaveBeenCalled();
+      expect(cp.triggerUpdate).not.toHaveBeenCalled();
+    },
+  );
+  it('rejects duplicate policy names instead of applying an ambiguous first configuration', async () => {
+    const { controller, ds } = await build();
+    await expect(
+      controller.create(TENANT, {
+        plugins: [
+          { name: 'graphql-guard', config: { maxDepth: 10 } },
+          { name: 'graphql-guard', config: { maxDepth: 2 } },
+        ],
+      }),
+    ).rejects.toThrow('Duplicate plugin');
+    expect(ds.query).not.toHaveBeenCalled();
+  });
+  it('persists explicit GraphQL clearing and removal of all plugins on edit', async () => {
+    const { controller, ds, cp } = await build();
+    ds.query.mockResolvedValue([{ id: 'fixture' }]);
+    await controller.update(TENANT, 'fixture', { graphql: null, plugins: [] });
+    expect(ds.query.mock.calls[0][1][8]).toBe('[]');
+    expect(ds.query.mock.calls[0][1][9]).toBeNull();
+    expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
+  });
 });

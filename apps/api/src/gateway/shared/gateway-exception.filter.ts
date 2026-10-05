@@ -34,6 +34,7 @@ export class GatewayExceptionFilter implements ExceptionFilter {
 
     const requestIdHeader = request.headers['x-request-id'];
     const requestId =
+      response.locals?.requestId ??
       (Array.isArray(requestIdHeader) ? requestIdHeader[0] : requestIdHeader) ??
       uuidv4();
     response.setHeader('X-Request-ID', requestId);
@@ -44,7 +45,7 @@ export class GatewayExceptionFilter implements ExceptionFilter {
       errorCode: 'DOWNSTREAM_ERROR', // default
       message: 'Unknown error',
       timestamp: new Date().toISOString(),
-      path: request.originalUrl || request.url,
+      path: response.locals?.routePattern ?? 'unmatched',
     };
 
     if (exception instanceof GatewayError) {
@@ -94,7 +95,7 @@ export class GatewayExceptionFilter implements ExceptionFilter {
           exception instanceof Error
             ? exception.stack?.split('\n')[1]?.trim()
             : undefined,
-        path: request.originalUrl || request.url,
+        path: response.locals?.routePattern ?? 'unmatched',
         requestId,
       }),
     );

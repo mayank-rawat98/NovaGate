@@ -20,6 +20,7 @@ import type {
   CreateRouteDto,
   OAuth2PluginConfig,
   HmacPluginConfig,
+  GraphqlPolicy,
 } from '../../../lib/api-client';
 
 const METHOD_COLORS: Record<string, string> = {
@@ -100,6 +101,11 @@ interface HmacAuthConfig {
   maxClockSkewSeconds: string;
   timestampHeader: string;
 }
+interface GraphqlConfig {
+  maxDepth: string;
+  maxComplexity: string;
+  introspectionAllowed: boolean;
+}
 interface AclConfig {
   allow: string;
   deny: string;
@@ -109,6 +115,8 @@ interface MtlsConfig {
 }
 
 interface PluginsFormState {
+  graphql: boolean;
+  graphqlConfig: GraphqlConfig;
   cors: boolean;
   corsConfig: CorsConfig;
   ipRestriction: boolean;
@@ -190,6 +198,12 @@ const EMPTY_PLUGINS_FORM: PluginsFormState = {
     audience: '',
   },
   originalPlugins: [],
+  graphql: false,
+  graphqlConfig: {
+    maxDepth: '10',
+    maxComplexity: '1000',
+    introspectionAllowed: false,
+  },
   hmacAuth: false,
   hmacAuthConfig: {
     mode: 'generic',
@@ -408,6 +422,15 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
     result.push({ name: 'hmac-auth', config: { ...cfg } });
   }
 
+  if (pf.graphql) {
+    const config: GraphqlPolicy = {
+      maxDepth: Number(pf.graphqlConfig.maxDepth),
+      maxComplexity: Number(pf.graphqlConfig.maxComplexity),
+      introspectionAllowed: pf.graphqlConfig.introspectionAllowed,
+    };
+    result.push({ name: 'graphql-guard', config: { ...config } });
+  }
+
   if (pf.acl && (pf.aclConfig.allow || pf.aclConfig.deny)) {
     const cfg: Record<string, unknown> = {};
     if (pf.aclConfig.allow)
@@ -460,6 +483,7 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
       'maxClockSkewSeconds',
       'timestampHeader',
     ],
+    'graphql-guard': ['maxDepth', 'maxComplexity', 'introspectionAllowed'],
     acl: ['allow', 'deny'],
     mtls: ['required'],
   };
@@ -487,11 +511,13 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
   return [...ordered, ...remaining];
 }
 
-function pluginsToForm(plugins: PluginEntry[] | undefined): PluginsFormState {
-  if (!plugins?.length) return EMPTY_PLUGINS_FORM;
-  const state = { ...EMPTY_PLUGINS_FORM, originalPlugins: plugins };
+function pluginsToForm(
+  plugins: PluginEntry[] | undefined,
+  routePolicy?: GraphqlPolicy | null,
+): PluginsFormState {
+  const state = { ...EMPTY_PLUGINS_FORM, originalPlugins: plugins ?? [] };
 
-  for (const p of plugins) {
+  for (const p of plugins ?? []) {
     const cfg = p.config;
     if (p.name === 'cors') {
       state.cors = true;
@@ -600,6 +626,14 @@ function pluginsToForm(plugins: PluginEntry[] | undefined): PluginsFormState {
             : '',
         timestampHeader: (cfg.timestampHeader as string | undefined) ?? '',
       };
+    } else if (p.name === 'graphql-guard') {
+      const policy = cfg as GraphqlPolicy;
+      state.graphql = true;
+      state.graphqlConfig = {
+        maxDepth: String(policy.maxDepth ?? 10),
+        maxComplexity: String(policy.maxComplexity ?? 1000),
+        introspectionAllowed: policy.introspectionAllowed ?? false,
+      };
     } else if (p.name === 'acl') {
       state.acl = true;
       state.aclConfig = {
@@ -614,6 +648,27 @@ function pluginsToForm(plugins: PluginEntry[] | undefined): PluginsFormState {
     }
   }
 
+  if (routePolicy) {
+    const original = plugins?.find((p) => p.name === 'graphql-guard')
+      ?.config as GraphqlPolicy | undefined;
+    const policies = [routePolicy, original].filter(
+      (p) => p != null,
+    ) as GraphqlPolicy[];
+    const depths = policies.flatMap((p) =>
+      p.maxDepth === undefined ? [] : [p.maxDepth],
+    );
+    const costs = policies.flatMap((p) =>
+      p.maxComplexity === undefined ? [] : [p.maxComplexity],
+    );
+    state.graphql = true;
+    state.graphqlConfig = {
+      maxDepth: String(depths.length ? Math.min(...depths) : 10),
+      maxComplexity: String(costs.length ? Math.min(...costs) : 1000),
+      introspectionAllowed: policies.every(
+        (p) => p.introspectionAllowed === true,
+      ),
+    };
+  }
   return state;
 }
 
@@ -642,6 +697,7 @@ function formToDto(
     serviceId: form.serviceId,
     authRequired: form.authRequired,
     enabled: form.enabled,
+    graphql: null, // Dashboard edits consolidate legacy route policy into the plugin.
   };
   if (form.rateLimitOverride)
     dto.rateLimitOverride = Number(form.rateLimitOverride);
@@ -656,7 +712,7 @@ function formToDto(
     };
   }
   const plugins = buildPluginsArray(pluginsForm);
-  if (plugins.length > 0) dto.plugins = plugins;
+  dto.plugins = plugins; // Persist an empty array when all policies are disabled.
   return dto;
 }
 
@@ -811,6 +867,7 @@ function PluginsTab({
     pf.oidc,
     pf.oauth,
     pf.hmacAuth,
+    pf.graphql,
     pf.acl,
     pf.mtls,
   ].filter(Boolean).length;
@@ -1266,6 +1323,62 @@ function PluginsTab({
       <hr className="border-gray-100" />
 
       <PluginSection
+        title="GraphQL Guard"
+        description="Bound query depth and cost across fragments, aliases and GET/POST requests"
+        enabled={pf.graphql}
+        onToggle={(v) => setPf({ graphql: v })}
+      >
+        <div className="grid grid-cols-2 gap-3">
+          <TextInput
+            label="GraphQL maximum depth"
+            value={pf.graphqlConfig.maxDepth}
+            type="number"
+            onChange={(v) =>
+              setPf({ graphqlConfig: { ...pf.graphqlConfig, maxDepth: v } })
+            }
+            placeholder="10"
+          />
+          <TextInput
+            label="GraphQL maximum complexity"
+            value={pf.graphqlConfig.maxComplexity}
+            type="number"
+            onChange={(v) =>
+              setPf({
+                graphqlConfig: { ...pf.graphqlConfig, maxComplexity: v },
+              })
+            }
+            placeholder="1000"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-gray-600">
+            Allow GraphQL introspection
+          </span>
+          <Toggle
+            label="Allow GraphQL introspection"
+            value={pf.graphqlConfig.introspectionAllowed}
+            onChange={(v) =>
+              setPf({
+                graphqlConfig: { ...pf.graphqlConfig, introspectionAllowed: v },
+              })
+            }
+          />
+        </div>
+        <p className="text-xs text-gray-500">
+          Depth must be 1–100 and complexity 1–100000. Introspection is blocked
+          by default; __typename remains available. Cost counts fields at their
+          expanded depth, including fragments. Resolver and pagination limits
+          belong in your GraphQL server.
+        </p>
+        <p className="text-xs text-gray-500">
+          Supports GraphQL queries over GET and JSON or raw GraphQL over POST.
+          Batches, persisted queries, compressed bodies and subscriptions
+          require dedicated support. Gateway operators control upload size,
+          deadlines and parser limits.
+        </p>
+      </PluginSection>
+      <hr className="border-gray-100" />
+      <PluginSection
         title="HMAC Auth"
         description="Validate HMAC request signatures (Stripe, GitHub webhooks)"
         enabled={pf.hmacAuth}
@@ -1481,7 +1594,7 @@ export default function RoutesPage() {
   function openEdit(route: Route) {
     setEditId(route.id);
     setForm(routeToForm(route));
-    setPluginsForm(pluginsToForm(route.plugins));
+    setPluginsForm(pluginsToForm(route.plugins, route.graphql));
     setPanelTab('basic');
     setPanelOpen(true);
   }
@@ -1556,6 +1669,7 @@ export default function RoutesPage() {
     pluginsForm.oidc,
     pluginsForm.oauth,
     pluginsForm.hmacAuth,
+    pluginsForm.graphql,
     pluginsForm.acl,
     pluginsForm.mtls,
   ].filter(Boolean).length;

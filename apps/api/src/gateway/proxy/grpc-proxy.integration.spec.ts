@@ -14,6 +14,7 @@ import { GatewayConfigManagerService } from '../config-manager/gateway-config-ma
 import { LoadBalancerService } from './load-balancer.service';
 import { PluginRegistryService } from '../plugins/plugin-registry.service';
 import { PluginRunnerService } from '../plugins/plugin-runner.service';
+import { GraphqlGuardPlugin } from '../plugins/graphql-guard/graphql-guard.plugin';
 import { BasicAuthPlugin } from '../plugins/basic-auth/basic-auth.plugin';
 import { AclPlugin } from '../plugins/acl/acl.plugin';
 import { IpRestrictionPlugin } from '../plugins/ip-restriction/ip-restriction.plugin';
@@ -60,6 +61,7 @@ describe('native gRPC through a real listener and upstream', () => {
   function makeGateway(settings: Partial<GrpcSettings> = {}) {
     const registry = new PluginRegistryService([
       new BasicAuthPlugin(),
+      new GraphqlGuardPlugin(new ConfigService({})),
       new AclPlugin(manager),
       new IpRestrictionPlugin(),
       { name: 'body-plugin', onRequest: jest.fn() },
@@ -723,5 +725,19 @@ describe('native gRPC through a real listener and upstream', () => {
     expect((await call.finished).status).toBe('14');
     await until(() => closures === 1);
     expect(metrics.setGrpcActiveCalls).toHaveBeenLastCalledWith(0);
+  });
+  it('cancels active calls and rejects new calls when an HTTP GraphQL policy is enabled', async () => {
+    mode = 'stall';
+    const call = request();
+    call.stream.write(frame('test'));
+    await until(() => received.length === 1);
+    config.routes[0].graphql = {};
+    await install();
+    expect((await call.finished).status).toBe('14');
+    await until(() => closures === 1);
+    const blocked = request();
+    blocked.stream.end(frame('test'));
+    expect((await blocked.finished).status).toBe('12');
+    expect(received).toHaveLength(1);
   });
 });
