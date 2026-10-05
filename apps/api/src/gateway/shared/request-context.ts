@@ -11,6 +11,7 @@ export interface RequestWithUser extends Request {
 export interface ResponseWithLocals extends Response {
   locals: {
     trace?: GatewayTraceHandle;
+    errorCode?: string;
     requestId?: string;
     requestStart?: number;
     routePattern?: string;

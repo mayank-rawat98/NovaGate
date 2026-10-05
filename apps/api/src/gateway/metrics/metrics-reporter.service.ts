@@ -42,6 +42,7 @@ export class MetricsReporterService implements OnModuleInit, OnModuleDestroy {
             p95: snapshot.p95Ms,
             p99: snapshot.p99Ms,
             errorRate: snapshot.errorRate,
+            window: snapshot.window,
           },
         },
         this.settings.maxBufferedBytes,

@@ -1,6 +1,10 @@
 import { ConfigService } from '@nestjs/config';
 import { TraceIngestionService } from '../ingestion/trace-ingestion.service';
-import { GatewayCloseCode, type TraceSpan } from '@api-gateway/shared-types';
+import {
+  GatewayCloseCode,
+  METRIC_LATENCY_BUCKETS,
+  type TraceSpan,
+} from '@api-gateway/shared-types';
 import { randomUUID, createHash } from 'crypto';
 import { once } from 'events';
 import { readFileSync } from 'fs';
@@ -107,7 +111,7 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
         `CREATE TABLE ${schema}.consumers (id UUID, "revokedAt" TIMESTAMP)`,
       );
       await ds.query(
-        `CREATE TABLE ${schema}.metrics_snapshots (rps FLOAT, "p50Ms" INTEGER, "p95Ms" INTEGER, "p99Ms" INTEGER, "errorRate" FLOAT, timestamp TIMESTAMP)`,
+        `CREATE TABLE ${schema}.metrics_snapshots (rps FLOAT, "p50Ms" INTEGER, "p95Ms" INTEGER, "p99Ms" INTEGER, "errorRate" FLOAT, timestamp TIMESTAMPTZ, "aggregateWindow" JSONB)`,
       );
       await ds.query(`CREATE TABLE ${schema}.trace_spans (
         "traceId" VARCHAR(32), "spanId" VARCHAR(16), "parentSpanId" VARCHAR(16), name VARCHAR(128), kind VARCHAR,
@@ -281,6 +285,62 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
       );
       await until(async () => seen.length === 2);
       expect(seen[1].payload.rps).toBe(4.25);
+    } finally {
+      subscriber.disconnect();
+    }
+  });
+  it('persists validated histogram evidence on the authenticated tenant and preserves legacy null metadata', async () => {
+    const subscriber = new Redis(process.env.TEST_REDIS_URL as string);
+    await subscriber.subscribe(`metrics:${tenantId}`);
+    const seen: Array<Record<string, unknown>> = [];
+    subscriber.on('message', (_channel, bytes) => seen.push(JSON.parse(bytes)));
+    const window = {
+      windowMs: 2000,
+      requestCount: 5,
+      errorCount: 2,
+      timeoutCount: 1,
+      latencyCounts: METRIC_LATENCY_BUCKETS.map((bucket) =>
+        bucket === 10 ? 5 : 0,
+      ),
+    };
+    try {
+      const { ws } = await connect(apiKey);
+      ws.send(
+        JSON.stringify({
+          type: 'metrics',
+          tenantId: secondId,
+          payload: {
+            rps: 2.5,
+            p50: 10,
+            p95: 10,
+            p99: 10,
+            errorRate: 0.4,
+            window,
+          },
+        }),
+      );
+      await until(async () => seen.length === 1);
+      expect(seen[0]).not.toHaveProperty('window');
+      expect(seen[0]).not.toHaveProperty('aggregateWindow');
+      const [stored] = await ds.query(
+        `SELECT "aggregateWindow" FROM tenant_${tenantId.replace(/-/g, '_')}.metrics_snapshots WHERE rps = 2.5 ORDER BY timestamp DESC LIMIT 1`,
+      );
+      expect(stored.aggregateWindow).toEqual(window);
+      const other = await ds.query(
+        `SELECT "aggregateWindow" FROM tenant_${secondId.replace(/-/g, '_')}.metrics_snapshots WHERE "aggregateWindow" IS NOT NULL`,
+      );
+      expect(other).toEqual([]);
+      ws.send(
+        JSON.stringify({
+          type: 'metrics',
+          payload: { rps: 6.5, p50: 1, p95: 2, p99: 3, errorRate: 0 },
+        }),
+      );
+      await until(async () => seen.length === 2);
+      const [legacy] = await ds.query(
+        `SELECT "aggregateWindow" FROM tenant_${tenantId.replace(/-/g, '_')}.metrics_snapshots WHERE rps = 6.5 ORDER BY timestamp DESC LIMIT 1`,
+      );
+      expect(legacy.aggregateWindow).toBeNull();
     } finally {
       subscriber.disconnect();
     }

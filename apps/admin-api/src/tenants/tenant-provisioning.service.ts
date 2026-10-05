@@ -1,3 +1,4 @@
+import { alertSchemaSql } from '../alerts/alert-schema';
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import * as crypto from 'crypto';
@@ -127,9 +128,11 @@ export class TenantProvisioningService {
           "p95Ms" INTEGER,
           "p99Ms" INTEGER,
           "errorRate" FLOAT,
-          timestamp TIMESTAMPTZ
+          timestamp TIMESTAMPTZ,
+          "aggregateWindow" JSONB
         )
       `);
+      await manager.query(alertSchemaSql(tenantId));
       await manager.query(
         `CREATE INDEX IF NOT EXISTS metrics_snapshots_time ON ${schemaName}.metrics_snapshots (timestamp DESC)`,
       );

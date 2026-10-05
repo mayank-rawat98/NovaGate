@@ -120,10 +120,98 @@ export interface MetricsSnapshot {
 }
 export const MAX_METRIC_RATE = 1000000000;
 export const MAX_METRIC_LATENCY_MS = 3600000;
+export const MAX_METRIC_WINDOW_MS = 60000;
 export const METRIC_LATENCY_BUCKETS = [
   0, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000,
   300000, 3600000,
 ] as const;
+
+/** Counts for one completed reporting interval; absent on legacy reports. */
+export interface MetricWindow {
+  windowMs: number;
+  requestCount: number;
+  errorCount: number;
+  timeoutCount: number;
+  latencyCounts: number[];
+}
+export interface MetricReportSnapshot extends MetricsSnapshot {
+  window: MetricWindow;
+}
+export function metricPercentile(
+  counts: readonly number[],
+  requestCount: number,
+  percentile: 0.5 | 0.95 | 0.99,
+): number {
+  if (!requestCount) return 0;
+  const rank = Math.ceil(requestCount * percentile);
+  let cumulative = 0;
+  for (let i = 0; i < METRIC_LATENCY_BUCKETS.length; i++) {
+    cumulative += counts[i];
+    if (cumulative >= rank) return METRIC_LATENCY_BUCKETS[i];
+  }
+  return MAX_METRIC_LATENCY_MS;
+}
+export function validateMetricWindow(input: unknown): MetricWindow {
+  if (!input || typeof input !== 'object' || Array.isArray(input))
+    throw new Error('Invalid metric window');
+  const value = input as Record<string, unknown>;
+  const fields = [
+    'windowMs',
+    'requestCount',
+    'errorCount',
+    'timeoutCount',
+    'latencyCounts',
+  ];
+  if (
+    Object.keys(value).length !== fields.length ||
+    Object.keys(value).some((key) => !fields.includes(key))
+  )
+    throw new Error('Invalid metric window');
+  const { windowMs, requestCount, errorCount, timeoutCount, latencyCounts } =
+    value;
+  if (
+    typeof windowMs !== 'number' ||
+    !Number.isFinite(windowMs) ||
+    windowMs < 1 ||
+    windowMs > MAX_METRIC_WINDOW_MS
+  )
+    throw new Error('Invalid metric window duration');
+  if (
+    [requestCount, errorCount, timeoutCount].some(
+      (count) =>
+        typeof count !== 'number' ||
+        !Number.isSafeInteger(count) ||
+        count < 0 ||
+        count > MAX_METRIC_RATE,
+    )
+  )
+    throw new Error('Invalid metric window count');
+  const requests = requestCount as number;
+  const errors = errorCount as number;
+  const timeouts = timeoutCount as number;
+  if (
+    errors > requests ||
+    timeouts > errors ||
+    !Array.isArray(latencyCounts) ||
+    latencyCounts.length !== METRIC_LATENCY_BUCKETS.length ||
+    Array.from(latencyCounts).some(
+      (count) =>
+        typeof count !== 'number' ||
+        !Number.isSafeInteger(count) ||
+        count < 0 ||
+        count > MAX_METRIC_RATE,
+    ) ||
+    latencyCounts.reduce((sum, count) => sum + count, 0) !== requests
+  )
+    throw new Error('Invalid metric window histogram');
+  return {
+    windowMs,
+    requestCount: requests,
+    errorCount: errors,
+    timeoutCount: timeouts,
+    latencyCounts: [...latencyCounts],
+  };
+}
 
 export interface MetricsMessage extends BaseWsMessage {
   type: 'metrics';
@@ -133,6 +221,7 @@ export interface MetricsMessage extends BaseWsMessage {
     p95: number;
     p99: number;
     errorRate: number;
+    window?: MetricWindow;
   };
 }
 
@@ -144,8 +233,7 @@ export function validateMetricPayload(
   const value = payload as Record<string, unknown>;
   const keys = ['rps', 'p50', 'p95', 'p99', 'errorRate'];
   if (
-    Object.keys(value).length !== keys.length ||
-    Object.keys(value).some((key) => !keys.includes(key)) ||
+    Object.keys(value).some((key) => ![...keys, 'window'].includes(key)) ||
     keys.some(
       (key) =>
         typeof value[key] !== 'number' ||
@@ -154,6 +242,31 @@ export function validateMetricPayload(
     )
   )
     throw new Error('Invalid metric snapshot');
+  const window = Object.hasOwn(value, 'window')
+    ? validateMetricWindow(value.window)
+    : undefined;
+  if (window) {
+    const expectedRate = Math.min(
+      MAX_METRIC_RATE,
+      (window.requestCount * 1000) / window.windowMs,
+    );
+    const expectedErrors = window.requestCount
+      ? window.errorCount / window.requestCount
+      : 0;
+    if (
+      Math.abs((value.rps as number) - expectedRate) >
+        Number.EPSILON * Math.max(1, expectedRate) * 8 ||
+      Math.abs((value.errorRate as number) - expectedErrors) >
+        Number.EPSILON * 8 ||
+      (value.p50 as number) !==
+        metricPercentile(window.latencyCounts, window.requestCount, 0.5) ||
+      (value.p95 as number) !==
+        metricPercentile(window.latencyCounts, window.requestCount, 0.95) ||
+      (value.p99 as number) !==
+        metricPercentile(window.latencyCounts, window.requestCount, 0.99)
+    )
+      throw new Error('Invalid metric window summary');
+  }
   if (
     (value.rps as number) > MAX_METRIC_RATE ||
     (value.errorRate as number) > 1 ||
@@ -170,6 +283,7 @@ export function validateMetricPayload(
     p95: value.p95 as number,
     p99: value.p99 as number,
     errorRate: value.errorRate as number,
+    ...(window ? { window } : {}),
   };
 }
 

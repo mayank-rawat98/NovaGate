@@ -250,13 +250,14 @@ export class LogIngestionService implements OnModuleInit, OnModuleDestroy {
         const [stored] = await manager.query<
           Array<Omit<MetricsSnapshot, 'timestamp'> & { timestamp: Date }>
         >(
-          `INSERT INTO ${schema}.metrics_snapshots (rps, "p50Ms", "p95Ms", "p99Ms", "errorRate", timestamp) VALUES ($1::double precision, $2, $3, $4, $5, NOW()) RETURNING rps, "p50Ms", "p95Ms", "p99Ms", "errorRate", timestamp`,
+          `INSERT INTO ${schema}.metrics_snapshots (rps, "p50Ms", "p95Ms", "p99Ms", "errorRate", timestamp, "aggregateWindow") VALUES ($1::double precision, $2, $3, $4, $5, NOW(), $6::jsonb) RETURNING rps, "p50Ms", "p95Ms", "p99Ms", "errorRate", timestamp`,
           [
             value.rps,
             Math.round(value.p50),
             Math.round(value.p95),
             Math.round(value.p99),
             value.errorRate,
+            value.window ? JSON.stringify(value.window) : null,
           ],
         );
         await manager.query(

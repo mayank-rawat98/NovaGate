@@ -53,6 +53,7 @@ export class GatewayExceptionFilter implements ExceptionFilter {
       errorEvent.message = exception.message;
       errorEvent.statusCode = exception.getStatus();
 
+      response.locals.errorCode = errorEvent.errorCode;
       this.telemetryService.sendError(errorEvent);
 
       response.status(exception.getStatus()).json({
@@ -76,6 +77,7 @@ export class GatewayExceptionFilter implements ExceptionFilter {
       errorEvent.errorCode = code;
       errorEvent.message = message;
       errorEvent.statusCode = status;
+      response.locals.errorCode = errorEvent.errorCode;
       this.telemetryService.sendError(errorEvent);
 
       response.status(status).json({
@@ -99,6 +101,7 @@ export class GatewayExceptionFilter implements ExceptionFilter {
         requestId,
       }),
     );
+    response.locals.errorCode = errorEvent.errorCode;
     this.telemetryService.sendError(errorEvent);
     response.status(HttpStatus.BAD_GATEWAY).json({
       error: 'DOWNSTREAM_ERROR',

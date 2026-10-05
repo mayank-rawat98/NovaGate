@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { LOG_EXPORT_SCHEMA } from '../log-export/log-export-schema';
 import { traceSchemaSql } from './trace-schema';
+import { ALERT_SCHEDULE_SCHEMA, alertSchemaSql } from '../alerts/alert-schema';
 import { tenantSchema } from '../tenants/tenant-schema';
 
 @Injectable()
@@ -33,14 +34,19 @@ export class MigrationService implements OnModuleInit {
       await manager.query(`CREATE UNIQUE INDEX IF NOT EXISTS pending_config_updates_tenant_unique
         ON public.pending_config_updates ("tenantId")`);
       await manager.query(LOG_EXPORT_SCHEMA);
+      await manager.query(ALERT_SCHEDULE_SCHEMA);
       const tenants = await manager.query<Array<{ id: string }>>(
         `SELECT id FROM public.tenants`,
       );
       for (const tenant of tenants) {
         const schema = tenantSchema(tenant.id);
         await manager.query(traceSchemaSql(schema));
+        await manager.query(alertSchemaSql(tenant.id));
         await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.metrics_snapshots ALTER COLUMN rps TYPE DOUBLE PRECISION USING rps::double precision`,
+        );
+        await manager.query(
+          `ALTER TABLE IF EXISTS ${schema}.metrics_snapshots ADD COLUMN IF NOT EXISTS "aggregateWindow" JSONB`,
         );
         const metricColumns = await manager.query<Array<{ data_type: string }>>(
           `SELECT data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'metrics_snapshots' AND column_name = 'timestamp'`,
