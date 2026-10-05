@@ -22,7 +22,7 @@ Live-network checks now verify a trusted TLS listener and rejection of its certi
 
 The slow-client regression streams over 8 MB while a paused client holds the producer below 1 MB, then verifies complete delivery and successful trailers after resuming. Normal upstream closure no longer cancels response bytes waiting to drain. Shutdown checks cover successful calls during grace and unavailable responses after grace. The repeatable `api:grpc-container-smoke` Nx task verifies the non-root Node 24 production image through trusted listener/upstream TLS, the actual registered native health RPC, authenticated protobuf unary calls with pinned grpcurl, configuration ACKs, metadata/trailers and rejection of an untrusted upstream certificate. Its current verifier removes disposable containers, its private network and certificates afterward; issue #44 removes the data-plane database requirement.
 
-These are issue-level implementation and regression results. Full phase 3 acceptance, formal WebSocket runtime acceptance, least-connections/GraphQL work and the final all-phase campaign remain required.
+These are issue-level implementation and regression results. Full phase 3 acceptance, formal WebSocket runtime acceptance, least-connections work and the final all-phase campaign remain required.
 
 ## Data-plane administration boundary — issue #44
 
@@ -40,7 +40,7 @@ All five projects passed test/lint/typecheck/build; final gateway checks pass 32
 
 Per the 5 October 2026 workflow instruction, CI is reusable only and runs before publication/deployment on a push to `main`. PR/dev/tag/manual triggers are removed; each image build depends on verification, and deployment depends on verification plus every image build. YAML trigger/dependency checks pass locally; this development PR intentionally runs no GitHub CI or production release. Local feature/regression gates remain required for each issue.
 
-Authentication applies to the handshake. Opaque tunnels drain during shutdown grace, then remaining sockets are terminated without injecting frames into partially streamed messages. Formal protocol/phase acceptance, least-connections, GraphQL analysis, remaining phases and comparative benchmarks are still pending.
+Authentication applies to the handshake. Opaque tunnels drain during shutdown grace, then remaining sockets are terminated without injecting frames into partially streamed messages. Formal protocol/phase acceptance, least-connections, remaining phases and comparative benchmarks are still pending.
 
 ## Code audit — 4 October 2026
 
@@ -51,7 +51,7 @@ The code contains substantial work for phases 0–3, but file presence does not 
 | 0     | Weighted balancer, active health probes, HTTP retry loop, size/CORS/IP plugins                 | Issue #29 repairs peer-IP trust/IPv6, bounded binary body replay, browser preflight and HTTP retry termination; issue #39 adds configurable service probes, bounded lifecycle and explicit all-down routing; whole-phase load/chaos acceptance remains                                                      |
 | 1     | Plugin contracts, runner, registry, thirteen first-party plugins, dashboard route plugin forms | Plugin aggregate registration and fail-closed name resolution repaired in issue #27, verified through the real Nest module; broader runtime plugin acceptance remains                                                                                                                                       |
 | 2     | OIDC, client credentials, HMAC, ACL, mTLS implementations and unit tests                       | Verify real providers and TLS handshakes; Tenant-bound REST authorization and groups repaired in #27; provider isolation/bounds verified in #47 and native/proxy mTLS plus live trust rotation in #49. Bounded Stripe/GitHub webhook HMAC verified in #51; external Auth0 and final phase acceptance remain |
-| 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                      | Issue #29 verifies real HTTP/2 response hooks before sending the body and automatic GraphQL guard activation; Native gRPC/WebSocket runtime checks now exist (#41/#43); formal protocol acceptance and least-connections remain                                                                             |
+| 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                      | Native gRPC/WebSocket checks exist (#41/#43), bounded AST GraphQL policies are verified (#53), and issue #55 hardens HTTP/2 lifecycle, limits and health-compatible fallback; formal protocol acceptance and least-connections remain                                                                       |
 | 4     | Logs/health/metrics REST views and private RustFS manual NDJSON archives (#37)                 | Tracing, live metrics, alert delivery/history, scheduled/external exports, privacy controls and consumer aggregates remain to implement                                                                                                                                                                     |
 | 5     | Existing REST configuration primitives                                                         | Declarative reconciliation, CLI, portal, Terraform, plugin SDK and third-party loading remain to implement                                                                                                                                                                                                  |
 | 6     | No verified implementations                                                                    | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                                                                   |
@@ -608,8 +608,14 @@ Upstream connections from gateway → downstream currently use HTTP/1.1 (`http-p
 
 - Per-service `h2: boolean` flag; default false
 - When enabled: use `node:http2` client session pool per target URL
-- Session pool: max 10 sessions per target, idle timeout 30s
-- Falls back to HTTP/1.1 on connection error (no breaking change)
+- Bound sessions per origin (default 10), origins and sessions globally (64), active requests (64), response bytes (4 MiB) and metadata (16 KiB). Configuration validation and operator overrides are mandatory.
+- Wait for peer SETTINGS and honor stream capacity before dispatch; reject excess admission without unbounded queues.
+- Close idle sockets (30s), drain GOAWAY sessions, remove empty map entries and reconcile removed targets/tenant changes. Cancel work during shutdown and caller disconnects.
+- Use absolute connection/stream deadlines, including peers sending continuous trickle data, and preserve original bytes through shared body capture.
+- Fall back to verified HTTP/1 only for recognized connection/protocol failure before opening an application stream. Never bypass certificate verification, capacity or replay a dispatched mutation. Retain the remaining upstream deadline and response/error hooks.
+- Bound cached HTTP proxy handlers, including timeout variants used by fallback.
+
+Issue #55 verifies these requirements with 653 tests (gateway 494, admin 148, control plane 10, dashboard 1), build/lint/typecheck gates and the rebuilt nonroot OrbStack image. HTTP health probes share predispatch fallback classification and the original absolute probe deadline; gRPC probes remain strict. The packaged run verifies HTTPS binary forwarding/fallback, response limits, reset/deadline behavior and recovery alongside retained authentication/protocol checks. Formal phase acceptance remains pending.
 
 ---
 

@@ -50,6 +50,9 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
   let url: string;
   let target: string;
   let h2target: string;
+  let h1Trickle: boolean;
+  let h2Mode: 'normal' | 'reset' | 'stall';
+  let h2Bodies: Buffer[];
   let jwksUrl: string;
   let config: TenantConfig;
   let allUnhealthy = false;
@@ -124,14 +127,30 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
         res.statusCode =
           mode.failOnce && received.length === 1 ? 502 : mode.status;
         res.setHeader('content-type', 'application/json');
+        if (h1Trickle) {
+          const timer = setInterval(() => res.write('x'), 20);
+          res.once('close', () => clearInterval(timer));
+          return;
+        }
         res.end(JSON.stringify(entry));
       });
     });
     target = await listen(upstream);
     h2upstream = http2.createServer();
     h2upstream.on('stream', (stream) => {
-      stream.respond({ ':status': 200, 'x-upstream': 'remove-me' });
-      stream.end('h2-body');
+      stream.on('error', () => undefined);
+      const chunks: Buffer[] = [];
+      stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+      stream.once('end', () => {
+        h2Bodies.push(Buffer.concat(chunks));
+        if (h2Mode === 'stall') return;
+        if (h2Mode === 'reset') {
+          stream.close(http2.constants.NGHTTP2_CANCEL);
+          return;
+        }
+        stream.respond({ ':status': 200, 'x-upstream': 'yes' });
+        stream.end('h2-body');
+      });
     });
     h2target = await listen(h2upstream);
     jwks = http.createServer((_, res) => {
@@ -197,6 +216,9 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
 
   beforeEach(() => {
     allUnhealthy = false;
+    h1Trickle = false;
+    h2Mode = 'normal';
+    h2Bodies = [];
     received = [];
     mode = { status: 200, failOnce: false };
     rateLimit.check.mockClear();
@@ -433,6 +455,69 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
     expect(response.headers.get('x-transformed')).toBe('yes');
     expect(response.headers.get('x-upstream')).toBeNull();
     expect(await response.text()).toBe('h2-body');
+  });
+  it('falls back before dispatch and sends a binary POST exactly once through HTTP/1', async () => {
+    config.services[0].h2 = true;
+    config.routes[0].plugins = [
+      {
+        name: 'response-transform',
+        config: { addHeaders: { 'x-fallback': 'verified' } },
+      },
+    ];
+    const bytes = Buffer.from([0, 255, 13, 10, 1, 32]);
+    const response = await fetch(`${url}/api?hello=world`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: bytes,
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-fallback')).toBe('verified');
+    expect(received).toHaveLength(1);
+    expect(received[0].body).toBe(bytes.toString('base64'));
+    expect(received[0].url).toBe('/?hello=world');
+  });
+  it('enforces the remaining absolute deadline when HTTP/1 fallback continuously streams', async () => {
+    config.services[0].h2 = true;
+    config.services[0].timeoutMs = 150;
+    h1Trickle = true;
+    const started = Date.now();
+    const response = await fetch(`${url}/api`, {
+      signal: AbortSignal.timeout(1000),
+    });
+    expect(response.status).toBe(200);
+    await expect(response.text()).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(600);
+    expect(received).toHaveLength(1);
+  });
+  it('never falls back or retries a POST after an HTTP/2 application stream was dispatched', async () => {
+    config.services[0].h2 = true;
+    config.services[0].targets = [{ url: h2target, weight: 1 }];
+    config.routes[0].retry = { attempts: 2, on: [502], methods: ['POST'] };
+    h2Mode = 'reset';
+    const response = await fetch(`${url}/api`, {
+      method: 'POST',
+      body: 'mutation',
+    });
+    expect(response.status).toBe(502);
+    expect(h2Bodies).toEqual([Buffer.from('mutation')]);
+    expect(received).toHaveLength(0);
+    expect(metrics.incrementProxyRetry).not.toHaveBeenCalled();
+  });
+  it('maps an absolute HTTP/2 deadline to 504 with the normalized request ID', async () => {
+    config.services[0].h2 = true;
+    config.services[0].timeoutMs = 100;
+    config.services[0].targets = [{ url: h2target, weight: 1 }];
+    h2Mode = 'stall';
+    const response = await fetch(`${url}/api`);
+    expect(response.status).toBe(504);
+    expect(await response.json()).toMatchObject({
+      error: 'DOWNSTREAM_TIMEOUT',
+      requestId: expect.any(String),
+    });
+    expect(metrics.incrementDownstreamTimeout).toHaveBeenCalledWith(
+      config.services[0].name,
+    );
+    expect(received).toHaveLength(0);
   });
   it('cancels HTTP provider verification when the client disconnects', async () => {
     let started!: () => void;

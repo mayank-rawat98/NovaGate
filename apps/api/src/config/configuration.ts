@@ -2,6 +2,21 @@ import {
   MAX_TENANT_CA_BUNDLE_BYTES,
   MAX_TENANT_CA_CERTIFICATES,
 } from '@api-gateway/shared-types';
+export const DEFAULT_PROXY_HANDLERS = { maxCacheEntries: 256 };
+
+export const DEFAULT_HTTP2 = {
+  maxTargets: 64,
+  maxSessions: 64,
+  maxSessionsPerTarget: 10,
+  maxStreamsPerSession: 100,
+  maxActiveRequests: 64,
+  maxResponseBytes: 4194304,
+  maxHeaderBytes: 16384,
+  connectTimeoutMs: 5000,
+  idleTimeoutMs: 30000,
+};
+export type Http2Settings = typeof DEFAULT_HTTP2;
+
 export const DEFAULT_UPSTREAM_HEALTH = {
   defaultIntervalMs: 10000,
   failureThreshold: 3,
@@ -130,6 +145,7 @@ export interface GatewayConfig {
   proxy: {
     timeout: number;
     services: ProxyServiceConfig[];
+    maxHandlerCacheEntries: number;
   };
   upstreamHealth: UpstreamHealthSettings;
   grpc: GrpcSettings;
@@ -139,6 +155,7 @@ export interface GatewayConfig {
   hmac: HmacSettings;
   graphql: GraphqlSettings;
   bodyCapture: BodyCaptureSettings;
+  http2: Http2Settings;
   tls: ListenerTlsSettings;
   rateLimit: {
     windowMs: number;
@@ -157,6 +174,37 @@ const parseProxyServices = (): ProxyServiceConfig[] => {
 };
 
 export default (): GatewayConfig => ({
+  http2: {
+    maxTargets: Number(
+      process.env.HTTP2_MAX_TARGETS ?? DEFAULT_HTTP2.maxTargets,
+    ),
+    maxSessions: Number(
+      process.env.HTTP2_MAX_SESSIONS ?? DEFAULT_HTTP2.maxSessions,
+    ),
+    maxSessionsPerTarget: Number(
+      process.env.HTTP2_MAX_SESSIONS_PER_TARGET ??
+        DEFAULT_HTTP2.maxSessionsPerTarget,
+    ),
+    maxStreamsPerSession: Number(
+      process.env.HTTP2_MAX_STREAMS_PER_SESSION ??
+        DEFAULT_HTTP2.maxStreamsPerSession,
+    ),
+    maxActiveRequests: Number(
+      process.env.HTTP2_MAX_ACTIVE_REQUESTS ?? DEFAULT_HTTP2.maxActiveRequests,
+    ),
+    maxResponseBytes: Number(
+      process.env.HTTP2_MAX_RESPONSE_BYTES ?? DEFAULT_HTTP2.maxResponseBytes,
+    ),
+    maxHeaderBytes: Number(
+      process.env.HTTP2_MAX_HEADER_BYTES ?? DEFAULT_HTTP2.maxHeaderBytes,
+    ),
+    connectTimeoutMs: Number(
+      process.env.HTTP2_CONNECT_TIMEOUT_MS ?? DEFAULT_HTTP2.connectTimeoutMs,
+    ),
+    idleTimeoutMs: Number(
+      process.env.HTTP2_IDLE_TIMEOUT_MS ?? DEFAULT_HTTP2.idleTimeoutMs,
+    ),
+  },
   tls: {
     handshakeTimeoutMs: Number(
       process.env.TLS_HANDSHAKE_TIMEOUT_MS ?? DEFAULT_TLS.handshakeTimeoutMs,
@@ -250,6 +298,10 @@ export default (): GatewayConfig => ({
     secret: process.env.JWT_SECRET ?? '',
   },
   proxy: {
+    maxHandlerCacheEntries: Number(
+      process.env.PROXY_MAX_HANDLER_CACHE_ENTRIES ??
+        DEFAULT_PROXY_HANDLERS.maxCacheEntries,
+    ),
     timeout: parseInt(process.env.PROXY_TIMEOUT_MS ?? '10000', 10) || 10000,
     services: parseProxyServices(),
   },

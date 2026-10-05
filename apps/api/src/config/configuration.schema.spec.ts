@@ -250,3 +250,32 @@ describe('native TLS and mTLS trust policy startup', () => {
     ).toBeDefined();
   });
 });
+
+describe('bounded HTTP/2 startup settings', () => {
+  it.each([
+    ['HTTP2_MAX_TARGETS', 0],
+    ['HTTP2_MAX_TARGETS', 1025],
+    ['HTTP2_MAX_SESSIONS', 0],
+    ['HTTP2_MAX_SESSIONS_PER_TARGET', 33],
+    ['HTTP2_MAX_STREAMS_PER_SESSION', 1.5],
+    ['HTTP2_MAX_ACTIVE_REQUESTS', 1025],
+    ['HTTP2_MAX_RESPONSE_BYTES', 67108865],
+    ['HTTP2_MAX_HEADER_BYTES', 1023],
+    ['HTTP2_CONNECT_TIMEOUT_MS', 99],
+    ['HTTP2_IDLE_TIMEOUT_MS', 300001],
+    ['PROXY_MAX_HANDLER_CACHE_ENTRIES', 4097],
+  ])('rejects unsafe %s=%s', (name, value) => {
+    expect(
+      configSchema.validate({ ...required, [name]: value }).error,
+    ).toBeDefined();
+  });
+  it('validates finite default pool and cache budgets', () => {
+    expect(configSchema.validate(required).value).toMatchObject({
+      HTTP2_MAX_TARGETS: 64,
+      HTTP2_MAX_SESSIONS: 64,
+      HTTP2_MAX_ACTIVE_REQUESTS: 64,
+      HTTP2_MAX_RESPONSE_BYTES: 4194304,
+      PROXY_MAX_HANDLER_CACHE_ENTRIES: 256,
+    });
+  });
+});

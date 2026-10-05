@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as http from 'http';
+import { performance } from 'node:perf_hooks';
 import type * as net from 'net';
 import type { OutgoingHttpHeaders } from 'http';
 import type { Request } from 'express';
@@ -24,7 +25,13 @@ import { UpstreamHealthService } from '../health/upstream-health.service';
 import { matchRoute } from '../shared/route-matcher';
 import { PluginRegistryService } from '../plugins/plugin-registry.service';
 import { PluginRunnerService } from '../plugins/plugin-runner.service';
-import { Http2SessionPool } from './http2-session-pool.service';
+import { Http2SessionPool, Http2PoolError } from './http2-session-pool.service';
+import { DEFAULT_PROXY_HANDLERS } from '../../config/configuration';
+import { ConfigService } from '@nestjs/config';
+import {
+  RequestBodyService,
+  BodyCaptureError,
+} from '../shared/request-body.service';
 
 // Per-request context attached to the request object so cached handlers can
 // read retry state without holding per-request closures.
@@ -33,6 +40,7 @@ interface RetryContext {
   isLastAttempt: boolean;
   serviceName: string;
   resolve: (statusCode: number) => void;
+  abort?: (error: NodeJS.ErrnoException) => void;
 }
 
 interface PluginState {
@@ -76,6 +84,10 @@ export class ProxyService {
     private readonly pluginRegistry: PluginRegistryService,
     private readonly pluginRunner: PluginRunnerService,
     private readonly http2Pool: Http2SessionPool,
+    private readonly bodies: RequestBodyService = new RequestBodyService(
+      new ConfigService(),
+    ),
+    private readonly config: ConfigService = new ConfigService(),
   ) {}
 
   async forward(request: Request, response: ResponseWithLocals): Promise<void> {
@@ -281,9 +293,11 @@ export class ProxyService {
     response: ResponseWithLocals,
     isLastAttempt: boolean,
     retryOn: number[],
+    absoluteTimeoutMs?: number,
   ): Promise<number> {
     return new Promise<number>((resolve) => {
       let settled = false;
+      let deadline: NodeJS.Timeout | undefined;
       let cleanup: () => void = () => undefined;
       const resolveOnce = (code: number) => {
         if (!settled) {
@@ -294,24 +308,67 @@ export class ProxyService {
         }
       };
 
-      (request as unknown as GwRequest).__gw_retry = {
+      const retryContext: RetryContext = {
         retryOn,
         isLastAttempt,
         serviceName: service.name,
         resolve: resolveOnce,
-      } satisfies RetryContext;
+      };
+      (request as unknown as GwRequest).__gw_retry = retryContext;
 
       const handler = this.getHandler(targetUrl, service.timeoutMs ?? 10_000);
 
       // Fallback: if the handler calls next() without a proxyRes/error event
       const onFinish = () => resolveOnce(response.statusCode ?? 200);
-      const onClose = () => resolveOnce(response.statusCode ?? 200);
+      const onClose = () => {
+        retryContext.abort?.(
+          Object.assign(new Error('Caller cancelled'), { code: 'ECANCELED' }),
+        );
+        resolveOnce(response.statusCode ?? 200);
+      };
       cleanup = () => {
+        clearTimeout(deadline);
         response.off('finish', onFinish);
         response.off('close', onClose);
       };
       response.once('finish', onFinish);
       response.once('close', onClose);
+      if (absoluteTimeoutMs !== undefined) {
+        deadline = setTimeout(() => {
+          if (settled) return;
+          if (response.headersSent) {
+            this.metricsService.incrementDownstreamTimeout(service.name);
+            retryContext.abort?.(
+              Object.assign(new Error('Upstream deadline exceeded'), {
+                code: 'ECANCELED',
+              }),
+            );
+            response.destroy();
+            resolveOnce(504);
+          } else if (retryContext.abort) {
+            retryContext.abort(
+              Object.assign(new Error('Upstream deadline exceeded'), {
+                code: 'ETIMEDOUT',
+              }),
+            );
+          } else {
+            if (isLastAttempt) {
+              this.metricsService.incrementDownstreamTimeout(service.name);
+              response.statusCode = 504;
+              response.setHeader('Content-Type', 'application/json');
+              response.end(
+                JSON.stringify({
+                  error: 'DOWNSTREAM_TIMEOUT',
+                  message: 'Upstream request timed out',
+                  requestId: this.getRequestIdFromRequest(request, response),
+                }),
+              );
+            }
+            resolveOnce(504);
+          }
+        }, absoluteTimeoutMs);
+        deadline.unref();
+      }
 
       handler(
         request as unknown as http.IncomingMessage,
@@ -327,7 +384,7 @@ export class ProxyService {
     });
   }
 
-  /** Forward via HTTP/2 session pool; falls back to 502 on session error. */
+  /** Buffer under shared limits and fall back only before application dispatch. */
   private async callH2Proxy(
     targetUrl: string,
     finalUrl: string,
@@ -340,8 +397,11 @@ export class ProxyService {
   ): Promise<number> {
     const requestId = this.getRequestIdFromRequest(request, response);
 
-    // Buffer request body (already consumed by body-parser or still streaming)
-    const body = await this.bufferBody(request);
+    const pluginState = (request as unknown as GwRequest).__gw_plugins;
+    const ctx =
+      pluginState?.ctx ??
+      this.buildPluginContext(request, response, route, service, requestId);
+    let started = performance.now();
 
     // Build forward headers (strip hop-by-hop)
     const forwardHeaders: Record<string, string | string[]> = {};
@@ -355,6 +415,8 @@ export class ProxyService {
     if (fwd) forwardHeaders['x-forwarded-for'] = fwd;
 
     try {
+      const body = await this.bodies.read(ctx);
+      started = performance.now();
       const h2res = await this.http2Pool.request(
         targetUrl,
         request.method,
@@ -362,6 +424,7 @@ export class ProxyService {
         forwardHeaders,
         body,
         service.timeoutMs ?? 10_000,
+        ctx.signal,
       );
 
       // A retryable status with attempts left: don't commit the response —
@@ -390,64 +453,67 @@ export class ProxyService {
 
       return h2res.statusCode;
     } catch (err) {
-      this.logger.error(
+      let failure = err;
+      if (ctx.signal?.aborted || response.destroyed) return 499;
+      if (err instanceof Http2PoolError && err.fallbackSafe) {
+        const remaining =
+          (service.timeoutMs ?? 10000) - (performance.now() - started);
+        if (remaining > 0)
+          return this.callProxy(
+            targetUrl,
+            { ...service, timeoutMs: remaining },
+            request,
+            response,
+            !retriesRemaining,
+            retryOn,
+            remaining,
+          );
+        failure = new Http2PoolError(504, 'DOWNSTREAM_TIMEOUT');
+      }
+      const status =
+        failure instanceof Http2PoolError || failure instanceof BodyCaptureError
+          ? failure.status
+          : 502;
+      const code =
+        failure instanceof Http2PoolError || failure instanceof BodyCaptureError
+          ? failure.code
+          : 'DOWNSTREAM_ERROR';
+      if (status === 504)
+        this.metricsService.incrementDownstreamTimeout(service.name);
+      this.logger.warn(
         JSON.stringify({
-          msg: 'HTTP/2 downstream error, falling back to 502',
-          error: (err as Error).message,
-          targetUrl,
+          msg: 'HTTP/2 upstream request failed',
+          code,
           routeId: route.id,
           requestId,
         }),
       );
-      // Defer the error response while retries remain so a later attempt can
-      // still send a successful response on the same (untouched) connection.
-      if (retriesRemaining && retryOn.includes(502)) {
-        return 502;
+      if (pluginState?.plugins.length) {
+        const result = await this.pluginRunner.runOnError(pluginState.plugins, {
+          ...ctx,
+          error: new Error('Upstream request failed'),
+        });
+        if (result) {
+          this.sendShortCircuit(response, result);
+          return result.status;
+        }
       }
+      if (retriesRemaining && retryOn.includes(status)) return status;
       if (!response.headersSent) {
-        response.statusCode = 502;
+        response.statusCode = status;
         response.setHeader('Content-Type', 'application/json');
         response.end(
           JSON.stringify({
-            error: 'DOWNSTREAM_ERROR',
-            message: 'Downstream service error',
+            error: code,
+            message: 'Upstream request failed',
             requestId,
           }),
         );
       }
-      return 502;
+      return status;
+    } finally {
+      this.bodies.releaseDetached(ctx);
     }
-  }
-
-  private bufferBody(request: Request): Promise<Buffer> {
-    return new Promise<Buffer>((resolve, reject) => {
-      // If body-parser already consumed and parsed the body, reconstruct it
-      const rawBody = (request as Request & { rawBody?: Buffer }).rawBody;
-      if (rawBody) {
-        resolve(rawBody);
-        return;
-      }
-      // Check if body is already an object (body-parser parsed it)
-      if (request.body !== undefined && request.body !== null) {
-        const bodyStr =
-          typeof request.body === 'string'
-            ? request.body
-            : JSON.stringify(request.body);
-        resolve(Buffer.from(bodyStr));
-        return;
-      }
-      // Bodyless request (e.g. GET/HEAD) or a stream already drained by an
-      // upstream parser — attaching 'data'/'end' here would wait forever.
-      if (request.readableEnded) {
-        resolve(Buffer.alloc(0));
-        return;
-      }
-      // Stream is still available
-      const chunks: Buffer[] = [];
-      request.on('data', (chunk: Buffer) => chunks.push(chunk));
-      request.on('end', () => resolve(Buffer.concat(chunks)));
-      request.on('error', reject);
-    });
   }
 
   private getForwardedForFromRequest(request: Request): string | undefined {
@@ -477,6 +543,13 @@ export class ProxyService {
           req: http.IncomingMessage,
           res: http.ServerResponse,
         ) => {
+          if (res.destroyed || res.writableEnded) {
+            proxyReq.destroy();
+            return;
+          }
+          const retryContext = (req as unknown as GwRequest).__gw_retry;
+          if (retryContext)
+            retryContext.abort = (error) => proxyReq.destroy(error);
           const requestId = this.getRequestId(req, res);
           if (requestId) proxyReq.setHeader('X-Request-ID', requestId);
           const fwd = this.getForwardedFor(req);
@@ -653,6 +726,14 @@ export class ProxyService {
       http.IncomingMessage,
       http.ServerResponse
     >;
+    const maxEntries =
+      this.config.get<number>('proxy.maxHandlerCacheEntries') ??
+      DEFAULT_PROXY_HANDLERS.maxCacheEntries;
+    while (this.handlers.size >= maxEntries) {
+      const oldest = this.handlers.keys().next().value;
+      if (oldest === undefined) break;
+      this.handlers.delete(oldest);
+    }
     this.handlers.set(cacheKey, handler);
     return handler;
   }

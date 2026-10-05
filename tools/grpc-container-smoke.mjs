@@ -42,6 +42,8 @@ let networkCreated = false;
 let trustedCalls = 0;
 const webhookBodies = [];
 const graphqlRequests = [];
+const h2Requests = [];
+const fallbackRequests = [];
 let untrustedCalls = 0;
 let trustedWsCalls = 0;
 let untrustedWsCalls = 0;
@@ -432,6 +434,75 @@ try {
   await new Promise((done) => graphqlUpstream.listen(0, '0.0.0.0', done));
   const graphqlTarget = `https://host.docker.internal:${graphqlUpstream.address().port}`;
 
+  const http2Upstream = http2.createSecureServer({
+    ...trusted,
+    allowHTTP1: true,
+  });
+  servers.push(http2Upstream);
+  http2Upstream.on('session', (session) => {
+    sockets.add(session);
+    session.on('error', () => undefined);
+    session.once('close', () => sockets.delete(session));
+  });
+  http2Upstream.on('request', (req, res) => {
+    if (req.httpVersionMajor !== 1) return;
+    req.resume();
+    res.end('healthy');
+  });
+  http2Upstream.on('stream', (stream, headers) => {
+    stream.on('error', () => undefined);
+    if (headers[':path'] === '/health') {
+      stream.respond({ ':status': 200 });
+      stream.end('healthy');
+      return;
+    }
+    const chunks = [];
+    stream.on('data', (chunk) => chunks.push(chunk));
+    stream.once('end', () => {
+      const body = Buffer.concat(chunks);
+      h2Requests.push({ path: headers[':path'], body: body.toString('hex') });
+      if (headers[':path'] === '/reset') {
+        stream.close(http2.constants.NGHTTP2_CANCEL);
+        return;
+      }
+      stream.respond({ ':status': 200, 'x-h2-verified': 'yes' });
+      if (headers[':path'] === '/stall') {
+        const timer = setInterval(() => stream.write('x'), 25);
+        stream.once('close', () => clearInterval(timer));
+      } else
+        stream.end(
+          headers[':path'] === '/overflow'
+            ? Buffer.alloc(257)
+            : body.length
+              ? body
+              : 'verified HTTP2',
+        );
+    });
+  });
+  await new Promise((done) => http2Upstream.listen(0, '0.0.0.0', done));
+  const http2Target = `https://host.docker.internal:${http2Upstream.address().port}`;
+  const fallbackUpstream = https.createServer(trusted, (req, res) => {
+    if (req.url === '/health') {
+      req.resume();
+      res.end('healthy');
+      return;
+    }
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.once('end', () => {
+      const body = Buffer.concat(chunks);
+      fallbackRequests.push({ path: req.url, body: body.toString('hex') });
+      res.setHeader('x-fallback-verified', 'yes');
+      if (req.url === '/stall') {
+        const timer = setInterval(() => res.write('x'), 25);
+        res.once('close', () => clearInterval(timer));
+      } else res.end(body);
+    });
+  });
+  servers.push(fallbackUpstream);
+  await new Promise((done) => fallbackUpstream.listen(0, '0.0.0.0', done));
+  const fallbackTarget = `https://host.docker.internal:${fallbackUpstream.address().port}`;
+
   const authPlugin = (endpoint = '/introspect') => ({
     name: 'oauth2-client-credentials',
     config: {
@@ -545,6 +616,8 @@ try {
     'GRAPHQL_BODY_TIMEOUT_MS=300',
     '-e',
     'GRAPHQL_MAX_TOKENS=256',
+    '-e',
+    'HTTP2_MAX_RESPONSE_BYTES=256',
     '-e',
     'GRPC_HOST=0.0.0.0',
     '-e',
@@ -1280,6 +1353,94 @@ try {
   assert.equal(graphqlRequests.length, 2);
   assert.equal((await sendQuery('{ user { id } }')).status, 200);
 
+  config.services.push(
+    {
+      id: 'h2-service',
+      name: 'bounded-h2',
+      targets: [{ url: http2Target, weight: 1 }],
+      h2: true,
+      healthCheckPath: '/health',
+      timeoutMs: 300,
+    },
+    {
+      id: 'h2-fallback-service',
+      name: 'fallback-h2',
+      targets: [{ url: fallbackTarget, weight: 1 }],
+      h2: true,
+      healthCheckPath: '/health',
+      timeoutMs: 3000,
+    },
+  );
+  config.routes.push(
+    {
+      id: 'h2-route',
+      method: 'ANY',
+      pathPattern: '/h2',
+      serviceId: 'h2-service',
+      enabled: true,
+      authRequired: false,
+    },
+    {
+      id: 'h2-fallback-route',
+      method: 'ANY',
+      pathPattern: '/fallback',
+      serviceId: 'h2-fallback-service',
+      enabled: true,
+      authRequired: false,
+    },
+  );
+  for (const socket of plane.clients)
+    socket.send(
+      JSON.stringify({ type: 'config.update', version: 9, payload: config }),
+    );
+  await until(() => acknowledged === 9, 'HTTP2 config ACK');
+  const exactBytes = Buffer.from([0, 255, 13, 10, 1, 32]);
+  const exactH2 = await fetch(`https://127.0.0.1:${httpPort}/h2/echo`, {
+    method: 'POST',
+    body: exactBytes,
+  });
+  assert.equal(exactH2.status, 200);
+  assert.equal(exactH2.headers.get('x-h2-verified'), 'yes');
+  assert.deepEqual(Buffer.from(await exactH2.arrayBuffer()), exactBytes);
+  assert.equal(h2Requests.at(-1).body, exactBytes.toString('hex'));
+  const exactFallback = await fetch(
+    `https://127.0.0.1:${httpPort}/fallback/echo`,
+    { method: 'POST', body: exactBytes },
+  );
+  assert.equal(exactFallback.status, 200);
+  assert.equal(exactFallback.headers.get('x-fallback-verified'), 'yes');
+  assert.deepEqual(Buffer.from(await exactFallback.arrayBuffer()), exactBytes);
+  assert.equal(fallbackRequests.length, 1);
+  assert.equal(fallbackRequests[0].body, exactBytes.toString('hex'));
+  assert.equal(
+    (await fetch(`https://127.0.0.1:${httpPort}/h2/overflow`)).status,
+    502,
+  );
+  assert.equal(
+    (await fetch(`https://127.0.0.1:${httpPort}/h2/stall`)).status,
+    504,
+  );
+  assert.equal(
+    (
+      await fetch(`https://127.0.0.1:${httpPort}/h2/reset`, {
+        method: 'POST',
+        body: exactBytes,
+      })
+    ).status,
+    502,
+  );
+  assert.equal(h2Requests.filter((r) => r.path === '/reset').length, 1);
+  assert.equal(fallbackRequests.length, 1);
+  assert.equal(
+    (await fetch(`https://127.0.0.1:${httpPort}/h2/echo`)).status,
+    200,
+  );
+
+  const fallbackStarted = Date.now();
+  await assert.rejects(fetch(`https://127.0.0.1:${httpPort}/fallback/stall`));
+  assert.ok(Date.now() - fallbackStarted < 4500);
+  assert.equal(fallbackRequests.length, 2);
+
   const healthCommand = JSON.parse(
     docker(
       'inspect',
@@ -1330,6 +1491,9 @@ try {
         inactiveIdentityCalls,
         outboundIdentityCalls,
         checks: [
+          'HTTP2-verified-HTTPS-exact-binary-POST-and-predispatch-HTTP1-fallback',
+          'HTTP2-response-bound-absolute-deadline-reset-no-mutation-replay-recovery',
+          'HTTP1-fallback-trickle-stream-absolute-deadline',
           'GraphQL-HTTPS-GET-POST-AST-fragments-alias-cost-cycle-introspection-method-body-boundaries',
           'GraphQL-original-POST-bytes-and-failure-recovery',
           'Stripe-HTTPS-binary-rotation-tamper-staleness-body-limit-deadline-recovery',
