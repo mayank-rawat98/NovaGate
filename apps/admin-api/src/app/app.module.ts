@@ -1,3 +1,5 @@
+import { MetricsStreamService } from '../proxy-config/metrics-stream.service';
+import { metricStreamConfiguration } from '../proxy-config/metrics-stream.configuration';
 import { TracesController } from '../proxy-config/traces.controller';
 import { TracesService } from '../proxy-config/traces.service';
 import { validateTraceQueryConfiguration } from '../proxy-config/traces.configuration';
@@ -30,7 +32,10 @@ import { MigrationService } from '../database/migration.service';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      validate: validateTraceQueryConfiguration,
+      validate: (env) => ({
+        ...validateTraceQueryConfiguration(env),
+        metricStream: metricStreamConfiguration(env),
+      }),
     }),
     LogExportModule,
     TypeOrmModule.forRootAsync({
@@ -63,6 +68,7 @@ import { MigrationService } from '../database/migration.service';
     ConfigPushService,
     MigrationService,
     TracesService,
+    MetricsStreamService,
   ],
 })
 export class AppModule {}

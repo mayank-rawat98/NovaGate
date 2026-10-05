@@ -84,7 +84,7 @@ export class TenantProvisioningService {
           "clientIp" VARCHAR,
           "userAgent" VARCHAR,
           "errorCode" VARCHAR,
-          timestamp TIMESTAMP
+          timestamp TIMESTAMPTZ
         )
       `);
 
@@ -122,14 +122,17 @@ export class TenantProvisioningService {
       await manager.query(`
         CREATE TABLE IF NOT EXISTS ${schemaName}.metrics_snapshots (
           id SERIAL PRIMARY KEY,
-          rps INTEGER,
+          rps DOUBLE PRECISION,
           "p50Ms" INTEGER,
           "p95Ms" INTEGER,
           "p99Ms" INTEGER,
           "errorRate" FLOAT,
-          timestamp TIMESTAMP
+          timestamp TIMESTAMPTZ
         )
       `);
+      await manager.query(
+        `CREATE INDEX IF NOT EXISTS metrics_snapshots_time ON ${schemaName}.metrics_snapshots (timestamp DESC)`,
+      );
     });
 
     const rawKey = 'gw_' + crypto.randomBytes(32).toString('hex');

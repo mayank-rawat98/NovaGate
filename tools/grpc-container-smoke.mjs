@@ -44,6 +44,7 @@ const webhookBodies = [];
 const graphqlRequests = [];
 const requestLogs = [];
 const traceSpans = [];
+const metricSnapshots = [];
 const traceHeaders = [];
 const h2Requests = [];
 const fallbackRequests = [];
@@ -569,6 +570,37 @@ try {
       }
       if (message.type === 'config.ack') acknowledged = message.version;
       if (message.type === 'logs') requestLogs.push(...message.payload);
+      if (message.type === 'metrics') {
+        const value = message.payload;
+        assert.deepEqual(Object.keys(value).sort(), [
+          'errorRate',
+          'p50',
+          'p95',
+          'p99',
+          'rps',
+        ]);
+        assert.ok(
+          Object.values(value).every(
+            (number) =>
+              typeof number === 'number' &&
+              Number.isFinite(number) &&
+              number >= 0,
+          ),
+        );
+        assert.ok(value.errorRate <= 1);
+        assert.ok(
+          value.p50 <= value.p95 &&
+            value.p95 <= value.p99 &&
+            value.p99 <= 3600000,
+        );
+        assert.ok(value.rps <= 1000000000);
+        assert.ok(Buffer.byteLength(bytes) <= 1024);
+        metricSnapshots.push(value);
+        assert.ok(
+          metricSnapshots.length < 1000,
+          'Finite packaged verification capture',
+        );
+      }
       if (message.type === 'traces') {
         assert.ok(message.payload.length <= 32);
         assert.ok(Buffer.byteLength(bytes) <= 65536);
@@ -1653,6 +1685,16 @@ try {
     !JSON.stringify(traceSpans).includes(privateMarker.replaceAll('-', '_')),
   );
   assert.ok(traceSpans.some((span) => span.name === 'upstream HTTP1 fallback'));
+  await until(
+    () =>
+      metricSnapshots.some(
+        (sample) => sample.rps > 0 && sample.errorRate > 0 && sample.p99 > 0,
+      ),
+    'packaged aggregate HTTP completion reporting',
+  );
+  const aggregateTransport = JSON.stringify(metricSnapshots);
+  assert.ok(!aggregateTransport.includes(privateMarker));
+  assert.ok(!aggregateTransport.includes(consumerKey));
 
   const healthCommand = JSON.parse(
     docker(
@@ -1704,7 +1746,9 @@ try {
         inactiveIdentityCalls,
         outboundIdentityCalls,
         traceSpans: traceSpans.length,
+        metricSnapshots: metricSnapshots.length,
         checks: [
+          'bounded-private-finite-aggregate-HTTP-completion-reporter-over-actual-control-plane-WebSocket',
           'SDK-W3C-parent-child-propagation-HTTP-gRPC-WebSocket-bounded-private-correlated-outcomes',
           'HTTP-finish-close-exactly-once-401-400-499-normalized-private-telemetry',
           'least-connections-concurrent-busy-H2-target-verified-HTTP1-fallback-cancel-recovery',

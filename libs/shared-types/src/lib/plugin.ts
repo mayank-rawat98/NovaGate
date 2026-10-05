@@ -3,7 +3,7 @@ import type {
   ServerResponse,
   OutgoingHttpHeaders,
 } from 'http';
-import type { RouteConfig, ServiceConfig } from './ws-messages.js';
+import type { RouteConfig, ServiceConfig } from './ws-messages.ts';
 
 export interface PluginLogger {
   info(msg: string, meta?: Record<string, unknown>): void;

@@ -86,6 +86,17 @@
           "prune"
         ]
       },
+      "metrics-container-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/metrics-container-smoke.mjs",
+            "node tools/metrics-container-smoke.mjs"
+          ],
+          "parallel": false
+        }
+      },
       "grpc-container-smoke": {
         "executor": "nx:run-commands",
         "cache": false,

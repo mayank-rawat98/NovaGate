@@ -1,3 +1,4 @@
+import { validateMetricPayload } from '@api-gateway/shared-types';
 import type {
   TenantEntity,
   RouteEntity,
@@ -11,6 +12,7 @@ import type {
   LogExportList,
   TraceListResponse,
   TraceDetailResponse,
+  MetricsSnapshot,
 } from '@api-gateway/shared-types';
 import { getToken, clearToken } from './auth';
 
@@ -22,20 +24,12 @@ export type {
   RequestLog,
   ErrorEvent,
   HealthSnapshot,
+  MetricsSnapshot,
 };
 
 export interface GatewayStatus {
   tenantId: string;
   online: boolean;
-}
-
-export interface MetricsSnapshot {
-  rps: number;
-  p50Ms: number;
-  p95Ms: number;
-  p99Ms: number;
-  errorRate: number;
-  timestamp: string;
 }
 
 export interface PaginatedResult<T> {
@@ -377,8 +371,9 @@ export function getHealth(tenantId: string): Promise<HealthSnapshot[]> {
 export function getMetrics(
   tenantId: string,
   period: Period = '24h',
+  signal?: AbortSignal,
 ): Promise<MetricsSnapshot[]> {
-  return request(`/tenants/${tenantId}/metrics?period=${period}`);
+  return request(`/tenants/${tenantId}/metrics?period=${period}`, { signal });
 }
 
 export function getLogExports(tenantId: string): Promise<LogExportList> {
@@ -441,4 +436,93 @@ export function getTrace(tenantId: string, traceId: string) {
   return request<TraceDetailResponse>(
     `/tenants/${tenantId}/traces/${encodeURIComponent(traceId)}`,
   );
+}
+
+export function validateMetricSnapshot(value: unknown): MetricsSnapshot {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error('Invalid live metric sample');
+  const snapshot = value as MetricsSnapshot;
+  if (
+    Object.keys(snapshot).some(
+      (key) =>
+        !['rps', 'p50Ms', 'p95Ms', 'p99Ms', 'errorRate', 'timestamp'].includes(
+          key,
+        ),
+    ) ||
+    typeof snapshot.timestamp !== 'string' ||
+    snapshot.timestamp.length > 32 ||
+    !Number.isFinite(Date.parse(snapshot.timestamp))
+  )
+    throw new Error('Invalid live metric sample');
+  validateMetricPayload({
+    rps: snapshot.rps,
+    p50: snapshot.p50Ms,
+    p95: snapshot.p95Ms,
+    p99: snapshot.p99Ms,
+    errorRate: snapshot.errorRate,
+  });
+  return snapshot;
+}
+export async function streamMetrics(
+  tenantId: string,
+  signal: AbortSignal,
+  onSnapshot: (snapshot: MetricsSnapshot) => void,
+  onReady: () => void,
+): Promise<void> {
+  const response = await authorizedFetch(
+    `/tenants/${encodeURIComponent(tenantId)}/metrics/stream`,
+    { signal, headers: { Accept: 'text/event-stream' }, cache: 'no-store' },
+  );
+  if (
+    !response.headers.get('content-type')?.includes('text/event-stream') ||
+    !response.body
+  )
+    throw new Error('Live metrics unavailable');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  let pending = '';
+  let activity = Date.now();
+  // Cancel an abandoned transport even if its TCP connection never closes.
+  const watchdog = setInterval(() => {
+    if (Date.now() - activity > 45000)
+      void reader.cancel().catch(() => undefined);
+  }, 5000);
+  try {
+    onReady();
+    while (!signal.aborted) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error('Live metrics connection ended');
+      activity = Date.now();
+      if (value.byteLength > 65536)
+        throw new Error('Live metrics frame too large');
+      pending = (pending + decoder.decode(value, { stream: true })).replace(
+        /\r\n/g,
+        '\n',
+      );
+      let boundary: number;
+      while ((boundary = pending.indexOf('\n\n')) >= 0) {
+        const frame = pending.slice(0, boundary);
+        pending = pending.slice(boundary + 2);
+        if (frame.length > 4096)
+          throw new Error('Live metrics frame too large');
+        const lines = frame.split('\n');
+        const event = lines
+          .find((line) => line.startsWith('event:'))
+          ?.slice(6)
+          .trim();
+        const data = lines
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
+          .join('\n');
+        if (event === 'metrics')
+          onSnapshot(validateMetricSnapshot(JSON.parse(data)));
+      }
+      if (pending.length > 4096)
+        throw new Error('Live metrics frame too large');
+    }
+  } finally {
+    clearInterval(watchdog);
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
 }

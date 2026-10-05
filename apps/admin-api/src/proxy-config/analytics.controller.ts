@@ -1,4 +1,15 @@
-import { Controller, Get, Patch, Param, Query, Body } from '@nestjs/common';
+import type { Request, Response } from 'express';
+import { MetricsStreamService } from './metrics-stream.service';
+import {
+  Controller,
+  Get,
+  Patch,
+  Param,
+  Query,
+  Body,
+  Req,
+  Res,
+} from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { ConfigPushService } from '../config-push/config-push.service';
 
@@ -7,17 +18,12 @@ function tenantSchema(tenantId: string): string {
   return `tenant_${tenantId.replace(/-/g, '_')}`;
 }
 
-const PERIOD_INTERVALS: Record<string, string> = {
-  '1h': '1 hour',
-  '24h': '24 hours',
-  '7d': '7 days',
-};
-
 @Controller('tenants/:tenantId')
 export class AnalyticsController {
   constructor(
     private readonly dataSource: DataSource,
     private readonly configPush: ConfigPushService,
+    private readonly metricsStream: MetricsStreamService,
   ) {}
 
   private async withSchema<T>(
@@ -131,17 +137,25 @@ export class AnalyticsController {
     });
   }
 
+  @Get('metrics/stream')
+  streamMetrics(
+    @Param('tenantId') tenantId: string,
+    @Req() request: Request & { sessionExpiresAt?: number },
+    @Res() response: Response,
+  ) {
+    return this.metricsStream.open(
+      tenantId,
+      response,
+      request.sessionExpiresAt,
+    );
+  }
+
   @Get('metrics')
   async getMetrics(
     @Param('tenantId') tenantId: string,
     @Query('period') period = '24h',
   ) {
-    const interval = PERIOD_INTERVALS[period] ?? PERIOD_INTERVALS['24h'];
-    return this.withSchema(tenantId, (manager) =>
-      manager.query(
-        `SELECT * FROM metrics_snapshots WHERE timestamp >= NOW() - INTERVAL '${interval}' ORDER BY timestamp ASC`,
-      ),
-    );
+    return this.metricsStream.history(tenantId, period);
   }
 
   @Get('gateway-status')

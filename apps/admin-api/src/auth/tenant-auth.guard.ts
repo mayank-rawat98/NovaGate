@@ -26,6 +26,7 @@ export class TenantAuthGuard implements CanActivate {
     const req = context.switchToHttp().getRequest<{
       headers: { authorization?: string };
       params: { tenantId?: string; id?: string };
+      sessionExpiresAt?: number;
     }>();
     const authorization = req.headers.authorization;
     if (!authorization || !/^Bearer \S+$/i.test(authorization)) {
@@ -40,6 +41,8 @@ export class TenantAuthGuard implements CanActivate {
         throw new Error('Missing subject');
       }
       subject = payload.sub;
+      if (typeof payload.exp === 'number')
+        req.sessionExpiresAt = payload.exp * 1000;
     } catch {
       throw new UnauthorizedException('Session is invalid or expired');
     }

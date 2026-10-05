@@ -327,7 +327,7 @@ The packaged gRPC verifier creates a disposable gateway/Redis network with no Po
 
 ```sh
 docker build -f docker/Dockerfile.api -t novagate-api:verification .
-NOVAGATE_GRPC_IMAGE=novagate-api:verification npm exec nx run api:grpc-container-smoke
+NOVAGATE_GRPC_IMAGE=novagate-api:verification npm exec -- nx run @api-gateway/api:grpc-container-smoke
 ```
 
 It requires OrbStack, OpenSSL and access to the pinned grpcurl image. It generates short-lived fixture certificates inside `.local-work`, checks authenticated protobuf calls with grpcurl and real WebSocket traffic through trusted/untrusted TLS upstreams, and writes evidence to `.local-work/grpc-container-evidence.json`. WebSocket checks cover malformed-token survival, negotiated compression/subprotocols, binary/text/control traffic, actual Redis route quota, connection capacity, live metrics and target removal. It verifies absent local admin CRUD and an authenticated tenant proxy route on the same prefix, then removes its containers, network and certificate directory. Existing storage and cache contents are preserved.
@@ -498,3 +498,53 @@ Manual tracing uses the pinned OpenTelemetry JavaScript SDK and validated W3C tr
 The shared trace wire contract allows 16 whitelisted scalar attributes, at most 256 UTF-8 bytes each, 8192 bytes per span, and 128 spans/65536 bytes per batch. Capacity and transport drops have bounded reason labels in Prometheus. Logs retain integer milliseconds for existing PostgreSQL schemas; trace spans preserve fractional timing. See the [OpenTelemetry trace SDK](https://github.com/open-telemetry/opentelemetry-js/blob/main/packages/sdk-trace/README.md) for manual instrumentation concepts.
 
 Control-plane and admin query limits are documented in [docker/tracing.env.example](docker/tracing.env.example). By default each tenant retains up to 100,000 spans for seven days; ingestion admits eight concurrent transactions with 5-second statement/1-second lock deadlines. Idle cleanup visits up to 64 tenant tables each minute. Admin trace queries admit eight concurrent transactions, use a 3-second statement deadline, allow seven-day ranges, return 50 traces per page and at most 256 detail spans. `TRACE_RETENTION_DAYS` must match across the control plane and admin API. Queries immediately hide expired spans; background physical deletion can take multiple ticks. Trace delivery is best effort, so use durable audit facilities for audit requirements.
+
+## Live HTTP metrics
+
+The Overview streams completed HTTP request rates, error rates (final status 400
+or above, including cancellation), and latency percentiles. Percentiles are fixed
+histogram bucket upper estimates. Native gRPC/WebSocket counters remain available
+through Prometheus. A single gateway timer reports every second using bounded
+transient transport; disconnected snapshots are dropped, counted by
+`gateway_metric_snapshots_dropped_total`, and never queued for replay.
+
+The control plane validates and stores each report before publishing it to Redis.
+`GET /api/tenants/:tenantId/metrics/stream` requires the workspace's bearer session
+in the Authorization header. Tokens in URLs are rejected. The dashboard uses
+authenticated fetch streaming, loads history on connection, retains up to 600
+latest samples within one hour, and supports automatic/manual reconnect with
+stale-data feedback. Switching workspaces cancels the previous requests and clears
+their samples. Other dashboard lists refresh every 30 seconds.
+
+Streaming replicas each use one Redis subscriber. Defaults allow 256 connections,
+eight per tenant, eight simultaneous history reads and 64 KiB write buffers.
+Heartbeats run every 15 seconds; streams close at session expiry or five minutes,
+on subscription loss, shutdown or backpressure. The admin HTTP adapter closes remaining transport sockets after service cleanup so abandoned preconnections cannot prevent shutdown. Reconnecting reads the latest
+persisted sample; Redis notifications are best effort. The reverse proxy must
+preserve streaming and honor `Cache-Control: no-cache, no-transform` and
+`X-Accel-Buffering: no`.
+
+Metric ingestion admits 32 concurrent transactions with 3-second statement and
+1-second lock deadlines. Each tenant keeps at most 100,000 samples for seven days;
+the row cap can shorten that history. Idle expiry visits at most 64 tenant tables
+per minute. Queries immediately filter expired data. Keep `METRICS_RETENTION_DAYS`
+consistent between admin and control plane. Gateway budgets are in
+[docker/gateway.env.example](docker/gateway.env.example); ingestion, stream and
+history budgets are in [docker/tracing.env.example](docker/tracing.env.example).
+
+After building the three production images locally with OrbStack, run the complete
+pipeline verifier:
+
+```sh
+docker build -f docker/Dockerfile.api -t novagate-api:verification .
+docker build -f docker/Dockerfile.admin-api -t novagate-admin:verification .
+docker build -f docker/Dockerfile.control-plane -t novagate-control-plane:verification .
+NX_DAEMON=false NX_NO_CLOUD=true npm exec -- nx run @api-gateway/api:metrics-container-smoke
+```
+
+This fixture creates its own database, Redis, network and containers, checks actual
+gateway traffic through persistence and authenticated SSE within two seconds,
+verifies stored history and reconnect, then removes its resources. Evidence is
+written inside `.local-work/metrics-container-evidence.json`. Run the retained
+`@api-gateway/api:grpc-container-smoke` transport checks and `dashboard:ui-smoke`
+browser/accessibility checks as well.

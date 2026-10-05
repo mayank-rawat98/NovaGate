@@ -1,6 +1,7 @@
 'use client';
 
 import useSWR from 'swr';
+import { useLiveMetrics } from '../../lib/use-live-metrics';
 import Link from 'next/link';
 import {
   Activity,
@@ -20,12 +21,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { GatewayStatusPill } from '../../components/gateway-status-pill';
-import {
-  getGatewayStatus,
-  getMetrics,
-  getRoutes,
-  getLogs,
-} from '../../lib/api-client';
+import { getGatewayStatus, getRoutes, getLogs } from '../../lib/api-client';
 import { useTenantId } from '../../lib/auth';
 import type {
   MetricsSnapshot,
@@ -78,12 +74,10 @@ export default function DashboardPage() {
     data: metrics1h,
     isLoading: metricsLoading,
     error: metricsError,
-    mutate: retryMetrics,
-  } = useSWR(
-    tenantId ? `metrics-1h-${tenantId}` : null,
-    () => getMetrics(tenantId, '1h'),
-    SWR_OPTS,
-  );
+    retry: retryMetrics,
+    connection: metricConnection,
+    stale: metricsStale,
+  } = useLiveMetrics(tenantId);
 
   const {
     data: routes,
@@ -222,8 +216,27 @@ export default function DashboardPage() {
           Gateway activity
         </h2>
         <span className="text-xs text-slate-600">
-          Latest snapshots · last hour
+          Latest HTTP samples · up to one hour
         </span>
+      </div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-900">
+        <p role="status">
+          {metricConnection === 'connecting'
+            ? 'Connecting live metrics…'
+            : metricConnection === 'reconnecting'
+              ? 'Reconnecting live metrics. Last samples remain visible.'
+              : metricsStale
+                ? 'Live connection · last sample is stale. Waiting for the gateway.'
+                : 'Live metrics connected'}{' '}
+          · Latency percentiles are histogram estimates.
+        </p>
+        <button
+          type="button"
+          onClick={retryMetrics}
+          className="rounded-lg border border-indigo-300 bg-white px-3 py-1.5 font-medium"
+        >
+          Reconnect metrics
+        </button>
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {/* Gateway Status */}
@@ -255,7 +268,9 @@ export default function DashboardPage() {
           ) : (
             <div>
               <p className="mb-1 text-2xl font-bold text-gray-900">
-                {latestMetric?.rps ?? 0}
+                {(latestMetric?.rps ?? 0).toLocaleString(undefined, {
+                  maximumFractionDigits: 2,
+                })}
               </p>
               <ResponsiveContainer width="100%" height={64}>
                 <AreaChart data={sparklineData}>

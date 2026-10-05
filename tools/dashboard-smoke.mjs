@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import {
   existsSync,
   mkdirSync,
@@ -28,6 +29,49 @@ const context = await chromium.launchPersistentContext(profile, {
   downloadsPath: resolve(artifacts, 'downloads'),
   viewport: { width: 1440, height: 960 },
 });
+let metricsConnections = 0;
+let metricsDisconnects = 0;
+let failLiveMetrics = false;
+const metricsServer = createServer((request, response) => {
+  response.setHeader('Access-Control-Allow-Origin', new URL(base).origin);
+  response.setHeader(
+    'Access-Control-Allow-Headers',
+    'authorization,content-type,accept',
+  );
+  if (request.method === 'OPTIONS') {
+    response.writeHead(204);
+    response.end();
+    return;
+  }
+  assert.equal(
+    request.headers.authorization,
+    'Bearer browser-verification-token',
+  );
+  metricsConnections++;
+  if (failLiveMetrics) {
+    response.writeHead(503, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ message: 'Live fixture outage' }));
+    return;
+  }
+  response.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+  });
+  const send = (rps) =>
+    response.write(
+      `event: metrics\ndata: ${JSON.stringify({ rps, p50Ms: 1, p95Ms: 2, p99Ms: 3, errorRate: 0.01, timestamp: new Date().toISOString() })}\n\n`,
+    );
+  send(123.5);
+  const update = setTimeout(() => send(321.25), 250);
+  const heartbeat = setInterval(() => response.write(': heartbeat\n\n'), 1000);
+  response.once('close', () => {
+    metricsDisconnects++;
+    clearTimeout(update);
+    clearInterval(heartbeat);
+  });
+});
+await new Promise((resolve) => metricsServer.listen(0, '127.0.0.1', resolve));
+const metricsOrigin = `http://127.0.0.1:${metricsServer.address().port}`;
 const tenant = '12345678-1234-1234-1234-123456789abc';
 const service = '23456789-1234-1234-1234-123456789abc';
 const traceId = '0123456789abcdef0123456789abcdef';
@@ -143,6 +187,10 @@ await context.addInitScript(
 );
 await context.route('**/api/**', async (route) => {
   const url = new URL(route.request().url());
+  if (url.origin === metricsOrigin) {
+    await route.continue();
+    return;
+  }
   apiRequests.push(url.pathname);
   assert.equal(
     url.origin,
@@ -150,6 +198,16 @@ await context.route('**/api/**', async (route) => {
     'Dashboard must use its configured API origin',
   );
   const resource = url.pathname.split('/').at(-1);
+  if (resource === 'stream' && url.pathname.endsWith('/metrics/stream')) {
+    assert.equal(
+      route.request().headers().authorization,
+      'Bearer browser-verification-token',
+    );
+    assert.equal(url.search, '', 'Metric sessions must never appear in URLs');
+    await route.continue({ url: `${metricsOrigin}${url.pathname}` });
+    return;
+  }
+
   if (url.pathname.includes('/traces')) {
     traceRequests.push(url.searchParams.toString());
     const detail = url.pathname.endsWith(`/${traceId}`);
@@ -495,6 +553,37 @@ try {
     fullPage: true,
   });
   await audit('overview desktop');
+  await expect(
+    page.getByText('Live metrics connected', { exact: false }),
+  ).toBeVisible();
+  await expect(page.getByText('321.25', { exact: true })).toBeVisible();
+  const established = metricsConnections;
+  assert(
+    established > 0,
+    'Overview must connect to the authenticated SSE fixture',
+  );
+  failLiveMetrics = true;
+  await page
+    .getByRole('button', { name: 'Reconnect metrics', exact: true })
+    .click();
+  await expect(
+    page.getByText('Reconnecting live metrics.', { exact: false }),
+  ).toBeVisible();
+  await expect(page.getByText('321.25', { exact: true })).toBeVisible();
+  failLiveMetrics = false;
+  await page
+    .getByRole('button', { name: 'Reconnect metrics', exact: true })
+    .click();
+  await expect(
+    page.getByText('Live metrics connected', { exact: false }),
+  ).toBeVisible();
+  await expect(page.getByText('321.25', { exact: true })).toBeVisible();
+  assert(
+    metricsConnections > established,
+    'Manual retry must establish a new authenticated stream',
+  );
+  await audit('Live metric reconnect desktop');
+
   failServices = true;
   await page.goto(`${base}/services`);
   await expect(
@@ -505,6 +594,7 @@ try {
   await expect(page.getByText('Catalog API', { exact: true })).toBeVisible();
   assert(serviceRequests >= 2, 'Retry must fetch the list again');
   await expect(page.getByText('degraded', { exact: true })).toBeVisible();
+  await expect.poll(() => metricsDisconnects).toBeGreaterThan(0);
   await audit('services desktop');
   for (const policy of ['least-connections', 'weighted-round-robin']) {
     await page
@@ -1064,5 +1154,7 @@ try {
   throw error;
 } finally {
   await context.close();
+  metricsServer.closeAllConnections();
+  await new Promise((resolve) => metricsServer.close(resolve));
   rmSync(profile, { recursive: true, force: true });
 }

@@ -1,3 +1,11 @@
+export const DEFAULT_METRIC_INGESTION = {
+  maxConcurrent: 32,
+  maxRowsPerTenant: 100000,
+  retentionDays: 7,
+  statementTimeoutMs: 3000,
+  lockTimeoutMs: 1000,
+};
+export type MetricIngestionSettings = typeof DEFAULT_METRIC_INGESTION;
 export const DEFAULT_TRACE_INGESTION = {
   maxConcurrent: 8,
   maxRowsPerTenant: 100000,
@@ -53,6 +61,38 @@ export function validateTracingConfiguration(env: Record<string, unknown>) {
       lockTimeoutMs: limit(
         'TRACE_INGESTION_LOCK_TIMEOUT_MS',
         DEFAULT_TRACE_INGESTION.lockTimeoutMs,
+        100,
+        10000,
+      ),
+    },
+    metricIngestion: {
+      maxConcurrent: limit(
+        'METRICS_INGESTION_MAX_CONCURRENT',
+        DEFAULT_METRIC_INGESTION.maxConcurrent,
+        1,
+        128,
+      ),
+      maxRowsPerTenant: limit(
+        'METRICS_MAX_ROWS_PER_TENANT',
+        DEFAULT_METRIC_INGESTION.maxRowsPerTenant,
+        128,
+        1000000,
+      ),
+      retentionDays: limit(
+        'METRICS_RETENTION_DAYS',
+        DEFAULT_METRIC_INGESTION.retentionDays,
+        1,
+        30,
+      ),
+      statementTimeoutMs: limit(
+        'METRICS_INGESTION_STATEMENT_TIMEOUT_MS',
+        DEFAULT_METRIC_INGESTION.statementTimeoutMs,
+        100,
+        30000,
+      ),
+      lockTimeoutMs: limit(
+        'METRICS_INGESTION_LOCK_TIMEOUT_MS',
+        DEFAULT_METRIC_INGESTION.lockTimeoutMs,
         100,
         10000,
       ),

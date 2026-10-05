@@ -13,10 +13,21 @@ import {
   DEFAULT_PROXY_HANDLERS,
   DEFAULT_LOAD_BALANCER,
   DEFAULT_TRACING,
+  DEFAULT_METRIC_REPORTING,
 } from './configuration';
 import { BlockList, isIP } from 'net';
 
 export const configSchema = Joi.object({
+  METRICS_REPORT_INTERVAL_MS: Joi.number()
+    .integer()
+    .min(250)
+    .max(30000)
+    .default(DEFAULT_METRIC_REPORTING.intervalMs),
+  METRICS_REPORT_MAX_BUFFERED_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(1048576)
+    .default(DEFAULT_METRIC_REPORTING.maxBufferedBytes),
   TRACING_ENABLED: Joi.boolean().default(DEFAULT_TRACING.enabled),
   TRACING_SAMPLE_RATE: Joi.number()
     .min(0)

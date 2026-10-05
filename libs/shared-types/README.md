@@ -3,6 +3,12 @@
 Single source of truth for all TypeScript interfaces shared across the monorepo.
 **Change order is non-negotiable:** update this library first, then the sender, then the receiver.
 
+This private workspace package exports TypeScript source for both server and browser
+bundlers. Relative imports use the actual `.ts` filenames so Turbopack, Webpack,
+and Jest resolve the same files. The base TypeScript configuration enables
+`allowImportingTsExtensions`; TypeScript emits declarations only (or checks without
+emitting), while application bundlers produce runnable JavaScript.
+
 ## Key types
 
 ### `TenantConfig`

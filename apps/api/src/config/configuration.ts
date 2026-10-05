@@ -1,3 +1,8 @@
+export const DEFAULT_METRIC_REPORTING = {
+  intervalMs: 1000,
+  maxBufferedBytes: 65536,
+};
+export type MetricReportingSettings = typeof DEFAULT_METRIC_REPORTING;
 export const DEFAULT_TRACING = {
   enabled: true,
   sampleRate: 0.1,
@@ -176,6 +181,7 @@ export interface GatewayConfig {
   bodyCapture: BodyCaptureSettings;
   http2: Http2Settings;
   loadBalancer: LoadBalancerSettings;
+  metricReporting: MetricReportingSettings;
   tracing: TracingSettings;
   tls: ListenerTlsSettings;
   rateLimit: {
@@ -195,6 +201,16 @@ const parseProxyServices = (): ProxyServiceConfig[] => {
 };
 
 export default (): GatewayConfig => ({
+  metricReporting: {
+    intervalMs: Number(
+      process.env.METRICS_REPORT_INTERVAL_MS ??
+        DEFAULT_METRIC_REPORTING.intervalMs,
+    ),
+    maxBufferedBytes: Number(
+      process.env.METRICS_REPORT_MAX_BUFFERED_BYTES ??
+        DEFAULT_METRIC_REPORTING.maxBufferedBytes,
+    ),
+  },
   tracing: {
     enabled:
       process.env.TRACING_ENABLED === undefined

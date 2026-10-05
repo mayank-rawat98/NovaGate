@@ -7,6 +7,7 @@ import { TenantAuthGuard } from './tenant-auth.guard';
 import { AnalyticsController } from '../proxy-config/analytics.controller';
 import { ConfigPushService } from '../config-push/config-push.service';
 import { HealthController } from '../app/health.controller';
+import { MetricsStreamService } from '../proxy-config/metrics-stream.service';
 
 const TENANT = 'aabbccdd-1111-2222-3333-444455556666';
 const OTHER = 'aabbccdd-1111-2222-3333-444455556667';
@@ -24,6 +25,10 @@ describe('Tenant authorization through the HTTP pipeline', () => {
       controllers: [AnalyticsController, HealthController],
       providers: [
         { provide: APP_GUARD, useClass: TenantAuthGuard },
+        {
+          provide: MetricsStreamService,
+          useValue: { history: jest.fn(), open: jest.fn() },
+        },
         {
           provide: DataSource,
           useValue: {
