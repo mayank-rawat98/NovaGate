@@ -40,6 +40,20 @@ export class MigrationService implements OnModuleInit {
         const schema = tenantSchema(tenant.id);
         await manager.query(traceSchemaSql(schema));
         await manager.query(
+          `ALTER TABLE IF EXISTS ${schema}.metrics_snapshots ALTER COLUMN rps TYPE DOUBLE PRECISION USING rps::double precision`,
+        );
+        const metricColumns = await manager.query<Array<{ data_type: string }>>(
+          `SELECT data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'metrics_snapshots' AND column_name = 'timestamp'`,
+          [schema],
+        );
+        if (metricColumns[0]?.data_type === 'timestamp without time zone')
+          await manager.query(
+            `ALTER TABLE ${schema}.metrics_snapshots ALTER COLUMN timestamp TYPE TIMESTAMPTZ USING timestamp AT TIME ZONE 'UTC'`,
+          );
+        await manager.query(
+          `CREATE INDEX IF NOT EXISTS metrics_snapshots_time ON ${schema}.metrics_snapshots (timestamp DESC)`,
+        );
+        await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.request_logs ADD COLUMN IF NOT EXISTS "traceId" VARCHAR(32), ADD COLUMN IF NOT EXISTS "spanId" VARCHAR(16)`,
         );
         await manager.query(

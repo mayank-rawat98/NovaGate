@@ -73,7 +73,11 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
     this.logger.log(`WebSocket server started on port ${port}`);
 
     const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-    this.redisPub = new Redis(redisUrl);
+    this.redisPub = new Redis(redisUrl, {
+      enableOfflineQueue: false,
+      maxRetriesPerRequest: 1,
+      commandTimeout: 2000,
+    });
     this.redisSub = new Redis(redisUrl);
 
     this.redisSub.subscribe('config.update');
@@ -339,12 +343,17 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
         }
         break;
       }
-      case 'metrics':
-        await this.ingestionService.ingestMetrics(
+      case 'metrics': {
+        const snapshot = await this.ingestionService.ingestMetrics(
           tenantId,
           (message as MetricsMessage).payload,
         );
+        await this.redisPub.publish(
+          `metrics:${tenantId.toLowerCase()}`,
+          JSON.stringify(snapshot),
+        );
         break;
+      }
       case 'pong':
         this.logger.debug(`Received pong from ${tenantId}`);
         break;

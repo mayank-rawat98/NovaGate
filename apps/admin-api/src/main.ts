@@ -9,7 +9,11 @@ import helmet from 'helmet';
 import { AppModule } from './app/app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // Stream services end their responses in lifecycle cleanup. Also close remaining
+  // transport sockets when disposing the adapter, including idle preconnections.
+  const app = await NestFactory.create(AppModule, {
+    forceCloseConnections: true,
+  });
   app.enableShutdownHooks();
   // Security headers (clickjacking, MIME sniffing, etc.). API serves JSON only,
   // so deny framing outright.

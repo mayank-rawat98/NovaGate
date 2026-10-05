@@ -191,6 +191,27 @@ integration('Configuration upgrades and updates on PostgreSQL', () => {
       await ds.query(`DROP SCHEMA ${tenantSchema(other)} CASCADE`);
     }
   });
+  it('upgrades metric rates and UTC timestamps idempotently while preserving history', async () => {
+    await ds.query(
+      `ALTER TABLE ${schema}.metrics_snapshots ALTER COLUMN rps TYPE INTEGER USING rps::integer, ALTER COLUMN timestamp TYPE TIMESTAMP USING timestamp AT TIME ZONE 'UTC'`,
+    );
+    await ds.query(
+      `INSERT INTO ${schema}.metrics_snapshots (rps, "p50Ms", "p95Ms", "p99Ms", "errorRate", timestamp) VALUES (2, 1, 2, 3, 0, '2026-01-01T00:00:00')`,
+    );
+    await new MigrationService(ds).onModuleInit();
+    await ds.query(
+      `INSERT INTO ${schema}.metrics_snapshots (rps, timestamp) VALUES (1.125, NOW())`,
+    );
+    await new MigrationService(ds).onModuleInit();
+    const rows = await ds.query(
+      `SELECT rps, timestamp FROM ${schema}.metrics_snapshots ORDER BY timestamp`,
+    );
+    expect(rows[0]).toMatchObject({
+      rps: 2,
+      timestamp: new Date('2026-01-01T00:00:00Z'),
+    });
+    expect(rows.at(-1).rps).toBe(1.125);
+  });
   it('retains all legacy protections alongside configured plugins', async () => {
     const [row] = await ds.query(
       `SELECT plugins FROM ${schema}.routes WHERE id = $1`,

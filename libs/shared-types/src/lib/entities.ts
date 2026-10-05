@@ -1,4 +1,4 @@
-import type { GraphqlPolicy } from './ws-messages.js';
+import type { GraphqlPolicy } from './ws-messages.ts';
 export interface TenantEntity {
   id: string;
   name: string;

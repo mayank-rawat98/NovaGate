@@ -110,6 +110,21 @@ export interface ErrorsMessage extends BaseWsMessage {
   payload: ErrorEvent[];
 }
 
+export interface MetricsSnapshot {
+  rps: number;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  errorRate: number;
+  timestamp: string;
+}
+export const MAX_METRIC_RATE = 1000000000;
+export const MAX_METRIC_LATENCY_MS = 3600000;
+export const METRIC_LATENCY_BUCKETS = [
+  0, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000,
+  300000, 3600000,
+] as const;
+
 export interface MetricsMessage extends BaseWsMessage {
   type: 'metrics';
   payload: {
@@ -118,6 +133,43 @@ export interface MetricsMessage extends BaseWsMessage {
     p95: number;
     p99: number;
     errorRate: number;
+  };
+}
+
+export function validateMetricPayload(
+  payload: unknown,
+): MetricsMessage['payload'] {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload))
+    throw new Error('Invalid metric snapshot');
+  const value = payload as Record<string, unknown>;
+  const keys = ['rps', 'p50', 'p95', 'p99', 'errorRate'];
+  if (
+    Object.keys(value).length !== keys.length ||
+    Object.keys(value).some((key) => !keys.includes(key)) ||
+    keys.some(
+      (key) =>
+        typeof value[key] !== 'number' ||
+        !Number.isFinite(value[key]) ||
+        (value[key] as number) < 0,
+    )
+  )
+    throw new Error('Invalid metric snapshot');
+  if (
+    (value.rps as number) > MAX_METRIC_RATE ||
+    (value.errorRate as number) > 1 ||
+    ['p50', 'p95', 'p99'].some(
+      (key) => (value[key] as number) > MAX_METRIC_LATENCY_MS,
+    ) ||
+    (value.p50 as number) > (value.p95 as number) ||
+    (value.p95 as number) > (value.p99 as number)
+  )
+    throw new Error('Invalid metric snapshot');
+  return {
+    rps: value.rps as number,
+    p50: value.p50 as number,
+    p95: value.p95 as number,
+    p99: value.p99 as number,
+    errorRate: value.errorRate as number,
   };
 }
 

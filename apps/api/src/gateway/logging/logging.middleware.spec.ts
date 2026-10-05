@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { Logger } from '@nestjs/common';
+import type { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 import { LoggingMiddleware } from './logging.middleware';
 import type { MetricsService } from '../metrics/metrics.service';
 import type { GatewayTelemetryService } from '../telemetry/gateway-telemetry.service';
@@ -13,17 +14,20 @@ describe('HTTP response lifetime observation', () => {
     jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined),
   );
   afterEach(() => jest.restoreAllMocks());
-  function fixture() {
+  function fixture(getTenantId: () => string | null = () => null) {
     const metrics = {
       incrementActiveConnections: jest.fn(),
       decrementActiveConnections: jest.fn(),
       incrementHttpRequests: jest.fn(),
       observeRequestDuration: jest.fn(),
+      recordCompletedHttp: jest.fn(),
     };
     const telemetry = { logRequest: jest.fn() };
     const middleware = new LoggingMiddleware(
       metrics as unknown as MetricsService,
       telemetry as unknown as GatewayTelemetryService,
+      undefined,
+      { getTenantId } as GatewayConfigManagerService,
     );
     const req = {
       method: 'GET',
@@ -44,6 +48,22 @@ describe('HTTP response lifetime observation', () => {
     middleware.use(req, res, next);
     return { middleware, metrics, telemetry, req, res, next };
   }
+  it('reports only at completion and retains the original request tenant through replacement', () => {
+    let tenant = 'original';
+    const f = fixture(() => tenant);
+    expect(f.metrics.recordCompletedHttp).not.toHaveBeenCalled();
+    tenant = 'replacement';
+    f.res.statusCode = 503;
+    Object.assign(f.res, { writableFinished: true });
+    f.res.emit('finish');
+    f.res.emit('close');
+    expect(f.metrics.recordCompletedHttp).toHaveBeenCalledTimes(1);
+    expect(f.metrics.recordCompletedHttp).toHaveBeenCalledWith(
+      503,
+      expect.any(Number),
+      'original',
+    );
+  });
   it('holds active accounting until response finish and records the final filter status once', () => {
     const f = fixture();
     expect(f.next).toHaveBeenCalledTimes(1);

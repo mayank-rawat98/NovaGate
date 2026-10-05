@@ -233,6 +233,132 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
     }
   });
 
+  it('publishes canonical metrics only on the authenticated tenant channel after persistence', async () => {
+    const subscriber = new Redis(process.env.TEST_REDIS_URL as string);
+    await subscriber.subscribe(`metrics:${tenantId}`, `metrics:${secondId}`);
+    const seen: Array<{ channel: string; payload: Record<string, unknown> }> =
+      [];
+    subscriber.on('message', (channel, bytes) =>
+      seen.push({ channel, payload: JSON.parse(bytes) }),
+    );
+    try {
+      const { ws } = await connect(apiKey);
+      ws.send(
+        JSON.stringify({
+          type: 'metrics',
+          tenantId: secondId,
+          payload: { rps: 3.125, p50: 1, p95: 2, p99: 3, errorRate: 0.5 },
+        }),
+      );
+      await until(async () => seen.length === 1);
+      expect(seen[0].channel).toBe(`metrics:${tenantId}`);
+      expect(seen[0].payload).toMatchObject({
+        rps: 3.125,
+        p50Ms: 1,
+        p95Ms: 2,
+        p99Ms: 3,
+        errorRate: 0.5,
+      });
+      expect(
+        (
+          await ds.query(
+            `SELECT rps FROM tenant_${tenantId.replace(/-/g, '_')}.metrics_snapshots ORDER BY timestamp DESC LIMIT 1`,
+          )
+        )[0].rps,
+      ).toBe(3.125);
+      ws.send(
+        JSON.stringify({
+          type: 'metrics',
+          payload: { rps: -1, p50: 1, p95: 2, p99: 3, errorRate: 0 },
+        }),
+      );
+      // A valid marker after the malformed message proves serialized validation completed.
+      ws.send(
+        JSON.stringify({
+          type: 'metrics',
+          payload: { rps: 4.25, p50: 1, p95: 2, p99: 3, errorRate: 0 },
+        }),
+      );
+      await until(async () => seen.length === 2);
+      expect(seen[1].payload.rps).toBe(4.25);
+    } finally {
+      subscriber.disconnect();
+    }
+  });
+  it('bounds metric storage across independent concurrent writers and removes expired snapshots', async () => {
+    const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
+    await ds.query(`TRUNCATE ${schema}.metrics_snapshots`);
+    await ds.query(
+      `INSERT INTO ${schema}.metrics_snapshots (rps, "p50Ms", "p95Ms", "p99Ms", "errorRate", timestamp) SELECT 1, 1, 2, 3, 0, NOW() - INTERVAL '1 minute' FROM generate_series(1, 200)`,
+    );
+    await ds.query(
+      `INSERT INTO ${schema}.metrics_snapshots (rps, timestamp) VALUES (999, NOW() - INTERVAL '8 days')`,
+    );
+    const settings = new ConfigService({
+      metricIngestion: { maxRowsPerTenant: 128 },
+    });
+    const writers = [
+      new LogIngestionService(ds, settings),
+      new LogIngestionService(ds, settings),
+    ];
+    await Promise.all(
+      Array.from({ length: 24 }, (_, i) =>
+        writers[i % 2].ingestMetrics(
+          i % 2 ? tenantId.toUpperCase() : tenantId,
+          { rps: 1.125, p50: 1, p95: 2, p99: 3, errorRate: 0 },
+        ),
+      ),
+    );
+    expect(
+      Number(
+        (await ds.query(`SELECT COUNT(*) FROM ${schema}.metrics_snapshots`))[0]
+          .count,
+      ),
+    ).toBe(128);
+    expect(
+      Number(
+        (
+          await ds.query(
+            `SELECT COUNT(*) FROM ${schema}.metrics_snapshots WHERE rps = 999`,
+          )
+        )[0].count,
+      ),
+    ).toBe(0);
+    expect(
+      Number(
+        (
+          await ds.query(
+            `SELECT COUNT(*) FROM ${schema}.metrics_snapshots WHERE rps = 1.125`,
+          )
+        )[0].count,
+      ),
+    ).toBe(24);
+  });
+  it('expires metrics for idle tenants without another report', async () => {
+    const schema = `tenant_${secondId.replace(/-/g, '_')}`;
+    await ds.query(
+      `INSERT INTO ${schema}.metrics_snapshots (rps, timestamp) VALUES (9999, NOW() - INTERVAL '8 days'), (8888, NOW())`,
+    );
+    const service = new LogIngestionService(ds);
+    await service.cleanupExpired();
+    expect(
+      (
+        await ds.query(
+          `SELECT rps FROM ${schema}.metrics_snapshots WHERE rps IN (9999, 8888)`,
+        )
+      ).map((row: { rps: number }) => row.rps),
+    ).toEqual([8888]);
+    await service.onModuleDestroy();
+    await expect(
+      service.ingestMetrics(secondId, {
+        rps: 0,
+        p50: 0,
+        p95: 0,
+        p99: 0,
+        errorRate: 0,
+      }),
+    ).rejects.toThrow('stopping');
+  });
   it('preserves publication versions and retains pending config until ACK', async () => {
     const { ws, message } = await connect(apiKey);
     const config = message.payload.config;

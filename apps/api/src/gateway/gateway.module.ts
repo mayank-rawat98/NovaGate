@@ -22,6 +22,7 @@ import { GatewayTelemetryService } from './telemetry/gateway-telemetry.service';
 import { UpstreamHealthService } from './health/upstream-health.service';
 import { PluginsModule } from './plugins/plugins.module';
 import { OtelService } from './telemetry/otel.service';
+import { MetricsReporterService } from './metrics/metrics-reporter.service';
 
 @Module({
   imports: [RedisModule, ConfigManagerModule, PluginsModule],
@@ -50,6 +51,7 @@ import { OtelService } from './telemetry/otel.service';
       useClass: GatewayExceptionFilter,
     },
     OtelService,
+    MetricsReporterService,
   ],
   exports: [WsProxyService, GrpcProxyService],
 })

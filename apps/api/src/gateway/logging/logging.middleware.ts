@@ -2,6 +2,7 @@ import { Injectable, Logger, NestMiddleware, Optional } from '@nestjs/common';
 import type { NextFunction } from 'express';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
+import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 import { OtelService } from '../telemetry/otel.service';
 import { MetricsService } from '../metrics/metrics.service';
 import { GatewayTelemetryService } from '../telemetry/gateway-telemetry.service';
@@ -33,6 +34,7 @@ export class LoggingMiddleware implements NestMiddleware {
     private readonly metrics: MetricsService,
     private readonly telemetry: GatewayTelemetryService,
     @Optional() private readonly tracing?: OtelService,
+    @Optional() private readonly manager?: GatewayConfigManagerService,
   ) {}
 
   use(
@@ -46,6 +48,7 @@ export class LoggingMiddleware implements NestMiddleware {
     }
     this.observed.add(response);
     const started = performance.now();
+    const requestTenant = this.manager?.getTenantId() ?? null;
     const header = request.headers['x-request-id'];
     const requestId =
       typeof header === 'string' && UUID.test(header) ? header : randomUUID();
@@ -80,6 +83,13 @@ export class LoggingMiddleware implements NestMiddleware {
       );
       this.observe(() =>
         this.metrics.observeRequestDuration(method, path, responseTimeMs),
+      );
+      this.observe(() =>
+        this.metrics.recordCompletedHttp?.(
+          statusCode,
+          responseTimeMs,
+          requestTenant,
+        ),
       );
       this.observe(() => {
         response.locals.trace?.set({

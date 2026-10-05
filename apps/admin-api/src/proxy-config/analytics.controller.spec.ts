@@ -2,6 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AnalyticsController } from './analytics.controller';
 import { DataSource } from 'typeorm';
 import { ConfigPushService } from '../config-push/config-push.service';
+import { ConfigService } from '@nestjs/config';
+import { MetricsStreamService } from './metrics-stream.service';
 
 const TENANT = 'aabbccdd-1111-2222-3333-444455556666';
 
@@ -22,6 +24,13 @@ async function build(ds: MockDs, cp = mockConfigPush()) {
     providers: [
       { provide: DataSource, useValue: ds },
       { provide: ConfigPushService, useValue: cp },
+      {
+        provide: MetricsStreamService,
+        useValue: new MetricsStreamService(
+          ds as unknown as DataSource,
+          new ConfigService(),
+        ),
+      },
     ],
   }).compile();
   return { controller: module.get(AnalyticsController), ds, cp };
@@ -159,7 +168,8 @@ describe('AnalyticsController', () => {
       await controller.getMetrics(TENANT);
 
       const queryCall = manager.query.mock.calls[1];
-      expect(queryCall[0]).toContain("'24 hours'");
+      expect(queryCall[1]).toEqual([86400, 600]);
+      expect(queryCall[0]).toContain('LIMIT $2');
     });
 
     it('accepts 7d period', async () => {
@@ -175,7 +185,7 @@ describe('AnalyticsController', () => {
       await controller.getMetrics(TENANT, '7d');
 
       const queryCall = manager.query.mock.calls[1];
-      expect(queryCall[0]).toContain("'7 days'");
+      expect(queryCall[1]).toEqual([604800, 600]);
     });
   });
 

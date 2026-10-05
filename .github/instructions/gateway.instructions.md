@@ -250,3 +250,5 @@ Allowed test dependencies:
 
 If a new dependency is needed, state the package name, version, and
 justification before installing — do not run `npm install` speculatively.
+
+Issue #63 adds `gateway/metrics/metrics-reporter.service.ts` and its lifecycle tests. Aggregate reporting uses finite fixed buckets and transient export; telemetry must not retain unbounded samples or move old-tenant completions into a replacement tenant.
