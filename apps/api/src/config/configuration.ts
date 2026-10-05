@@ -47,6 +47,25 @@ export const DEFAULT_WEBSOCKET = {
 };
 export type WebSocketSettings = typeof DEFAULT_WEBSOCKET;
 
+export const DEFAULT_BODY_CAPTURE = {
+  maxBodyBytes: 16777216,
+  timeoutMs: 5000,
+  maxPendingRequests: 64,
+};
+export type BodyCaptureSettings = typeof DEFAULT_BODY_CAPTURE;
+
+export const DEFAULT_GRAPHQL = {
+  maxDepth: 10,
+  maxComplexity: 1000,
+  maxQueryBytes: 65536,
+  maxTokens: 10000,
+  maxLexicalDepth: 128,
+  maxBodyBytes: 1048576,
+  bodyTimeoutMs: 5000,
+  maxPendingRequests: 32,
+};
+export type GraphqlSettings = typeof DEFAULT_GRAPHQL;
+
 export const DEFAULT_HMAC = {
   maxBodyBytes: 1048576,
   bodyTimeoutMs: 5000,
@@ -118,6 +137,8 @@ export interface GatewayConfig {
   identityProvider: IdentityProviderSettings;
   mtls: MtlsSettings;
   hmac: HmacSettings;
+  graphql: GraphqlSettings;
+  bodyCapture: BodyCaptureSettings;
   tls: ListenerTlsSettings;
   rateLimit: {
     windowMs: number;
@@ -147,6 +168,41 @@ export default (): GatewayConfig => ({
     keyFile: process.env.HTTP_TLS_KEY_FILE,
     clientCaFile: process.env.HTTP_TLS_CLIENT_CA_FILE,
     crlFile: process.env.HTTP_TLS_CRL_FILE,
+  },
+  bodyCapture: {
+    maxBodyBytes: Number(
+      process.env.BODY_CAPTURE_MAX_BODY_BYTES ??
+        DEFAULT_BODY_CAPTURE.maxBodyBytes,
+    ),
+    timeoutMs: Number(
+      process.env.BODY_CAPTURE_TIMEOUT_MS ?? DEFAULT_BODY_CAPTURE.timeoutMs,
+    ),
+    maxPendingRequests: Number(
+      process.env.BODY_CAPTURE_MAX_PENDING_REQUESTS ??
+        DEFAULT_BODY_CAPTURE.maxPendingRequests,
+    ),
+  },
+  graphql: {
+    ...DEFAULT_GRAPHQL,
+    maxQueryBytes: Number(
+      process.env.GRAPHQL_MAX_QUERY_BYTES ?? DEFAULT_GRAPHQL.maxQueryBytes,
+    ),
+    maxTokens: Number(
+      process.env.GRAPHQL_MAX_TOKENS ?? DEFAULT_GRAPHQL.maxTokens,
+    ),
+    maxLexicalDepth: Number(
+      process.env.GRAPHQL_MAX_LEXICAL_DEPTH ?? DEFAULT_GRAPHQL.maxLexicalDepth,
+    ),
+    maxBodyBytes: Number(
+      process.env.GRAPHQL_MAX_BODY_BYTES ?? DEFAULT_GRAPHQL.maxBodyBytes,
+    ),
+    bodyTimeoutMs: Number(
+      process.env.GRAPHQL_BODY_TIMEOUT_MS ?? DEFAULT_GRAPHQL.bodyTimeoutMs,
+    ),
+    maxPendingRequests: Number(
+      process.env.GRAPHQL_MAX_PENDING_REQUESTS ??
+        DEFAULT_GRAPHQL.maxPendingRequests,
+    ),
   },
   hmac: {
     ...DEFAULT_HMAC,

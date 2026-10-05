@@ -119,3 +119,5 @@ Settings also includes `LogExportPanel`: private NDJSON exports with UTC range/s
 - Run `dashboard:ui-smoke` after UI changes; it exercises the standalone production build with fixture APIs and axe checks. See the root README for local browser configuration.
 - Never import from `apps/api` or `apps/admin-api` — only `@api-gateway/shared-types`
 - Branding is **NovaGate** — never use "GatewayX" anywhere
+
+GraphQL editing reads legacy route policy and explicit plugin configuration, displays their effective bounds, and saves one `graphql-guard` plugin with `graphql: null` to clear the legacy column. Always send `plugins: []` when all plugins are disabled. Preserve saved plugin order and expose depth, complexity and introspection controls with visible labels.

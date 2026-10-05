@@ -105,6 +105,7 @@
     "@nestjs/core": "^11.0.0",
     "@nestjs/mapped-types": "*",
     "@nestjs/platform-express": "^11.0.0",
+    "graphql": "17.0.2",
     "http-proxy-middleware": "^3.0.3",
     "ioredis": "^5.4.1",
     "joi": "^17.13.3",

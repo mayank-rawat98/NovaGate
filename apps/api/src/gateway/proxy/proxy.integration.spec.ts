@@ -1,5 +1,5 @@
 import { Global, INestApplication, Module } from '@nestjs/common';
-import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { createHmac, createHash, generateKeyPairSync } from 'crypto';
@@ -12,6 +12,7 @@ import { ProxyMiddleware } from './proxy.middleware';
 import { ProxyService } from './proxy.service';
 import { LoadBalancerService } from './load-balancer.service';
 import { Http2SessionPool } from './http2-session-pool.service';
+import { LoggingInterceptor } from '../logging/logging.interceptor';
 import { MetricsService } from '../metrics/metrics.service';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 import { ConfigManagerModule } from '../config-manager/config-manager.module';
@@ -61,7 +62,12 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
   const rateLimit = {
     check: jest.fn().mockResolvedValue({ allowed: true, retryAfterMs: null }),
   };
+  const telemetry = { sendError: jest.fn(), logRequest: jest.fn() };
   const metrics = {
+    incrementActiveConnections: jest.fn(),
+    decrementActiveConnections: jest.fn(),
+    incrementHttpRequests: jest.fn(),
+    observeRequestDuration: jest.fn(),
     incrementDownstreamTimeout: jest.fn(),
     incrementProxyRetry: jest.fn(),
   };
@@ -168,10 +174,11 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
         },
         {
           provide: GatewayTelemetryService,
-          useValue: { sendError: jest.fn() },
+          useValue: telemetry,
         },
         { provide: APP_FILTER, useClass: GatewayExceptionFilter },
         { provide: APP_GUARD, useClass: RateLimitGuard },
+        { provide: APP_INTERCEPTOR, useClass: LoggingInterceptor },
         RateLimitService,
       ],
     })
@@ -193,7 +200,9 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
     received = [];
     mode = { status: 200, failOnce: false };
     rateLimit.check.mockClear();
-    metrics.incrementProxyRetry.mockClear();
+    for (const method of Object.values(metrics)) method.mockClear();
+    telemetry.sendError.mockClear();
+    telemetry.logRequest.mockClear();
     config = {
       routes: [
         {
@@ -619,5 +628,123 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
       ).status,
     ).toBe(200);
     expect(received[0].body).toBe(valid.toString('base64'));
+  });
+  it('blocks GraphQL GET fragment depth and later transformed query bypasses before upstream', async () => {
+    config.routes[0].graphql = { maxDepth: 2 };
+    const query = '{ root { ...A } } fragment A on Node { child { value } }';
+    expect(
+      (await fetch(`${url}/api?query=${encodeURIComponent(query)}`)).status,
+    ).toBe(400);
+    config.routes[0].plugins = [
+      { name: 'graphql-guard', config: { maxDepth: 2 } },
+      { name: 'request-transform', config: { addQueryParams: { query } } },
+    ];
+    expect(
+      (await fetch(`${url}/api?query=${encodeURIComponent('{ user { id } }')}`))
+        .status,
+    ).toBe(400);
+    expect(received).toHaveLength(0);
+  });
+  it('preserves GraphQL POST bytes through the shared body capture and HMAC verifier', async () => {
+    config.routes[0].graphql = null;
+    config.routes[0].authRequired = true;
+    const body = Buffer.from(
+      '{  "query": "{ user { id } }", "variables": {} }',
+    );
+    const sig = createHmac('sha256', 'fixture-secret')
+      .update(body)
+      .digest('hex');
+    config.routes[0].plugins = [
+      { name: 'graphql-guard', config: { maxDepth: 3 } },
+      { name: 'request-size-limit', config: { maxBodyBytes: 128 } },
+      {
+        name: 'hmac-auth',
+        config: {
+          header: 'x-signature',
+          algorithm: 'sha256',
+          secrets: ['fixture-secret'],
+        },
+      },
+    ];
+    expect(
+      (
+        await upload([body.subarray(0, 10), body.subarray(10)], {
+          'content-type': 'application/json',
+          'x-signature': sig,
+        })
+      ).status,
+    ).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0].body).toBe(body.toString('base64'));
+  });
+  it('rejects unsupported GraphQL payloads, GET mutations and duplicate configured policies before upstream', async () => {
+    config.routes[0].graphql = {};
+    expect(
+      (
+        await fetch(
+          `${url}/api?query=${encodeURIComponent('mutation { update }')}`,
+        )
+      ).status,
+    ).toBe(405);
+    for (const payload of [
+      '[]',
+      '{"extensions":{"persistedQuery":{"sha256Hash":"fixture"}}}',
+      '{"query":"{"}',
+    ])
+      expect(
+        (
+          await upload([Buffer.from(payload)], {
+            'content-type': 'application/json',
+          })
+        ).status,
+      ).toBe(400);
+    config.routes[0].plugins = [
+      { name: 'graphql-guard', config: {} },
+      { name: 'graphql-guard', config: {} },
+    ];
+    expect(
+      (await fetch(`${url}/api?query=${encodeURIComponent('{ a }')}`)).status,
+    ).toBe(500);
+    expect(received).toHaveLength(0);
+  });
+  it('keeps GraphQL query/header payloads out of request/error telemetry and normalized metric labels', async () => {
+    const marker = 'private-query-marker';
+    config.routes[0].graphql = {};
+    const query = `{ user(name: "${marker}") { id } }`;
+    const response = await fetch(
+      `${url}/api?query=${encodeURIComponent(query)}`,
+      { headers: { 'x-request-id': marker, 'user-agent': marker } },
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-request-id')).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    expect(telemetry.logRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/api' }),
+    );
+    expect(JSON.stringify(telemetry.logRequest.mock.calls)).not.toContain(
+      marker,
+    );
+    expect(metrics.incrementHttpRequests).toHaveBeenCalledWith(
+      'GET',
+      '/api',
+      200,
+    );
+    config.routes[0].plugins = [
+      { name: 'graphql-guard', config: {} },
+      { name: 'graphql-guard', config: {} },
+    ];
+    expect(
+      (await fetch(`${url}/api?query=${encodeURIComponent(query)}`)).status,
+    ).toBe(500);
+    expect(telemetry.sendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/api',
+        errorCode: 'PLUGIN_CONFIG_INVALID',
+      }),
+    );
+    expect(JSON.stringify(telemetry.sendError.mock.calls)).not.toContain(
+      marker,
+    );
   });
 });

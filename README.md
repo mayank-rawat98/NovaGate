@@ -417,3 +417,27 @@ For custom generic timestamp signatures, configuring `timestampHeader` **require
 Each route permits up to eight nonempty secrets, each at most 4096 UTF-8 bytes, and at most eight Stripe v1 signatures. Oversized uploads return 413, upload deadlines 408, admission exhaustion 503 and signature failures 401. Limits apply to cached and chunked bodies; cancelled/aborted uploads release listeners and admission. Preparation never authenticates: verification remains in the ordered HMAC policy hook.
 
 Provider references: [GitHub validation and reference vector](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries), [Stripe webhook verification](https://docs.stripe.com/webhooks), [Stripe's signature implementation](https://github.com/stripe/stripe-node/blob/master/src/Webhooks.ts).
+
+### Bounded GraphQL request policies
+
+Enable `graphql-guard` on a route or set its legacy `graphql` policy. Defaults are depth 10, weighted field complexity 1000 and introspection disabled. Depth is 1–100 and complexity is 1–100000. When both policies exist, their explicit limits intersect; every configured policy must explicitly permit introspection. Null disables the legacy policy. Duplicate plugin names are rejected. The dashboard consolidates both representations into one visible plugin and saves `graphql: null`; disabling every plugin saves `plugins: []`.
+
+The pinned official GraphQL AST parser checks GET query parameters, JSON POST and raw `application/graphql` POST. It selects the requested operation, expands fragment depth and repeated-spread cost without recursively expanding the fragment graph, and checks aliases, inline fragments, cycles, duplicate definitions and introspection. GET mutations return 405. Batches, persisted-query extensions and subscriptions are rejected until dedicated policies exist. Unsupported methods/media/compression fail before forwarding. A final validation hook rechecks transformed queries and headers before dispatch.
+
+Complexity is a conservative schema-free weighted field count, including repeated spreads. It does not estimate resolver execution, pagination cardinality or response size. Schema-aware cost multipliers and persisted-operation manifests remain roadmap requirements.
+
+| Variable                            | Default  | Valid range / purpose                              |
+| ----------------------------------- | -------- | -------------------------------------------------- |
+| `GRAPHQL_MAX_QUERY_BYTES`           | 65536    | 128–1048576 bytes                                  |
+| `GRAPHQL_MAX_TOKENS`                | 10000    | 16–20000 tokens                                    |
+| `GRAPHQL_MAX_LEXICAL_DEPTH`         | 128      | 8–256 nested punctuation groups before parsing     |
+| `GRAPHQL_MAX_BODY_BYTES`            | 1048576  | 128–16777216 bytes                                 |
+| `GRAPHQL_BODY_TIMEOUT_MS`           | 5000     | 100–30000 ms absolute upload deadline              |
+| `GRAPHQL_MAX_PENDING_REQUESTS`      | 32       | 1–256 prepared requests                            |
+| `BODY_CAPTURE_MAX_BODY_BYTES`       | 16777216 | 1–67108864 bytes across body-aware policies        |
+| `BODY_CAPTURE_TIMEOUT_MS`           | 5000     | 100–30000 ms absolute upload deadline              |
+| `BODY_CAPTURE_MAX_PENDING_REQUESTS` | 64       | 1–512 prepared requests across body-aware policies |
+
+HMAC, GraphQL and request-size policies share one bounded capture of original bytes; the smallest applicable byte and deadline limit wins. Shared and mode-specific admission remain held until response finish, close or cancellation. No policy reconstructs signed bytes from parsed JSON. Capacity failures return 503, body overflow 413 and capture timeout 408; GraphQL policy/parse failures return 400, invalid configuration 500. Errors retain the gateway request ID and omit query contents. Native WebSocket/gRPC listeners reject HTTP-only GraphQL policies and cancel affected existing streams after policy changes.
+
+Request telemetry uses matched route patterns (or `unmatched`), excludes raw query strings and user agents, and replaces malformed client request IDs with UUIDs. Broader telemetry/redaction acceptance remains part of phase 4 and the final campaign.

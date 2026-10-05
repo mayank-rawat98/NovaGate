@@ -41,6 +41,9 @@ export interface GatewayPlugin {
    * Must not establish authentication or transform the request. */
   prepareRequest?(ctx: PluginContext): Promise<PluginShortCircuit | void>;
 
+  /** Pure final policy validation after ordered transformations, before proxying. */
+  validateRequest?(ctx: PluginContext): Promise<PluginShortCircuit | void>;
+
   /**
    * Called before the request reaches the proxy.
    * Return a PluginShortCircuit to stop processing and send that response.

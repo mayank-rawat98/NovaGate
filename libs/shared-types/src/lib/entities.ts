@@ -1,3 +1,4 @@
+import type { GraphqlPolicy } from './ws-messages.js';
 export interface TenantEntity {
   id: string;
   name: string;
@@ -32,6 +33,7 @@ export interface RouteEntity {
     on: number[];
     methods: string[];
   };
+  graphql?: GraphqlPolicy | null;
   plugins?: Array<{ name: string; config: Record<string, unknown> }>;
   acl?: {
     allow?: string[];

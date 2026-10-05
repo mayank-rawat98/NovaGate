@@ -103,7 +103,13 @@ export class JwtMiddleware implements NestMiddleware {
   private ensureRequestId(req: Request, res: ResponseWithLocals): string {
     const headerValue = req.headers['x-request-id'];
     const existing = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-    const requestId = existing ?? uuidv4();
+    const requestId =
+      typeof existing === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        existing,
+      )
+        ? existing
+        : uuidv4();
     req.headers['x-request-id'] = requestId;
     res.setHeader('X-Request-ID', requestId);
     res.locals.requestId = requestId;

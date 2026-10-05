@@ -36,12 +36,14 @@ export class LoggingInterceptor implements NestInterceptor {
         const responseTimeMs = Date.now() - start;
         const statusCode = response.statusCode;
         const method = request.method;
-        const routePath = this.getPathLabel(request);
+        const routePath =
+          response.locals.routePattern ?? request.route?.path ?? 'unmatched';
         const requestIdHeader = request.headers['x-request-id'];
         const requestId =
+          response.locals.requestId ??
           (Array.isArray(requestIdHeader)
             ? requestIdHeader[0]
-            : requestIdHeader) ?? response.locals.requestId;
+            : requestIdHeader);
 
         this.metricsService.incrementHttpRequests(
           method,
@@ -59,12 +61,11 @@ export class LoggingInterceptor implements NestInterceptor {
           id: crypto.randomUUID(),
           timestamp: new Date().toISOString(),
           method,
-          path: request.originalUrl || '',
+          path: response.locals.routePattern ?? 'unmatched',
           statusCode,
           responseTimeMs,
           requestId: requestId || 'unknown',
           clientIp: this.getClientIp(request) || 'unknown',
-          userAgent: request.headers['user-agent'] as string,
           downstreamService: response.locals.downstreamService,
           downstreamLatencyMs: response.locals.downstreamLatencyMs,
         };
@@ -80,12 +81,6 @@ export class LoggingInterceptor implements NestInterceptor {
         this.logger.log(JSON.stringify(logEntry));
       }),
     );
-  }
-
-  private getPathLabel(request: RequestWithUser): string {
-    const rawPath = request.originalUrl ?? request.url ?? 'unknown';
-    const [path] = rawPath.split('?');
-    return path || 'unknown';
   }
 
   private getClientIp(request: RequestWithUser): string | undefined {

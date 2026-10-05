@@ -132,6 +132,7 @@ export class ProxyService {
       );
     }
 
+    response.locals.routePattern = route.pathPattern;
     response.locals.downstreamService = service.name;
     // Certificate assertions are not downstream identity. mTLS reads original rawHeaders only after source verification.
     for (const name of Object.keys(request.headers))
@@ -154,7 +155,16 @@ export class ProxyService {
     ) {
       pluginEntries = [...pluginEntries, { name: 'graphql-guard', config: {} }];
     }
-    const activePlugins = this.pluginRegistry.resolve(pluginEntries);
+    let activePlugins: GatewayPlugin[];
+    try {
+      activePlugins = this.pluginRegistry.resolve(pluginEntries);
+    } catch {
+      throw new GatewayError(
+        'PLUGIN_CONFIG_INVALID',
+        'Route policy configuration is invalid',
+        500,
+      );
+    }
 
     if (activePlugins.length > 0) {
       const requestId = this.getRequestIdFromRequest(request, response);
@@ -462,9 +472,12 @@ export class ProxyService {
       timeout: timeoutMs,
       selfHandleResponse: true,
       on: {
-        proxyReq: (proxyReq: http.ClientRequest, req: http.IncomingMessage) => {
-          const rid = req.headers['x-request-id'];
-          const requestId = Array.isArray(rid) ? rid[0] : rid;
+        proxyReq: (
+          proxyReq: http.ClientRequest,
+          req: http.IncomingMessage,
+          res: http.ServerResponse,
+        ) => {
+          const requestId = this.getRequestId(req, res);
           if (requestId) proxyReq.setHeader('X-Request-ID', requestId);
           const fwd = this.getForwardedFor(req);
           if (fwd) proxyReq.setHeader('X-Forwarded-For', fwd);
@@ -732,8 +745,8 @@ export class ProxyService {
   ): string {
     const h = req.headers['x-request-id'];
     return (
-      (Array.isArray(h) ? h[0] : h) ??
       (res as unknown as ResponseWithLocals).locals?.requestId ??
+      (Array.isArray(h) ? h[0] : h) ??
       uuidv4()
     );
   }
@@ -744,6 +757,6 @@ export class ProxyService {
   ): string {
     const h = request.headers['x-request-id'];
     const fromHeader = Array.isArray(h) ? h[0] : h;
-    return fromHeader ?? response.locals?.requestId ?? uuidv4();
+    return response.locals?.requestId ?? fromHeader ?? uuidv4();
   }
 }

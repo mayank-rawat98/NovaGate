@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { RequestBodyService } from '../shared/request-body.service';
 import { IdentityProviderService } from './identity-provider/identity-provider.service';
 import { RateLimitService } from '../rate-limit/rate-limit.service';
 import { ConfigManagerModule } from '../config-manager/config-manager.module';
@@ -45,6 +46,7 @@ const FIRST_PARTY_PLUGINS = [
     PluginRegistryService,
     PluginRunnerService,
     IdentityProviderService,
+    RequestBodyService,
     ...FIRST_PARTY_PLUGINS,
     // Nest keeps only one provider for a token; explicitly aggregate instances.
     {
@@ -53,6 +55,6 @@ const FIRST_PARTY_PLUGINS = [
       useFactory: (...plugins: GatewayPlugin[]) => plugins,
     },
   ],
-  exports: [PluginRegistryService, PluginRunnerService],
+  exports: [PluginRegistryService, PluginRunnerService, RequestBodyService],
 })
 export class PluginsModule {}

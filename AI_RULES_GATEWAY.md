@@ -313,22 +313,9 @@ Some downstreams also don't handle OPTIONS and return 405.
 
 ---
 
-## Rule 15 — IP Restriction Reads X-Forwarded-For First
+## Rule 15 — Forwarding headers require explicit proxy trust
 
-`IpRestrictionMiddleware` must prefer `X-Forwarded-For` over `req.ip`
-because the gateway sits behind a load balancer or reverse proxy.
-
-```typescript
-const fwd = req.headers['x-forwarded-for'];
-if (fwd) {
-  return (Array.isArray(fwd) ? fwd[0] : fwd).split(',')[0].trim();
-}
-return req.ip ?? null;
-```
-
-Why: `req.ip` is the IP of the last hop (the load balancer), not the
-client. Using it would block the load balancer or allow all clients.
-Only use `req.ip` as a fallback for local/direct deployments.
+Use Express `req.ip` with the validated `TRUSTED_PROXY_CIDRS` configuration. Never prefer raw `X-Forwarded-For` from an untrusted socket peer. Native protocol handlers use the socket peer and apply explicit trusted proxy policy before interpreting forwarding assertions. Forwarding headers never establish certificate trust.
 
 ---
 
@@ -345,3 +332,7 @@ Required mTLS authentication needs an actual verified TLS peer certificate, incl
 ## Rule 18 — Webhook freshness must be signed
 
 Never authorize from a timestamp checked independently of the signature. Stripe and custom timestamp modes sign exact timestamp.body bytes, require canonical numeric timestamps and validate freshness again after body capture. Generic body-only signatures cannot claim replay prevention. Require exact-length hex before decoding and constant-time comparison for every bounded rotation key/signature. Use original wire headers, reject duplicates and capture original bytes under size/deadline/admission limits before body-aware policy hooks. Preparation must never authenticate or transform a request; ordered policy execution remains unchanged. Keep admission until response completion/cancellation. Preserve application event-ID deduplication and legitimate delivery retries.
+
+## Rule 19 — GraphQL policies require bounded AST analysis
+
+Use the pinned official parser with byte, token and lexical nesting limits. Validate operation selection and the entire fragment dependency graph. Memoize fragment summaries, saturate costs at policy bounds and include repeated spreads without exponential expansion. Guard all supported transports and revalidate effective requests after transformations. Unsupported batches, persisted operations and subscriptions must fail closed. Share bounded original body capture with HMAC and size policies; hold admission through response completion. Reject duplicate plugins and HTTP-only policies on native listeners, including revoking affected streams after configuration changes. Logs and metrics use route patterns, never GraphQL query text or caller-supplied arbitrary IDs.

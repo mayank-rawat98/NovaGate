@@ -41,6 +41,7 @@ let plane;
 let networkCreated = false;
 let trustedCalls = 0;
 const webhookBodies = [];
+const graphqlRequests = [];
 let untrustedCalls = 0;
 let trustedWsCalls = 0;
 let untrustedWsCalls = 0;
@@ -410,6 +411,27 @@ try {
   await new Promise((done) => webhookUpstream.listen(0, '0.0.0.0', done));
   const webhookTarget = `https://host.docker.internal:${webhookUpstream.address().port}`;
 
+  const graphqlUpstream = https.createServer(trusted, (req, res) => {
+    if (req.method === 'GET' && req.url === '/health') {
+      req.resume();
+      res.end('healthy');
+      return;
+    }
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.once('end', () => {
+      graphqlRequests.push({
+        method: req.method,
+        url: req.url,
+        body: Buffer.concat(chunks).toString(),
+      });
+      res.end('verified GraphQL');
+    });
+  });
+  servers.push(graphqlUpstream);
+  await new Promise((done) => graphqlUpstream.listen(0, '0.0.0.0', done));
+  const graphqlTarget = `https://host.docker.internal:${graphqlUpstream.address().port}`;
+
   const authPlugin = (endpoint = '/introspect') => ({
     name: 'oauth2-client-credentials',
     config: {
@@ -517,6 +539,12 @@ try {
     'HMAC_MAX_BODY_BYTES=128',
     '-e',
     'HMAC_BODY_TIMEOUT_MS=300',
+    '-e',
+    'GRAPHQL_MAX_BODY_BYTES=128',
+    '-e',
+    'GRAPHQL_BODY_TIMEOUT_MS=300',
+    '-e',
+    'GRAPHQL_MAX_TOKENS=256',
     '-e',
     'GRPC_HOST=0.0.0.0',
     '-e',
@@ -1175,6 +1203,83 @@ try {
   assert.equal((await sendWebhook(webhookBody)).status, 200);
   assert.equal(webhookBodies.length, 2);
 
+  config.services.push({
+    id: 'graphql-service',
+    name: 'graphql-fixture',
+    healthCheckPath: '/health',
+    targets: [{ url: graphqlTarget, weight: 1 }],
+  });
+  config.routes.push({
+    id: 'graphql-route',
+    method: 'ANY',
+    pathPattern: '/graphql',
+    serviceId: 'graphql-service',
+    enabled: true,
+    authRequired: false,
+    plugins: [
+      { name: 'request-size-limit', config: { maxBodyBytes: 256 } },
+      {
+        name: 'graphql-guard',
+        config: { maxDepth: 3, maxComplexity: 10, introspectionAllowed: false },
+      },
+    ],
+  });
+  for (const socket of plane.clients)
+    socket.send(
+      JSON.stringify({ type: 'config.update', version: 8, payload: config }),
+    );
+  await until(() => acknowledged === 8, 'GraphQL config ACK');
+  const sendQuery = (query) =>
+    fetch(
+      `https://127.0.0.1:${httpPort}/graphql?query=${encodeURIComponent(query)}`,
+    );
+  assert.equal((await sendQuery('{ user { id } }')).status, 200);
+  const queryBytes = Buffer.from(
+    '{ "query": "{ user { id } }", "variables": {} }',
+  );
+  assert.equal(
+    (
+      await fetch(`https://127.0.0.1:${httpPort}/graphql`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: queryBytes,
+      })
+    ).status,
+    200,
+  );
+  assert.equal(graphqlRequests.length, 2);
+  assert.equal(graphqlRequests.at(-1).body, queryBytes.toString());
+  for (const query of [
+    '{ root { ...A } } fragment A on Node { child { value { id } } }',
+    '{ ...A } fragment A on Query { hidden: __schema { types { name } } }',
+    '{ a: user { id } b: user { id } c: user { id } d: user { id } }',
+    '{ ...A } fragment A on Query { ...A }',
+  ])
+    assert.equal((await sendQuery(query)).status, 400);
+  assert.equal((await sendQuery('mutation { update }')).status, 405);
+  assert.equal(
+    (
+      await fetch(`https://127.0.0.1:${httpPort}/graphql`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '[]',
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await fetch(`https://127.0.0.1:${httpPort}/graphql`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: Buffer.alloc(129, 32),
+      })
+    ).status,
+    413,
+  );
+  assert.equal(graphqlRequests.length, 2);
+  assert.equal((await sendQuery('{ user { id } }')).status, 200);
+
   const healthCommand = JSON.parse(
     docker(
       'inspect',
@@ -1225,6 +1330,8 @@ try {
         inactiveIdentityCalls,
         outboundIdentityCalls,
         checks: [
+          'GraphQL-HTTPS-GET-POST-AST-fragments-alias-cost-cycle-introspection-method-body-boundaries',
+          'GraphQL-original-POST-bytes-and-failure-recovery',
           'Stripe-HTTPS-binary-rotation-tamper-staleness-body-limit-deadline-recovery',
           'signed-byte-preparation-before-earlier-body-limit-hook',
           'native-client-private-key-proof-HTTPS-gRPC-WSS',

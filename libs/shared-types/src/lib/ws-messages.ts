@@ -101,6 +101,14 @@ export interface TenantConfig {
   caCertPem?: string;
 }
 
+export const MAX_GRAPHQL_POLICY_DEPTH = 100;
+export const MAX_GRAPHQL_POLICY_COMPLEXITY = 100000;
+export interface GraphqlPolicy {
+  maxDepth?: number;
+  maxComplexity?: number;
+  introspectionAllowed?: boolean;
+}
+
 export interface RouteConfig {
   id: string;
   method: string;
@@ -119,11 +127,7 @@ export interface RouteConfig {
     allow?: string[];
     deny?: string[];
   };
-  graphql?: {
-    maxDepth?: number;
-    maxComplexity?: number;
-    introspectionAllowed?: boolean;
-  };
+  graphql?: GraphqlPolicy | null;
 }
 
 export interface ServiceTarget {

@@ -1,5 +1,7 @@
 import Joi from 'joi';
 import {
+  MAX_GRAPHQL_POLICY_DEPTH,
+  MAX_GRAPHQL_POLICY_COMPLEXITY,
   MAX_HMAC_SECRETS,
   MAX_HMAC_SECRET_BYTES,
   MAX_HMAC_CLOCK_SKEW_SECONDS,
@@ -159,13 +161,40 @@ const hmacConfigSchema = Joi.object({
   return v;
 });
 
+const graphqlConfigSchema = Joi.object({
+  maxDepth: Joi.number()
+    .strict()
+    .integer()
+    .min(1)
+    .max(MAX_GRAPHQL_POLICY_DEPTH),
+  maxComplexity: Joi.number()
+    .strict()
+    .integer()
+    .min(1)
+    .max(MAX_GRAPHQL_POLICY_COMPLEXITY),
+  introspectionAllowed: Joi.boolean().strict(),
+});
+function validateGraphql(value: unknown): void {
+  if (value === null || value === undefined) return;
+  if (graphqlConfigSchema.validate(value).error)
+    throw new BadRequestException(
+      'Invalid GraphQL policy: use a depth from 1–100, complexity from 1–100000 and a boolean introspection setting',
+    );
+}
+
 function validatePlugins(plugins: unknown): void {
   if (plugins === null || plugins === undefined) return;
   if (!Array.isArray(plugins))
     throw new BadRequestException('plugins must be an array');
+  const seen = new Set<string>();
   for (const entry of plugins) {
     if (!entry || typeof entry !== 'object' || typeof entry.name !== 'string')
       throw new BadRequestException('each plugin must have a string name');
+    if (seen.has(entry.name))
+      throw new BadRequestException(
+        `Duplicate plugin: ${entry.name}. Configure each policy once.`,
+      );
+    seen.add(entry.name);
     if (!KNOWN_PLUGIN_NAMES.has(entry.name)) {
       throw new BadRequestException(`Unknown plugin: "${entry.name}"`);
     }
@@ -185,9 +214,11 @@ function validatePlugins(plugins: unknown): void {
           ? oauthConfigSchema
           : entry.name === 'hmac-auth'
             ? hmacConfigSchema
-            : entry.name === 'mtls'
-              ? Joi.object({ required: Joi.boolean().strict().required() })
-              : undefined;
+            : entry.name === 'graphql-guard'
+              ? graphqlConfigSchema
+              : entry.name === 'mtls'
+                ? Joi.object({ required: Joi.boolean().strict().required() })
+                : undefined;
     if (schema?.validate(entry.config).error)
       throw new BadRequestException(
         `Invalid ${entry.name} configuration: check credentials and optional fields`,
@@ -213,6 +244,7 @@ export class RoutesController {
   @Post()
   async create(@Param('tenantId') tenantId: string, @Body() body: RouteBody) {
     validatePlugins(body.plugins);
+    validateGraphql(body.graphql);
     const schema = tenantSchema(tenantId);
     const rows = await this.dataSource.query(
       `INSERT INTO ${schema}.routes
@@ -242,6 +274,7 @@ export class RoutesController {
     @Body() body: RouteBody,
   ) {
     validatePlugins(body.plugins);
+    validateGraphql(body.graphql);
     const schema = tenantSchema(tenantId);
     const rows = await this.dataSource.query(
       `WITH updated AS (UPDATE ${schema}.routes

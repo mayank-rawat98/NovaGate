@@ -7,11 +7,58 @@ import {
   DEFAULT_MTLS,
   DEFAULT_TLS,
   DEFAULT_HMAC,
+  DEFAULT_GRAPHQL,
+  DEFAULT_BODY_CAPTURE,
 } from './configuration';
 import { BlockList, isIP } from 'net';
 
 export const configSchema = Joi.object({
   PORT: Joi.number().default(3000),
+  BODY_CAPTURE_MAX_BODY_BYTES: Joi.number()
+    .integer()
+    .min(1)
+    .max(67108864)
+    .default(DEFAULT_BODY_CAPTURE.maxBodyBytes),
+  BODY_CAPTURE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(30000)
+    .default(DEFAULT_BODY_CAPTURE.timeoutMs),
+  BODY_CAPTURE_MAX_PENDING_REQUESTS: Joi.number()
+    .integer()
+    .min(1)
+    .max(512)
+    .default(DEFAULT_BODY_CAPTURE.maxPendingRequests),
+  GRAPHQL_MAX_QUERY_BYTES: Joi.number()
+    .integer()
+    .min(128)
+    .max(1048576)
+    .default(DEFAULT_GRAPHQL.maxQueryBytes),
+  GRAPHQL_MAX_TOKENS: Joi.number()
+    .integer()
+    .min(16)
+    .max(20000)
+    .default(DEFAULT_GRAPHQL.maxTokens),
+  GRAPHQL_MAX_LEXICAL_DEPTH: Joi.number()
+    .integer()
+    .min(8)
+    .max(256)
+    .default(DEFAULT_GRAPHQL.maxLexicalDepth),
+  GRAPHQL_MAX_BODY_BYTES: Joi.number()
+    .integer()
+    .min(128)
+    .max(16777216)
+    .default(DEFAULT_GRAPHQL.maxBodyBytes),
+  GRAPHQL_BODY_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(30000)
+    .default(DEFAULT_GRAPHQL.bodyTimeoutMs),
+  GRAPHQL_MAX_PENDING_REQUESTS: Joi.number()
+    .integer()
+    .min(1)
+    .max(256)
+    .default(DEFAULT_GRAPHQL.maxPendingRequests),
   HMAC_MAX_BODY_BYTES: Joi.number()
     .integer()
     .min(1)

@@ -73,6 +73,8 @@ apps/api/src/
       gateway-exception.filter.ts
       redis.tokens.ts
       request-context.ts
+      request-body.service.ts       -- shared bounded body capture and request-lifetime admission
+      request-body.service.spec.ts  -- real stream/deadline/admission regression tests
       tls-client-trust.ts           -- update native listener trust from validated tenant CA changes
       route-matcher.ts              -- shared path+method matching used by middleware
     gateway.module.ts
@@ -119,8 +121,9 @@ The current Nest pipeline is:
 3. `LoggingInterceptor` wraps the controller/proxy lifecycle.
 4. `ProxyService` matches the route. Bounded `prepareRequest` hooks capture signed raw bytes without authentication or transformations before body-aware policy hooks.
 5. Configured plugin request hooks execute in saved order.
-6. After plugins verify credentials, `authRequired` accepts a verified gateway consumer or `ctx.authentication` set by an authentication plugin.
-7. The upstream proxy runs response hooks before sending headers/body; error hooks run on proxy failures.
+6. Pure `validateRequest` hooks recheck effective GraphQL queries/headers after ordered transformations. They must not authenticate or mutate requests.
+7. After plugins verify credentials, `authRequired` accepts a verified gateway consumer or `ctx.authentication` set by an authentication plugin.
+8. The upstream proxy runs response hooks before sending headers/body; error hooks run on proxy failures.
 
 CORS preflights match the requested method, run only the CORS plugin and terminate before upstream forwarding or route authentication. GraphQL routes automatically include their guard. Other request plugins retain the configured order.
 
@@ -232,6 +235,7 @@ Allowed production dependencies (do not add others without discussion):
 - `jsonwebtoken` + `@types/jsonwebtoken` — JWT verification
 - `joi` — config validation
 - `uuid` — request ID generation
+- `graphql` — pinned official GraphQL parser/AST; token and lexical nesting limits required
 
 Allowed test dependencies:
 

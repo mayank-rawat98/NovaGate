@@ -12,6 +12,7 @@ export interface ResponseWithLocals extends Response {
   locals: {
     requestId?: string;
     requestStart?: number;
+    routePattern?: string;
     downstreamService?: string;
     downstreamLatencyMs?: number;
   };

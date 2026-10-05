@@ -76,6 +76,18 @@ const routes = [
     createdAt,
   },
 ];
+routes.push({
+  id: 'r3',
+  method: 'POST',
+  pathPattern: '/graphql',
+  serviceId: service,
+  authRequired: false,
+  enabled: true,
+  graphql: { maxDepth: 4, maxComplexity: 20, introspectionAllowed: false },
+  plugins: [],
+  createdAt,
+});
+let graphqlSaves = 0;
 let configuredCa;
 let failCaSave = false;
 let caSaves = 0;
@@ -153,6 +165,28 @@ await context.route('**/api/**', async (route) => {
   }
   if (url.pathname.includes('/routes/') && route.request().method() === 'PUT') {
     const dto = route.request().postDataJSON();
+    if (url.pathname.endsWith('/r3')) {
+      assert.equal(dto.graphql, null);
+      if (graphqlSaves++ === 0)
+        assert.deepEqual(dto.plugins, [
+          {
+            name: 'graphql-guard',
+            config: {
+              maxDepth: 5,
+              maxComplexity: 30,
+              introspectionAllowed: false,
+            },
+          },
+        ]);
+      else assert.deepEqual(dto.plugins, []);
+      routes[2] = { ...routes[2], ...dto };
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(routes[2]),
+      });
+      return;
+    }
     if (url.pathname.endsWith('/r2')) {
       assert.deepEqual(
         dto.plugins.map((p) => p.name),
@@ -178,7 +212,12 @@ await context.route('**/api/**', async (route) => {
       dto.plugins.map((entry) => entry.name),
       ['oauth2-client-credentials', 'graphql-guard', 'cors'],
     );
-    assert.deepEqual(dto.plugins[1].config, { maxDepth: 7 });
+    assert.deepEqual(dto.plugins[1].config, {
+      maxDepth: 7,
+      maxComplexity: 1000,
+      introspectionAllowed: false,
+    });
+    assert.equal(dto.graphql, null);
     const oauth = dto.plugins[0].config;
     assert.equal(oauth.tokenEndpoint, 'https://identity.example.test/token');
     assert.equal(oauth.introspectionEndpoint, undefined);
@@ -366,7 +405,7 @@ try {
     page
       .getByText('Active routes')
       .locator('..')
-      .getByText('1', { exact: true }),
+      .getByText('2', { exact: true }),
   ).toBeVisible();
   await page.screenshot({
     path: resolve(artifacts, 'desktop.png'),
@@ -510,6 +549,55 @@ try {
   ).toHaveValue('fixture-old\nfixture-new');
   await page.keyboard.press('Escape');
   await expect(hmacDrawer).not.toBeVisible();
+  await page
+    .getByRole('button', { name: 'Edit POST /graphql', exact: true })
+    .click();
+  const graphqlDrawer = page.getByRole('dialog', {
+    name: 'Routes form',
+    exact: true,
+  });
+  await graphqlDrawer.getByRole('button', { name: /^plugins/i }).click();
+  await expect(
+    graphqlDrawer.getByLabel('GraphQL maximum depth', { exact: true }),
+  ).toHaveValue('4');
+  await expect(
+    graphqlDrawer.getByLabel('GraphQL maximum complexity', { exact: true }),
+  ).toHaveValue('20');
+  await expect(
+    graphqlDrawer.getByRole('switch', {
+      name: 'Allow GraphQL introspection',
+      exact: true,
+    }),
+  ).toHaveAttribute('aria-checked', 'false');
+  await graphqlDrawer
+    .getByLabel('GraphQL maximum depth', { exact: true })
+    .fill('5');
+  await graphqlDrawer
+    .getByLabel('GraphQL maximum complexity', { exact: true })
+    .fill('30');
+  await audit('GraphQL policy and legacy route conversion mobile');
+  await graphqlDrawer
+    .getByRole('button', { name: 'Save Changes', exact: true })
+    .click();
+  await expect(graphqlDrawer).not.toBeVisible();
+  await page
+    .getByRole('button', { name: 'Edit POST /graphql', exact: true })
+    .click();
+  await graphqlDrawer.getByRole('button', { name: /^plugins/i }).click();
+  await expect(
+    graphqlDrawer.getByLabel('GraphQL maximum depth', { exact: true }),
+  ).toHaveValue('5');
+  await expect(
+    graphqlDrawer.getByLabel('GraphQL maximum complexity', { exact: true }),
+  ).toHaveValue('30');
+  await graphqlDrawer
+    .getByRole('switch', { name: 'GraphQL Guard plugin', exact: true })
+    .click();
+  await graphqlDrawer
+    .getByRole('button', { name: 'Save Changes', exact: true })
+    .click();
+  await expect(graphqlDrawer).not.toBeVisible();
+  assert.equal(graphqlSaves, 2);
   const addRoute = page.getByRole('button', { name: 'Add Route', exact: true });
   await addRoute.click();
   const drawer = page.getByRole('dialog', { name: 'Routes form', exact: true });

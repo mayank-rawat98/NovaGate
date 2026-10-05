@@ -66,6 +66,23 @@ export class PluginRunnerService {
         };
       }
     }
+    for (const plugin of plugins) {
+      if (!plugin.validateRequest) continue;
+      try {
+        const result = await plugin.validateRequest(ctx);
+        if (result) return result;
+      } catch {
+        return {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            error: 'PLUGIN_ERROR',
+            message: 'Internal plugin error',
+            requestId: ctx.requestId,
+          }),
+        };
+      }
+    }
   }
 
   async runOnResponse(

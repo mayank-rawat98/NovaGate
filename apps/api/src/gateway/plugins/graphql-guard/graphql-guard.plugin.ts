@@ -1,134 +1,236 @@
 import { Injectable } from '@nestjs/common';
-import type { IncomingMessage } from 'http';
+import { ConfigService } from '@nestjs/config';
+import {
+  MAX_GRAPHQL_POLICY_DEPTH,
+  MAX_GRAPHQL_POLICY_COMPLEXITY,
+} from '@api-gateway/shared-types';
 import type {
   GatewayPlugin,
   PluginContext,
   PluginShortCircuit,
+  GraphqlPolicy,
 } from '@api-gateway/shared-types';
-import { analyzeQuery } from './graphql-query-analyzer';
-
-const DEFAULT_MAX_DEPTH = 10;
-const DEFAULT_MAX_COMPLEXITY = 1000;
+import {
+  DEFAULT_GRAPHQL,
+  GatewayConfig,
+  GraphqlSettings,
+} from '../../../config/configuration';
+import {
+  BodyCaptureError,
+  RequestBodyService,
+} from '../../shared/request-body.service';
+import { analyzeQuery, GraphqlAnalysisError } from './graphql-query-analyzer';
 
 @Injectable()
 export class GraphqlGuardPlugin implements GatewayPlugin {
   readonly name = 'graphql-guard';
+  readonly protocols = ['http'] as const;
+  private readonly settings: GraphqlSettings;
+  constructor(
+    config: ConfigService<GatewayConfig, true>,
+    private readonly bodies: RequestBodyService = new RequestBodyService(
+      config,
+    ),
+  ) {
+    this.settings = {
+      ...DEFAULT_GRAPHQL,
+      ...config.get('graphql', { infer: true }),
+    };
+  }
+
+  async prepareRequest(ctx: PluginContext): Promise<PluginShortCircuit | void> {
+    if (!this.configured(ctx)) return;
+    try {
+      this.policy(ctx);
+      this.transport(ctx);
+      if (ctx.req.method === 'POST') await this.bodies.read(ctx);
+    } catch (error) {
+      return this.failure(ctx, error);
+    }
+  }
 
   async onRequest(ctx: PluginContext): Promise<PluginShortCircuit | void> {
-    const graphqlConfig = ctx.route.graphql;
-    if (!graphqlConfig) return;
-
-    const req = ctx.req as IncomingMessage & { rawBody?: Buffer };
-
-    // Only POST requests carry a GraphQL query body
-    if (req.method !== 'POST') return;
-
-    const contentType = req.headers['content-type'] ?? '';
-    if (
-      !contentType.includes('application/json') &&
-      !contentType.includes('application/graphql')
-    ) {
-      return;
-    }
-
-    const body = await this.readBody(req);
-    const query = this.extractQuery(body, contentType);
-
-    if (!query) return;
-
-    const maxDepth = graphqlConfig.maxDepth ?? DEFAULT_MAX_DEPTH;
-    const maxComplexity = graphqlConfig.maxComplexity ?? DEFAULT_MAX_COMPLEXITY;
-    const introspectionAllowed = graphqlConfig.introspectionAllowed ?? false;
-
-    const analysis = analyzeQuery(query);
-
-    if (!introspectionAllowed && analysis.hasIntrospection) {
-      return this.reject(
-        ctx.requestId,
-        'GRAPHQL_INTROSPECTION_DISABLED',
-        'GraphQL introspection is disabled',
-      );
-    }
-
-    if (analysis.depth > maxDepth) {
-      return this.reject(
-        ctx.requestId,
-        'GRAPHQL_DEPTH_EXCEEDED',
-        `Query depth ${analysis.depth} exceeds limit of ${maxDepth}`,
-      );
-    }
-
-    if (analysis.complexity > maxComplexity) {
-      return this.reject(
-        ctx.requestId,
-        'GRAPHQL_COMPLEXITY_EXCEEDED',
-        `Query complexity ${analysis.complexity} exceeds limit of ${maxComplexity}`,
-      );
-    }
-  }
-
-  private extractQuery(body: string, contentType: string): string | undefined {
-    if (contentType.includes('application/graphql')) {
-      return body.trim() || undefined;
-    }
-
-    // application/json — parse { query: string }
+    if (!this.configured(ctx)) return;
     try {
-      const parsed = JSON.parse(body) as Record<string, unknown>;
-      const query = parsed['query'];
-      return typeof query === 'string' && query.trim() ? query : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  private readBody(
-    req: IncomingMessage & { rawBody?: Buffer; body?: unknown },
-  ): Promise<string> {
-    // Use already-buffered raw body if available (e.g. from hmac-auth plugin)
-    if (req.rawBody) {
-      return Promise.resolve(req.rawBody.toString('utf8'));
-    }
-
-    // Nest's default body parser consumes the stream before plugins run, so
-    // attaching 'data'/'end' listeners here would wait forever. Reconstruct
-    // from the already-parsed body when present and cache it as rawBody.
-    if (req.body !== undefined && req.body !== null) {
-      const raw =
-        typeof req.body === 'string'
-          ? Buffer.from(req.body)
-          : Buffer.from(JSON.stringify(req.body));
-      req.rawBody = raw;
-      return Promise.resolve(raw.toString('utf8'));
-    }
-
-    // Stream already ended with no buffered body — nothing left to read.
-    if (req.readableEnded || req.complete) {
-      return Promise.resolve('');
-    }
-
-    return new Promise<string>((resolve, reject) => {
-      const chunks: Buffer[] = [];
-      req.on('data', (chunk: Buffer) => chunks.push(chunk));
-      req.on('end', () => {
-        const raw = Buffer.concat(chunks);
-        // Cache for downstream plugins / proxy
-        req.rawBody = raw;
-        resolve(raw.toString('utf8'));
+      const policy = this.policy(ctx);
+      const type = this.transport(ctx);
+      let payload: unknown;
+      if (ctx.req.method === 'GET') {
+        const params = new URL(ctx.req.url ?? '/', 'http://gateway.invalid')
+          .searchParams;
+        for (const key of ['query', 'operationName', 'variables', 'extensions'])
+          if (params.getAll(key).length > 1) throw new GraphqlAnalysisError();
+        const parseParameter = (key: string) =>
+          params.has(key) ? JSON.parse(params.get(key) ?? '') : undefined;
+        payload = {
+          query: params.get('query'),
+          operationName: params.get('operationName') ?? undefined,
+          variables: parseParameter('variables'),
+          extensions: parseParameter('extensions'),
+        };
+      } else {
+        await this.bodies.read(ctx);
+        const body = (ctx.req as typeof ctx.req & { rawBody?: Buffer }).rawBody;
+        if (!Buffer.isBuffer(body)) throw new GraphqlAnalysisError();
+        if (body.length > this.settings.maxBodyBytes)
+          throw new BodyCaptureError(413, 'REQUEST_TOO_LARGE');
+        const text = new TextDecoder('utf-8', { fatal: true }).decode(body);
+        payload =
+          type === 'application/graphql' ? { query: text } : JSON.parse(text);
+      }
+      if (Array.isArray(payload))
+        throw new GraphqlAnalysisError('GRAPHQL_BATCH_UNSUPPORTED');
+      if (!payload || typeof payload !== 'object')
+        throw new GraphqlAnalysisError();
+      const request = payload as Record<string, unknown>;
+      if (
+        typeof request.query !== 'string' ||
+        !request.query.trim() ||
+        (request.operationName !== undefined &&
+          request.operationName !== null &&
+          (typeof request.operationName !== 'string' || !request.operationName))
+      )
+        throw new GraphqlAnalysisError();
+      for (const key of ['variables', 'extensions'])
+        if (
+          request[key] !== undefined &&
+          request[key] !== null &&
+          (typeof request[key] !== 'object' || Array.isArray(request[key]))
+        )
+          throw new GraphqlAnalysisError();
+      if (
+        request.extensions &&
+        Object.hasOwn(request.extensions, 'persistedQuery')
+      )
+        throw new GraphqlAnalysisError('GRAPHQL_PERSISTED_QUERY_UNSUPPORTED');
+      const result = analyzeQuery(request.query, {
+        ...this.settings,
+        ...policy,
+        operationName:
+          typeof request.operationName === 'string'
+            ? request.operationName
+            : undefined,
       });
-      req.on('error', reject);
-    });
+      if (ctx.req.method === 'GET' && result.operation !== 'query')
+        throw new BodyCaptureError(405, 'GRAPHQL_GET_OPERATION_FORBIDDEN');
+      if (result.operation === 'subscription')
+        throw new GraphqlAnalysisError('GRAPHQL_SUBSCRIPTION_UNSUPPORTED');
+      if (!policy.introspectionAllowed && result.hasIntrospection)
+        throw new GraphqlAnalysisError('GRAPHQL_INTROSPECTION_DISABLED');
+      if (result.depth > policy.maxDepth)
+        throw new GraphqlAnalysisError('GRAPHQL_DEPTH_EXCEEDED');
+      if (result.complexity > policy.maxComplexity)
+        throw new GraphqlAnalysisError('GRAPHQL_COMPLEXITY_EXCEEDED');
+    } catch (error) {
+      return this.failure(ctx, error);
+    } finally {
+      this.bodies.releaseDetached(ctx);
+    }
   }
 
-  private reject(
-    requestId: string,
-    code: string,
-    message: string,
-  ): PluginShortCircuit {
+  // A later query/header transformation must not bypass an earlier guard.
+  async validateRequest(
+    ctx: PluginContext,
+  ): Promise<PluginShortCircuit | void> {
+    return this.onRequest(ctx);
+  }
+
+  private configured(ctx: PluginContext): boolean {
+    return (
+      ctx.route.graphql != null ||
+      !!ctx.route.plugins?.some((p) => p.name === this.name)
+    );
+  }
+  private policy(ctx: PluginContext): Required<GraphqlPolicy> {
+    const entry = ctx.route.plugins?.find((p) => p.name === this.name);
+    const policies = [ctx.route.graphql, entry?.config].filter(
+      (p) => p != null,
+    ) as GraphqlPolicy[];
+    for (const policy of policies) {
+      if (
+        !policy ||
+        typeof policy !== 'object' ||
+        Array.isArray(policy) ||
+        Object.keys(policy).some(
+          (key) =>
+            !['maxDepth', 'maxComplexity', 'introspectionAllowed'].includes(
+              key,
+            ),
+        ) ||
+        (policy.maxDepth !== undefined &&
+          (!Number.isSafeInteger(policy.maxDepth) ||
+            policy.maxDepth < 1 ||
+            policy.maxDepth > MAX_GRAPHQL_POLICY_DEPTH)) ||
+        (policy.maxComplexity !== undefined &&
+          (!Number.isSafeInteger(policy.maxComplexity) ||
+            policy.maxComplexity < 1 ||
+            policy.maxComplexity > MAX_GRAPHQL_POLICY_COMPLEXITY)) ||
+        (policy.introspectionAllowed !== undefined &&
+          typeof policy.introspectionAllowed !== 'boolean')
+      )
+        throw new BodyCaptureError(500, 'GRAPHQL_CONFIG_INVALID');
+    }
+    // Default empty auto-injected entries do not weaken explicit route policy.
+    const depths = policies.flatMap((p) =>
+      p.maxDepth === undefined ? [] : [p.maxDepth],
+    );
+    const costs = policies.flatMap((p) =>
+      p.maxComplexity === undefined ? [] : [p.maxComplexity],
+    );
     return {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: code, message, requestId }),
+      maxDepth: depths.length ? Math.min(...depths) : this.settings.maxDepth,
+      maxComplexity: costs.length
+        ? Math.min(...costs)
+        : this.settings.maxComplexity,
+      introspectionAllowed:
+        policies.every((p) => p.introspectionAllowed === true) &&
+        policies.some((p) => p.introspectionAllowed === true),
+    };
+  }
+  private transport(ctx: PluginContext): string {
+    if (ctx.req.method !== 'GET' && ctx.req.method !== 'POST')
+      throw new BodyCaptureError(405, 'GRAPHQL_METHOD_UNSUPPORTED');
+    const encoding = ctx.req.headers['content-encoding'];
+    if (encoding !== undefined && encoding !== 'identity')
+      throw new BodyCaptureError(415, 'GRAPHQL_ENCODING_UNSUPPORTED');
+    if (ctx.req.method === 'GET') {
+      if (
+        ctx.req.headers['transfer-encoding'] !== undefined ||
+        (ctx.req.headers['content-length'] !== undefined &&
+          ctx.req.headers['content-length'] !== '0')
+      )
+        throw new GraphqlAnalysisError('GRAPHQL_GET_BODY_UNSUPPORTED');
+      return '';
+    }
+    const type = (ctx.req.headers['content-type'] ?? '')
+      .split(';')[0]
+      .trim()
+      .toLowerCase();
+    if (!['application/json', 'application/graphql'].includes(type))
+      throw new BodyCaptureError(415, 'GRAPHQL_MEDIA_TYPE_UNSUPPORTED');
+    return type;
+  }
+  private failure(ctx: PluginContext, error: unknown): PluginShortCircuit {
+    const status = error instanceof BodyCaptureError ? error.status : 400;
+    const code =
+      error instanceof BodyCaptureError || error instanceof GraphqlAnalysisError
+        ? error.code
+        : 'GRAPHQL_QUERY_INVALID';
+    return {
+      status,
+      headers: {
+        'Content-Type': 'application/json',
+        Connection: 'close',
+        ...(status === 405 ? { Allow: 'GET, POST' } : {}),
+      },
+      body: JSON.stringify({
+        error: code,
+        message:
+          status === 413
+            ? 'Request body exceeds the configured size limit'
+            : 'GraphQL request does not meet this route policy',
+        requestId: ctx.requestId,
+      }),
     };
   }
 }
