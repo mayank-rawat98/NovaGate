@@ -38,6 +38,7 @@ async function until(predicate: () => boolean) {
 
 describe('native gRPC through a real listener and upstream', () => {
   let server: http2.Http2Server;
+  let balancer: LoadBalancerService;
   let gateway: GrpcProxyService;
   let manager: GatewayConfigManagerService;
   let client: http2.ClientHttp2Session;
@@ -69,7 +70,7 @@ describe('native gRPC through a real listener and upstream', () => {
     return new GrpcProxyService(
       manager,
       metrics as never,
-      new LoadBalancerService(),
+      (balancer = new LoadBalancerService()),
       {
         getHealthyUrls: () =>
           new Set(
@@ -739,5 +740,50 @@ describe('native gRPC through a real listener and upstream', () => {
     blocked.stream.end(frame('test'));
     expect((await blocked.finished).status).toBe('12');
     expect(received).toHaveLength(1);
+  });
+  it('selects another target while a gRPC call is active and releases cancelled work', async () => {
+    const sessions = new Set<http2.ServerHttp2Session>();
+    let fastCalls = 0;
+    const fast = http2.createServer();
+    fast.on('session', (session) => {
+      sessions.add(session);
+      session.on('error', () => undefined);
+    });
+    fast.on('stream', (stream) => {
+      stream.on('error', () => undefined);
+      fastCalls++;
+      stream.respond(
+        { ':status': 200, 'content-type': 'application/grpc' },
+        { waitForTrailers: true },
+      );
+      stream.resume();
+      stream.once('end', () => stream.end(frame('fast')));
+      stream.once('wantTrailers', () =>
+        stream.sendTrailers({ 'grpc-status': '0' }),
+      );
+    });
+    fast.listen(0, '127.0.0.1');
+    await once(fast, 'listening');
+    const fastTarget = `http://127.0.0.1:${(fast.address() as net.AddressInfo).port}`;
+    try {
+      config.services[0].loadBalancing = 'least-connections';
+      config.services[0].targets.push({ url: fastTarget, weight: 1 });
+      await install();
+      mode = 'stall';
+      const first = request();
+      first.finished.catch(() => undefined);
+      first.stream.write(frame('busy'));
+      await until(() => received.length === 1);
+      const second = request();
+      second.stream.end(frame('test'));
+      expect((await second.finished).status).toBe('0');
+      expect(fastCalls).toBe(1);
+      first.stream.close(http2.constants.NGHTTP2_CANCEL);
+      await until(() => balancer.activeReservations === 0);
+      expect(received).toHaveLength(1);
+    } finally {
+      for (const session of sessions) session.destroy();
+      await new Promise<void>((resolve) => fast.close(() => resolve()));
+    }
   });
 });

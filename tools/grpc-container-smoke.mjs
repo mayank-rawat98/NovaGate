@@ -1441,6 +1441,66 @@ try {
   assert.ok(Date.now() - fallbackStarted < 4500);
   assert.equal(fallbackRequests.length, 2);
 
+  config.services.push({
+    id: 'least-service',
+    name: 'weighted-least-connections',
+    targets: [
+      { url: http2Target, weight: 1 },
+      { url: fallbackTarget, weight: 1 },
+    ],
+    loadBalancing: 'least-connections',
+    h2: true,
+    healthCheckPath: '/health',
+    timeoutMs: 2000,
+  });
+  config.routes.push({
+    id: 'least-route',
+    method: 'ANY',
+    pathPattern: '/least',
+    serviceId: 'least-service',
+    enabled: true,
+    authRequired: false,
+  });
+  for (const socket of plane.clients)
+    socket.send(
+      JSON.stringify({ type: 'config.update', version: 10, payload: config }),
+    );
+  await until(() => acknowledged === 10, 'least-connections config ACK');
+  const stallsBefore = h2Requests.filter(
+    (request) => request.path === '/stall',
+  ).length;
+  const busyAbort = new AbortController();
+  const busy = fetch(`https://127.0.0.1:${httpPort}/least/stall`, {
+    signal: busyAbort.signal,
+  }).catch((error) => {
+    if (error.name !== 'AbortError') throw error;
+    return null;
+  });
+  try {
+    await until(
+      () =>
+        h2Requests.filter((request) => request.path === '/stall').length >
+        stallsBefore,
+      'busy least-connections upstream dispatch',
+    );
+    const concurrent = await fetch(`https://127.0.0.1:${httpPort}/least/echo`, {
+      method: 'POST',
+      body: exactBytes,
+    });
+    assert.equal(concurrent.status, 200);
+    assert.equal(concurrent.headers.get('x-fallback-verified'), 'yes');
+    assert.deepEqual(Buffer.from(await concurrent.arrayBuffer()), exactBytes);
+  } finally {
+    busyAbort.abort();
+    await busy;
+  }
+  // A cancelled busy stream must become eligible again, without resetting config.
+  await until(async () => {
+    const recovered = await fetch(`https://127.0.0.1:${httpPort}/least/echo`);
+    assert.equal(recovered.status, 200);
+    return recovered.headers.get('x-h2-verified') === 'yes';
+  }, 'least-connections cancelled target recovery');
+
   const healthCommand = JSON.parse(
     docker(
       'inspect',
@@ -1491,6 +1551,7 @@ try {
         inactiveIdentityCalls,
         outboundIdentityCalls,
         checks: [
+          'least-connections-concurrent-busy-H2-target-verified-HTTP1-fallback-cancel-recovery',
           'HTTP2-verified-HTTPS-exact-binary-POST-and-predispatch-HTTP1-fallback',
           'HTTP2-response-bound-absolute-deadline-reset-no-mutation-replay-recovery',
           'HTTP1-fallback-trickle-stream-absolute-deadline',

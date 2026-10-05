@@ -279,3 +279,16 @@ describe('bounded HTTP/2 startup settings', () => {
     });
   });
 });
+
+describe('balancer state startup bounds', () => {
+  it.each([
+    ['LOAD_BALANCER_MAX_SERVICES', 0],
+    ['LOAD_BALANCER_MAX_SERVICES', 4097],
+    ['LOAD_BALANCER_MAX_TARGETS_PER_SERVICE', 1025],
+    ['LOAD_BALANCER_MAX_ACTIVE_RESERVATIONS', 65537],
+  ])('rejects unsafe %s=%s', (name, value) => {
+    expect(
+      configSchema.validate({ ...required, [name]: value }).error,
+    ).toBeDefined();
+  });
+});

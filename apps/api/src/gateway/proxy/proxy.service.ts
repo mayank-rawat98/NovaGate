@@ -20,7 +20,7 @@ import type {
 } from '../shared/request-context';
 import { MetricsService } from '../metrics/metrics.service';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
-import { LoadBalancerService } from './load-balancer.service';
+import { LoadBalancerService, type TargetLease } from './load-balancer.service';
 import { UpstreamHealthService } from '../health/upstream-health.service';
 import { matchRoute } from '../shared/route-matcher';
 import { PluginRegistryService } from '../plugins/plugin-registry.service';
@@ -41,6 +41,8 @@ interface RetryContext {
   serviceName: string;
   resolve: (statusCode: number) => void;
   abort?: (error: NodeJS.ErrnoException) => void;
+  lease?: TargetLease;
+  upstreamStarted?: boolean;
 }
 
 interface PluginState {
@@ -243,12 +245,14 @@ export class ProxyService {
         service.id,
       );
       const isLastAttempt = attempt === maxAttempts - 1;
-      const targetUrl = this.loadBalancer.selectTarget(
+      const lease = this.loadBalancer.acquireTarget(
         service.id,
         service.targets,
         healthyUrls,
         service.unhealthyFallback === true,
+        service.loadBalancing,
       );
+      const targetUrl = lease.url;
 
       // Reset the URL for each attempt (safe for GET/HEAD/OPTIONS which have no body)
       request.url = finalUrl;
@@ -263,6 +267,7 @@ export class ProxyService {
             response,
             canRetry && !isLastAttempt,
             retryOn,
+            lease,
           )
         : await this.callProxy(
             targetUrl,
@@ -271,6 +276,8 @@ export class ProxyService {
             response,
             !canRetry || isLastAttempt,
             retryOn,
+            undefined,
+            lease,
           );
 
       if (canRetry && !isLastAttempt && retryOn.includes(statusCode)) {
@@ -294,7 +301,16 @@ export class ProxyService {
     isLastAttempt: boolean,
     retryOn: number[],
     absoluteTimeoutMs?: number,
+    lease?: TargetLease,
   ): Promise<number> {
+    const retryContext: RetryContext = {
+      retryOn,
+      isLastAttempt,
+      serviceName: service.name,
+      resolve: () => undefined,
+      lease,
+      upstreamStarted: false,
+    };
     return new Promise<number>((resolve) => {
       let settled = false;
       let deadline: NodeJS.Timeout | undefined;
@@ -308,12 +324,7 @@ export class ProxyService {
         }
       };
 
-      const retryContext: RetryContext = {
-        retryOn,
-        isLastAttempt,
-        serviceName: service.name,
-        resolve: resolveOnce,
-      };
+      retryContext.resolve = resolveOnce;
       (request as unknown as GwRequest).__gw_retry = retryContext;
 
       const handler = this.getHandler(targetUrl, service.timeoutMs ?? 10_000);
@@ -381,6 +392,8 @@ export class ProxyService {
           }
         },
       );
+    }).finally(() => {
+      if (!retryContext.upstreamStarted) lease?.release();
     });
   }
 
@@ -394,6 +407,7 @@ export class ProxyService {
     response: ResponseWithLocals,
     retriesRemaining: boolean,
     retryOn: number[],
+    lease: TargetLease,
   ): Promise<number> {
     const requestId = this.getRequestIdFromRequest(request, response);
 
@@ -402,6 +416,8 @@ export class ProxyService {
       pluginState?.ctx ??
       this.buildPluginContext(request, response, route, service, requestId);
     let started = performance.now();
+    let dispatched = false,
+      handedOff = false;
 
     // Build forward headers (strip hop-by-hop)
     const forwardHeaders: Record<string, string | string[]> = {};
@@ -425,6 +441,12 @@ export class ProxyService {
         body,
         service.timeoutMs ?? 10_000,
         ctx.signal,
+        {
+          onDispatch: () => {
+            dispatched = true;
+          },
+          onClose: lease.release,
+        },
       );
 
       // A retryable status with attempts left: don't commit the response —
@@ -458,7 +480,8 @@ export class ProxyService {
       if (err instanceof Http2PoolError && err.fallbackSafe) {
         const remaining =
           (service.timeoutMs ?? 10000) - (performance.now() - started);
-        if (remaining > 0)
+        if (remaining > 0) {
+          handedOff = true;
           return this.callProxy(
             targetUrl,
             { ...service, timeoutMs: remaining },
@@ -467,7 +490,9 @@ export class ProxyService {
             !retriesRemaining,
             retryOn,
             remaining,
+            lease,
           );
+        }
         failure = new Http2PoolError(504, 'DOWNSTREAM_TIMEOUT');
       }
       const status =
@@ -512,6 +537,7 @@ export class ProxyService {
       }
       return status;
     } finally {
+      if (!dispatched && !handedOff) lease.release();
       this.bodies.releaseDetached(ctx);
     }
   }
@@ -548,8 +574,11 @@ export class ProxyService {
             return;
           }
           const retryContext = (req as unknown as GwRequest).__gw_retry;
-          if (retryContext)
+          if (retryContext) {
+            retryContext.upstreamStarted = true;
+            proxyReq.once('close', () => retryContext.lease?.release());
             retryContext.abort = (error) => proxyReq.destroy(error);
+          }
           const requestId = this.getRequestId(req, res);
           if (requestId) proxyReq.setHeader('X-Request-ID', requestId);
           const fwd = this.getForwardedFor(req);

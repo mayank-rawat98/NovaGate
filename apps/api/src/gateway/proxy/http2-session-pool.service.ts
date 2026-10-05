@@ -117,6 +117,7 @@ export class Http2SessionPool implements OnModuleInit, OnModuleDestroy {
     body: Buffer | null,
     timeoutMs = 10000,
     signal?: AbortSignal,
+    lifecycle?: { onDispatch: () => void; onClose: () => void },
   ): Promise<H2Response> {
     if (signal?.aborted) throw new Http2PoolError(499, 'HTTP2_CANCELLED');
     if (this.stopping || this.active >= this.settings.maxActiveRequests)
@@ -212,8 +213,10 @@ export class Http2SessionPool implements OnModuleInit, OnModuleDestroy {
           return fail(new Http2PoolError(503, 'HTTP2_CAPACITY_EXCEEDED'));
         try {
           stream = entry.session.request(headers, { endStream: !body?.length });
+          lifecycle?.onDispatch();
           stream.once('close', () => {
             release();
+            lifecycle?.onClose();
             if (!settled) fail(new Http2PoolError(502, 'DOWNSTREAM_ERROR'));
           });
           stream.on('error', () =>

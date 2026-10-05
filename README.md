@@ -466,3 +466,15 @@ Size memory budgets for concurrency times request/response byte limits plus Node
 HTTP health probes use the same predispatch negotiation fallback under their existing absolute probe deadline; gRPC health probes never fall back to HTTP/1.
 
 HTTP/1 fallback is allowed only for recognized connection/protocol negotiation failures before dispatch. Certificate/trust failures, capacity exhaustion, deadlines and already-dispatched streams cannot trigger fallback. The fallback retains verified HTTPS, original bytes, ordered response hooks and the remaining absolute upstream deadline. Before response headers, expiry returns 504; after streaming headers, expiry closes the connection because its status is already committed. Pool idle/deadline bookkeeping uses monotonic time. A reset POST is never replayed through HTTP/1; configured retries remain restricted to GET/HEAD/OPTIONS. Upstream response status and headers are passed through HTTP/2 response hooks before committing the buffered body. Private targets and raw upstream error strings are omitted from HTTP/2 error telemetry.
+
+### Load-balancer state limits
+
+Issue #57 adds bounded per-replica balancing state and a persisted service `loadBalancing` policy (`weighted-round-robin` by default, or `least-connections`). Reservations cover HTTP/1 requests, HTTP/2 and native gRPC streams, and WebSocket tunnels. Concurrent protocol tests verify busy-target avoidance and release after cancellation/closure. PostgreSQL integration and dashboard browser checks verify policy persistence.
+
+| Variable                                | Default | Valid range                                          |
+| --------------------------------------- | ------- | ---------------------------------------------------- |
+| `LOAD_BALANCER_MAX_SERVICES`            | 1024    | 1–4096 cached service states                         |
+| `LOAD_BALANCER_MAX_TARGETS_PER_SERVICE` | 256     | 1–1024 target states per service                     |
+| `LOAD_BALANCER_MAX_ACTIVE_RESERVATIONS` | 4096    | 1–65536 reservations, including detached generations |
+
+The admin API accepts at most 256 unique HTTP/HTTPS targets per service, without embedded credentials and with URLs bounded to 2048 UTF-8 bytes. Weights must be integers from 1 to 100. Least-connections compares active work divided by weight; equal load uses weighted rotation. Core reservations release once and retain their original generation, so stale completion cannot decrement new target counters. Capacity exhaustion returns 503; invalid gateway balancing configuration returns 500. Dispatch must retain reservations until actual upstream request/stream/tunnel closure.

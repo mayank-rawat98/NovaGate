@@ -121,3 +121,5 @@ Settings also includes `LogExportPanel`: private NDJSON exports with UTC range/s
 - Branding is **NovaGate** — never use "GatewayX" anywhere
 
 GraphQL editing reads legacy route policy and explicit plugin configuration, displays their effective bounds, and saves one `graphql-guard` plugin with `graphql: null` to clear the legacy column. Always send `plugins: []` when all plugins are disabled. Preserve saved plugin order and expose depth, complexity and introspection controls with visible labels.
+
+Service editing persists `loadBalancing` through the typed API client. Legacy services default to weighted round robin; least connections uses weighted active upstream work per gateway, including long-lived gRPC and WebSocket tunnels. Preserve the visible selector label and explanatory text. Browser verification saves both policies, reloads/reopens the form, and checks failed saves retain the selection.

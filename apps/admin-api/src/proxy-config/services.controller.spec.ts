@@ -59,6 +59,7 @@ describe('ServicesController', () => {
         false,
         'http',
         '',
+        'weighted-round-robin',
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
@@ -90,6 +91,7 @@ describe('ServicesController', () => {
         false,
         'http',
         '',
+        'weighted-round-robin',
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
@@ -190,4 +192,32 @@ describe('ServicesController', () => {
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
   });
+  it.each(['round-robin', null, true, 1])(
+    'rejects unsupported balancing policy %s before SQL',
+    async (loadBalancing) => {
+      const { controller, ds } = await build();
+      await expect(
+        controller.update(TENANT, 'svc', { loadBalancing } as never),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(ds.query).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    [{ url: 'http://one', weight: 1.5 }],
+    [{ url: 'ftp://one', weight: 1 }],
+    [{ url: 'http://user:secret@one', weight: 1 }],
+    [
+      { url: 'http://one', weight: 1 },
+      { url: 'http://one/', weight: 2 },
+    ],
+  ])(
+    'rejects malformed or duplicate target policy before SQL',
+    async (...targets) => {
+      const { controller, ds } = await build();
+      await expect(
+        controller.update(TENANT, 'svc', { targets }),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(ds.query).not.toHaveBeenCalled();
+    },
+  );
 });

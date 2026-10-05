@@ -47,6 +47,7 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
   let h2upstream: http2.Http2Server;
   let jwks: http.Server;
   let pool: Http2SessionPool;
+  let balancer: LoadBalancerService;
   let url: string;
   let target: string;
   let h2target: string;
@@ -212,6 +213,7 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
     await app.listen(0, '127.0.0.1');
     url = await app.getUrl();
     pool = module.get(Http2SessionPool);
+    balancer = module.get(LoadBalancerService);
   });
 
   beforeEach(() => {
@@ -437,6 +439,75 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
     expect(metrics.incrementProxyRetry).toHaveBeenCalledTimes(1);
   });
 
+  it.each([false, true])(
+    'avoids active work and releases actual upstream reservations (h2=%s)',
+    async (h2) => {
+      let fastCalls = 0;
+      const sessions = new Set<http2.ServerHttp2Session>();
+      const fast = h2
+        ? http2.createServer()
+        : http.createServer((_req, res) => {
+            fastCalls++;
+            res.end('fast');
+          });
+      if (h2) {
+        const server = fast as http2.Http2Server;
+        server.on('session', (session) => {
+          sessions.add(session);
+          session.on('error', () => undefined);
+        });
+        server.on('stream', (stream) => {
+          stream.on('error', () => undefined);
+          fastCalls++;
+          stream.respond({ ':status': 200 });
+          stream.end('fast');
+        });
+      }
+      const fastTarget = await listen(fast);
+      const cancel = new AbortController();
+      try {
+        config.services[0].h2 = h2;
+        config.services[0].loadBalancing = 'least-connections';
+        config.services[0].targets = [
+          { url: h2 ? h2target : target, weight: 1 },
+          { url: fastTarget, weight: 1 },
+        ];
+        h1Trickle = !h2;
+        h2Mode = 'stall';
+        const pending = fetch(`${url}/api`, { signal: cancel.signal }).then(
+          (response) => response.text(),
+        );
+        const cancelled = expect(pending).rejects.toThrow();
+        const deadline = Date.now() + 2000;
+        while ((h2 ? h2Bodies.length : received.length) !== 1) {
+          if (Date.now() > deadline)
+            throw new Error('Busy request did not reach upstream');
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        expect(balancer.activeReservations).toBe(1);
+        const response = await fetch(`${url}/api`);
+        expect(await response.text()).toBe('fast');
+        expect(fastCalls).toBe(1);
+        cancel.abort();
+        await cancelled;
+        const releasedBy = Date.now() + 2000;
+        while (balancer.activeReservations) {
+          if (Date.now() > releasedBy)
+            throw new Error('Target reservation did not release');
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        h1Trickle = false;
+        h2Mode = 'normal';
+        for (let i = 0; i < 2; i++) await (await fetch(`${url}/api`)).text();
+        expect(h2 ? h2Bodies.length : received.length).toBe(2);
+      } finally {
+        cancel.abort();
+        for (const session of sessions) session.destroy();
+        if (!h2) (fast as http.Server).closeAllConnections();
+        await new Promise<void>((resolve) => fast.close(() => resolve()));
+      }
+    },
+  );
   it('runs HTTP/2 response transforms before committing headers and body', async () => {
     config.services[0].h2 = true;
     config.services[0].targets = [{ url: h2target, weight: 1 }];

@@ -38,6 +38,9 @@ export class MigrationService implements OnModuleInit {
       for (const tenant of tenants) {
         const schema = tenantSchema(tenant.id);
         await manager.query(
+          `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "loadBalancing" VARCHAR NOT NULL DEFAULT 'weighted-round-robin' CHECK ("loadBalancing" IN ('weighted-round-robin', 'least-connections'))`,
+        );
+        await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "healthCheckIntervalMs" INTEGER NOT NULL DEFAULT 10000, ADD COLUMN IF NOT EXISTS "unhealthyFallback" BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS "healthCheckProtocol" VARCHAR NOT NULL DEFAULT 'http', ADD COLUMN IF NOT EXISTS "healthCheckService" VARCHAR NOT NULL DEFAULT ''`,
         );
         await manager.query(

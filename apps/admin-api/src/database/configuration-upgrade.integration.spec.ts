@@ -208,6 +208,32 @@ integration('Configuration upgrades and updates on PostgreSQL', () => {
       }),
     ).toMatchObject({ healthCheckService: '', supportsWebSocket: false });
   });
+  it('migrates and preserves a service balancing policy through partial updates', async () => {
+    const controller = new ServicesController(ds, push);
+    expect(await controller.update(tenant, service, {})).toMatchObject({
+      loadBalancing: 'weighted-round-robin',
+    });
+    expect(
+      await controller.update(tenant, service, {
+        loadBalancing: 'least-connections',
+      }),
+    ).toMatchObject({ loadBalancing: 'least-connections' });
+    expect(
+      await controller.update(tenant, service, { timeoutMs: 2500 }),
+    ).toMatchObject({ loadBalancing: 'least-connections', timeoutMs: 2500 });
+    expect(
+      await controller.update(tenant, service, {
+        loadBalancing: 'weighted-round-robin',
+      }),
+    ).toMatchObject({ loadBalancing: 'weighted-round-robin' });
+    expect(
+      await controller.create(tenant, {
+        name: 'least-busy',
+        targets: [{ url: 'http://least:8080', weight: 1 }],
+        loadBalancing: 'least-connections',
+      }),
+    ).toMatchObject({ loadBalancing: 'least-connections' });
+  });
   it('keeps consumer groups when omitted and returns the updated consumer without its key hash', async () => {
     const controller = new ConsumersController(ds, push);
     const consumer = await controller.create(tenant, {

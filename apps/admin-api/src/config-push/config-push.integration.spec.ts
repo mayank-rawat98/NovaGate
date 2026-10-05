@@ -64,7 +64,7 @@ integration(
       await new TenantProvisioningService(ds).provisionTenant(tenantId);
       const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
       await ds.query(
-        `INSERT INTO ${schema}.services (name, targets) VALUES ('persisted-service', '[{"url":"http://example.test","weight":1}]'::jsonb)`,
+        `INSERT INTO ${schema}.services (name, targets, "loadBalancing") VALUES ('persisted-service', '[{"url":"http://example.test","weight":1}]'::jsonb, 'least-connections')`,
       );
       process.env.REDIS_URL = process.env.TEST_REDIS_URL;
       push = new ConfigPushService(ds);
@@ -107,9 +107,10 @@ integration(
       expect(pending).toHaveLength(1);
       expect(pending[0].config.version).toBe(2);
       const config = pending[0].config.config as {
-        services: Array<{ name: string }>;
+        services: Array<{ name: string; loadBalancing: string }>;
       };
       expect(config.services[0].name).toBe('persisted-service');
+      expect(config.services[0].loadBalancing).toBe('least-connections');
       for (
         let i = 0;
         i < 100 && received.filter((m) => m.tenantId === tenantId).length < 2;

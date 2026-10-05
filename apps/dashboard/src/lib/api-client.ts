@@ -69,6 +69,7 @@ export type CreateRouteDto = Pick<
 };
 export type UpdateRouteDto = Partial<CreateRouteDto>;
 export type CreateServiceDto = Pick<ServiceEntity, 'name' | 'targets'> & {
+  loadBalancing?: ServiceEntity['loadBalancing'];
   healthCheckPath?: string;
   healthCheckIntervalMs?: number;
   healthCheckProtocol?: 'http' | 'grpc';

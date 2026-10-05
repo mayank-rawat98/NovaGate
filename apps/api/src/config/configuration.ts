@@ -2,6 +2,13 @@ import {
   MAX_TENANT_CA_BUNDLE_BYTES,
   MAX_TENANT_CA_CERTIFICATES,
 } from '@api-gateway/shared-types';
+export const DEFAULT_LOAD_BALANCER = {
+  maxServices: 1024,
+  maxTargetsPerService: 256,
+  maxActiveReservations: 4096,
+};
+export type LoadBalancerSettings = typeof DEFAULT_LOAD_BALANCER;
+
 export const DEFAULT_PROXY_HANDLERS = { maxCacheEntries: 256 };
 
 export const DEFAULT_HTTP2 = {
@@ -156,6 +163,7 @@ export interface GatewayConfig {
   graphql: GraphqlSettings;
   bodyCapture: BodyCaptureSettings;
   http2: Http2Settings;
+  loadBalancer: LoadBalancerSettings;
   tls: ListenerTlsSettings;
   rateLimit: {
     windowMs: number;
@@ -174,6 +182,20 @@ const parseProxyServices = (): ProxyServiceConfig[] => {
 };
 
 export default (): GatewayConfig => ({
+  loadBalancer: {
+    maxServices: Number(
+      process.env.LOAD_BALANCER_MAX_SERVICES ??
+        DEFAULT_LOAD_BALANCER.maxServices,
+    ),
+    maxTargetsPerService: Number(
+      process.env.LOAD_BALANCER_MAX_TARGETS_PER_SERVICE ??
+        DEFAULT_LOAD_BALANCER.maxTargetsPerService,
+    ),
+    maxActiveReservations: Number(
+      process.env.LOAD_BALANCER_MAX_ACTIVE_RESERVATIONS ??
+        DEFAULT_LOAD_BALANCER.maxActiveReservations,
+    ),
+  },
   http2: {
     maxTargets: Number(
       process.env.HTTP2_MAX_TARGETS ?? DEFAULT_HTTP2.maxTargets,

@@ -81,6 +81,7 @@ export class ConfigPushService implements OnModuleInit, OnModuleDestroy {
       healthCheckService: row.healthCheckService ?? '',
       unhealthyFallback: row.unhealthyFallback ?? false,
       timeoutMs: row.timeoutMs,
+      loadBalancing: row.loadBalancing ?? 'weighted-round-robin',
       h2: row.h2 ?? false,
       supportsWebSocket: row.supportsWebSocket ?? false,
     }));

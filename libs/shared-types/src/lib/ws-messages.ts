@@ -130,6 +130,10 @@ export interface RouteConfig {
   graphql?: GraphqlPolicy | null;
 }
 
+export const MAX_SERVICE_TARGETS = 256;
+export const MAX_SERVICE_TARGET_URL_BYTES = 2048;
+export const MAX_SERVICE_TARGET_WEIGHT = 100;
+
 export interface ServiceTarget {
   url: string;
   weight: number;
@@ -146,6 +150,7 @@ export interface ServiceConfig {
   unhealthyFallback?: boolean;
   timeoutMs: number;
   supportsWebSocket?: boolean;
+  loadBalancing?: 'weighted-round-robin' | 'least-connections';
   h2?: boolean;
 }
 
