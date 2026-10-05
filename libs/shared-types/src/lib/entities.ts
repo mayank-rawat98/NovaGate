@@ -53,6 +53,7 @@ export interface ServiceEntity {
   healthCheckProtocol?: 'http' | 'grpc';
   healthCheckService?: string;
   unhealthyFallback?: boolean;
+  loadBalancing?: 'weighted-round-robin' | 'least-connections';
   h2?: boolean;
   supportsWebSocket?: boolean;
   timeoutMs: number;

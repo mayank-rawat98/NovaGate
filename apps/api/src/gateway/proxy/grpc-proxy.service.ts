@@ -50,6 +50,7 @@ interface Call {
   routePolicy: string;
   certificateTrust?: string;
   target?: string;
+  releaseTarget?: () => void;
   upstream?: http2.ClientHttp2Stream;
   request: http2.Http2ServerRequest;
   response: http2.Http2ServerResponse;
@@ -615,12 +616,15 @@ export class GrpcProxyService
       const targets = service.targets.filter((target) =>
         currentService.targets.some((current) => current.url === target.url),
       );
-      const target = this.loadBalancer.selectTarget(
+      const lease = this.loadBalancer.acquireTarget(
         service.id,
         targets,
         this.upstreamHealth.getHealthyUrls(targets, service.id),
         currentService.unhealthyFallback === true,
+        currentService.loadBalancing,
       );
+      call.releaseTarget = lease.release;
+      const target = lease.url;
       call.target = target;
       const entry = this.acquire(service.id, target);
       let upstream: http2.ClientHttp2Stream;
@@ -648,6 +652,7 @@ export class GrpcProxyService
       }
       call.upstream = upstream;
       upstream.once('close', () => {
+        call.releaseTarget?.();
         entry.active = Math.max(0, entry.active - 1);
         entry.lastUsed = Date.now();
         if (entry.retiring && !entry.active) entry.session.destroy();
@@ -751,6 +756,7 @@ export class GrpcProxyService
           : new GrpcFailure(14, 'Upstream unavailable'),
       );
     } finally {
+      if (!call.upstream) call.releaseTarget?.();
       call.admitting = false;
       this.detachedAdmissions.delete(call);
       this.metricsService.setGrpcActiveCalls(this.occupiedCalls);

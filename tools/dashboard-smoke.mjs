@@ -114,6 +114,8 @@ const archives = ['queued', 'processing', 'completed', 'failed', 'expired'].map(
 const newArchiveId = '45678901-1234-1234-1234-123456789abc';
 let failServices = false;
 let serviceRequests = 0;
+let servicePolicy = 'weighted-round-robin';
+let servicePolicySaves = 0;
 const violations = [];
 const runtimeErrors = [];
 const apiRequests = [];
@@ -273,8 +275,26 @@ await context.route('**/api/**', async (route) => {
       });
     return;
   }
+  if (route.request().method() === 'PUT' && resource === service) {
+    const submitted = route.request().postDataJSON();
+    assert.equal(
+      submitted.loadBalancing,
+      servicePolicySaves++ === 0 ? 'least-connections' : 'weighted-round-robin',
+    );
+    assert.equal(submitted.name, 'Catalog API');
+    assert.deepEqual(submitted.targets, [
+      { url: 'https://catalog.example.test', weight: 100 },
+    ]);
+    servicePolicy = submitted.loadBalancing;
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ id: service, ...submitted, createdAt }),
+    });
+    return;
+  }
   if (route.request().method() === 'POST' && resource === 'services') {
     const submitted = route.request().postDataJSON();
+    assert.equal(submitted.loadBalancing, 'least-connections');
     assert.equal(submitted.healthCheckIntervalMs, 1500);
     assert.equal(submitted.unhealthyFallback, true);
     assert.equal(submitted.healthCheckProtocol, 'grpc');
@@ -320,6 +340,7 @@ await context.route('**/api/**', async (route) => {
       {
         id: service,
         name: 'Catalog API',
+        loadBalancing: servicePolicy,
         targets: [{ url: 'https://catalog.example.test', weight: 100 }],
         healthCheckPath: '/health',
         timeoutMs: 10000,
@@ -423,6 +444,38 @@ try {
   assert(serviceRequests >= 2, 'Retry must fetch the list again');
   await expect(page.getByText('degraded', { exact: true })).toBeVisible();
   await audit('services desktop');
+  for (const policy of ['least-connections', 'weighted-round-robin']) {
+    await page
+      .getByRole('button', { name: 'Edit service', exact: true })
+      .click();
+    const dialog = page.getByRole('dialog', { name: 'Services form' });
+    await expect(
+      dialog.getByLabel('Load balancing', { exact: true }),
+    ).toHaveValue(servicePolicy);
+    await dialog
+      .getByLabel('Load balancing', { exact: true })
+      .selectOption(policy);
+    if (policy === 'least-connections')
+      await expect(
+        dialog.getByText(/Counts are local to each gateway/),
+      ).toBeVisible();
+    await audit(`service balancing ${policy}`);
+    await dialog
+      .getByRole('button', { name: 'Save Changes', exact: true })
+      .click();
+    await expect(dialog).not.toBeVisible();
+    await page.reload();
+    await expect(page.getByText('Catalog API', { exact: true })).toBeVisible();
+    await page
+      .getByRole('button', { name: 'Edit service', exact: true })
+      .click();
+    await expect(
+      dialog.getByLabel('Load balancing', { exact: true }),
+    ).toHaveValue(policy);
+    await page.keyboard.press('Escape');
+    await expect(dialog).not.toBeVisible();
+  }
+  assert.equal(servicePolicySaves, 2);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto(`${base}/dashboard`);
@@ -678,6 +731,9 @@ try {
       await serviceDialog
         .getByRole('checkbox', { name: 'Allow WebSocket upgrades' })
         .check();
+      await serviceDialog
+        .getByLabel('Load balancing', { exact: true })
+        .selectOption('least-connections');
       await audit('Services native gRPC form mobile');
       await serviceDialog
         .getByRole('button', { name: 'Add Service', exact: true })
@@ -688,6 +744,9 @@ try {
       await expect(
         serviceDialog.getByLabel('Name', { exact: true }),
       ).toHaveValue('Test service');
+      await expect(
+        serviceDialog.getByLabel('Load balancing', { exact: true }),
+      ).toHaveValue('least-connections');
       await audit('service save failure mobile');
     }
     if (path === '/consumers') {

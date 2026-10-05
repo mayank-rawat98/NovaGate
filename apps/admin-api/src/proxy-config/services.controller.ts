@@ -12,10 +12,17 @@ import {
 import { DataSource } from 'typeorm';
 import { ConfigPushService } from '../config-push/config-push.service';
 import { tenantSchema } from '../tenants/tenant-schema';
-import type { ServiceTarget } from '@api-gateway/shared-types';
+import {
+  MAX_SERVICE_TARGETS,
+  MAX_SERVICE_TARGET_URL_BYTES,
+  MAX_SERVICE_TARGET_WEIGHT,
+  type ServiceTarget,
+  type ServiceConfig,
+} from '@api-gateway/shared-types';
 
 interface ServiceBody {
   name?: string;
+  loadBalancing?: ServiceConfig['loadBalancing'];
   targets?: unknown;
   healthCheckPath?: string;
   timeoutMs?: number;
@@ -31,6 +38,11 @@ function validateTargets(targets: unknown): ServiceTarget[] {
   if (!Array.isArray(targets) || targets.length === 0) {
     throw new BadRequestException('Targets must be a non-empty array');
   }
+  if (targets.length > MAX_SERVICE_TARGETS)
+    throw new BadRequestException(
+      `Provide at most ${MAX_SERVICE_TARGETS} targets`,
+    );
+  const seen = new Set<string>();
   return targets.map((target, index) => {
     if (!target || typeof target !== 'object') {
       throw new BadRequestException(`targets[${index}] must be an object`);
@@ -40,11 +52,31 @@ function validateTargets(targets: unknown): ServiceTarget[] {
     if (!url) {
       throw new BadRequestException(`targets[${index}].url is required`);
     }
-    const weight =
-      typeof record.weight === 'number' ? record.weight : Number(record.weight);
-    if (!Number.isFinite(weight) || weight < 1 || weight > 100) {
+    try {
+      const parsed = new URL(url);
+      if (
+        !['http:', 'https:'].includes(parsed.protocol) ||
+        parsed.username ||
+        parsed.password ||
+        Buffer.byteLength(url) > MAX_SERVICE_TARGET_URL_BYTES ||
+        seen.has(parsed.href)
+      )
+        throw new Error();
+      seen.add(parsed.href);
+    } catch {
       throw new BadRequestException(
-        `targets[${index}].weight must be between 1 and 100`,
+        `targets[${index}].url must be a unique HTTP/HTTPS URL without embedded credentials, at most ${MAX_SERVICE_TARGET_URL_BYTES} bytes`,
+      );
+    }
+    const weight = record.weight;
+    if (
+      typeof weight !== 'number' ||
+      !Number.isSafeInteger(weight) ||
+      weight < 1 ||
+      weight > MAX_SERVICE_TARGET_WEIGHT
+    ) {
+      throw new BadRequestException(
+        `targets[${index}].weight must be an integer between 1 and ${MAX_SERVICE_TARGET_WEIGHT}`,
       );
     }
     return { url, weight };
@@ -52,6 +84,13 @@ function validateTargets(targets: unknown): ServiceTarget[] {
 }
 
 function validateHealthSettings(body: ServiceBody) {
+  if (
+    body.loadBalancing !== undefined &&
+    !['weighted-round-robin', 'least-connections'].includes(body.loadBalancing)
+  )
+    throw new BadRequestException(
+      'Load balancing must be weighted-round-robin or least-connections',
+    );
   if (
     body.healthCheckProtocol !== undefined &&
     !['http', 'grpc'].includes(body.healthCheckProtocol)
@@ -134,8 +173,8 @@ export class ServicesController {
     validateHealthSettings(body);
     const targets = validateTargets(body.targets);
     const rows = await this.dataSource.query(
-      `INSERT INTO ${schema}.services (name, targets, "healthCheckPath", "timeoutMs", h2, "supportsWebSocket", "healthCheckIntervalMs", "unhealthyFallback", "healthCheckProtocol", "healthCheckService")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      `INSERT INTO ${schema}.services (name, targets, "healthCheckPath", "timeoutMs", h2, "supportsWebSocket", "healthCheckIntervalMs", "unhealthyFallback", "healthCheckProtocol", "healthCheckService", "loadBalancing")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
       [
         body.name,
         JSON.stringify(targets),
@@ -147,6 +186,7 @@ export class ServicesController {
         body.unhealthyFallback ?? false,
         body.healthCheckProtocol ?? 'http',
         body.healthCheckService ?? '',
+        body.loadBalancing ?? 'weighted-round-robin',
       ],
     );
     await this.configPush.triggerUpdate(tenantId);
@@ -176,7 +216,8 @@ export class ServicesController {
             "healthCheckIntervalMs" = COALESCE($8, "healthCheckIntervalMs"),
             "unhealthyFallback" = COALESCE($9, "unhealthyFallback"),
             "healthCheckProtocol" = COALESCE($10, "healthCheckProtocol"),
-            "healthCheckService" = COALESCE($11, "healthCheckService")
+            "healthCheckService" = COALESCE($11, "healthCheckService"),
+            "loadBalancing" = COALESCE($12, "loadBalancing")
        WHERE id = $1 AND "deletedAt" IS NULL RETURNING *) SELECT * FROM updated`,
       [
         id,
@@ -190,6 +231,7 @@ export class ServicesController {
         body.unhealthyFallback ?? null,
         body.healthCheckProtocol ?? null,
         body.healthCheckService ?? null,
+        body.loadBalancing ?? null,
       ],
     );
     if (!rows.length)

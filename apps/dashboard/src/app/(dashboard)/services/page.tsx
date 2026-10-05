@@ -35,6 +35,7 @@ interface TargetRow {
 
 interface FormState {
   name: string;
+  loadBalancing: 'weighted-round-robin' | 'least-connections';
   targets: TargetRow[];
   healthCheckPath: string;
   timeoutMs: string;
@@ -50,6 +51,7 @@ const EMPTY_TARGET: TargetRow = { url: '', weight: '1' };
 
 const EMPTY_FORM: FormState = {
   name: '',
+  loadBalancing: 'weighted-round-robin',
   targets: [{ url: '', weight: '1' }],
   healthCheckPath: '/health',
   timeoutMs: '10000',
@@ -64,6 +66,7 @@ const EMPTY_FORM: FormState = {
 function formToDto(form: FormState): CreateServiceDto {
   return {
     name: form.name,
+    loadBalancing: form.loadBalancing,
     healthCheckIntervalMs: Number(form.healthCheckIntervalMs),
     healthCheckProtocol: form.healthCheckProtocol,
     healthCheckService:
@@ -128,6 +131,7 @@ export default function ServicesPage() {
       healthCheckPath: service.healthCheckPath,
       timeoutMs: String(service.timeoutMs),
       healthCheckIntervalMs: String(service.healthCheckIntervalMs ?? 10000),
+      loadBalancing: service.loadBalancing ?? 'weighted-round-robin',
       healthCheckProtocol: service.healthCheckProtocol ?? 'http',
       healthCheckService: service.healthCheckService ?? '',
       h2: service.h2 ?? false,
@@ -518,6 +522,41 @@ export default function ServicesPage() {
                     Higher weight = more traffic.
                   </p>
                 )}
+              </div>
+
+              <div className="flex flex-col gap-2 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
+                <label
+                  htmlFor="service-load-balancing"
+                  className="text-sm font-medium text-gray-800"
+                >
+                  Load balancing
+                </label>
+                <select
+                  id="service-load-balancing"
+                  value={form.loadBalancing}
+                  onChange={(event) =>
+                    setForm((value) => ({
+                      ...value,
+                      loadBalancing: event.target
+                        .value as FormState['loadBalancing'],
+                    }))
+                  }
+                  className="rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm"
+                  aria-describedby="service-load-balancing-help"
+                >
+                  <option value="weighted-round-robin">
+                    Weighted round robin
+                  </option>
+                  <option value="least-connections">Least connections</option>
+                </select>
+                <p
+                  id="service-load-balancing-help"
+                  className="text-xs leading-relaxed text-gray-600"
+                >
+                  {form.loadBalancing === 'least-connections'
+                    ? 'Send new work to the least busy healthy target, adjusted by weight. Useful for slow requests, gRPC streams and WebSocket tunnels. Counts are local to each gateway.'
+                    : 'Rotate healthy targets according to their relative weights. A predictable default for requests with similar duration.'}
+                </p>
               </div>
 
               <fieldset className="flex flex-col gap-3 rounded-lg border border-gray-200 p-3">

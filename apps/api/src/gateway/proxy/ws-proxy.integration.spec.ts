@@ -37,6 +37,7 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
   let upstream: http.Server;
   let listener: http.Server;
   let wss: WebSocketServer;
+  let balancer: LoadBalancerService;
   let gateway: WsProxyService;
   let manager: GatewayConfigManagerService;
   let config: TenantConfig;
@@ -72,7 +73,7 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
     return new WsProxyService(
       manager,
       metrics as never,
-      new LoadBalancerService(),
+      (balancer = new LoadBalancerService()),
       {
         getHealthyUrls: () =>
           new Set(
@@ -819,5 +820,40 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
     expect(blocked.body.error).toBe('WS_PLUGIN_UNSUPPORTED');
     expect(received).toHaveLength(1);
     expect(gateway.occupiedConnections).toBe(0);
+  });
+  it('selects another target while a WebSocket tunnel is active and releases closed tunnels', async () => {
+    let fastCalls = 0;
+    const fast = http.createServer();
+    const fastWss = new WebSocketServer({ server: fast });
+    const peers = new Set<WebSocket>();
+    fastWss.on('connection', (peer) => {
+      fastCalls++;
+      peers.add(peer);
+      peer.on('error', () => undefined);
+    });
+    fast.listen(0, '127.0.0.1');
+    await once(fast, 'listening');
+    try {
+      config.services[0].loadBalancing = 'least-connections';
+      config.services[0].targets.push({
+        url: `http://127.0.0.1:${(fast.address() as net.AddressInfo).port}`,
+        weight: 1,
+      });
+      await install();
+      const first = connect();
+      await once(first, 'open');
+      const second = connect();
+      await once(second, 'open');
+      expect(fastCalls).toBe(1);
+      expect(received).toHaveLength(1);
+      expect(balancer.activeReservations).toBe(2);
+      first.terminate();
+      second.terminate();
+      await until(() => balancer.activeReservations === 0);
+    } finally {
+      for (const peer of peers) peer.terminate();
+      await new Promise<void>((resolve) => fastWss.close(() => resolve()));
+      await new Promise<void>((resolve) => fast.close(() => resolve()));
+    }
   });
 });

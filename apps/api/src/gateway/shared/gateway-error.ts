@@ -1,6 +1,8 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 
 export type GatewayErrorCode =
+  | 'BALANCER_CAPACITY_EXCEEDED'
+  | 'BALANCER_CONFIG_INVALID'
   | 'PLUGIN_CONFIG_INVALID'
   | 'TOKEN_EXPIRED'
   | 'TOKEN_INVALID'

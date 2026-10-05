@@ -11,11 +11,27 @@ import {
   DEFAULT_BODY_CAPTURE,
   DEFAULT_HTTP2,
   DEFAULT_PROXY_HANDLERS,
+  DEFAULT_LOAD_BALANCER,
 } from './configuration';
 import { BlockList, isIP } from 'net';
 
 export const configSchema = Joi.object({
   PORT: Joi.number().default(3000),
+  LOAD_BALANCER_MAX_SERVICES: Joi.number()
+    .integer()
+    .min(1)
+    .max(4096)
+    .default(DEFAULT_LOAD_BALANCER.maxServices),
+  LOAD_BALANCER_MAX_TARGETS_PER_SERVICE: Joi.number()
+    .integer()
+    .min(1)
+    .max(1024)
+    .default(DEFAULT_LOAD_BALANCER.maxTargetsPerService),
+  LOAD_BALANCER_MAX_ACTIVE_RESERVATIONS: Joi.number()
+    .integer()
+    .min(1)
+    .max(65536)
+    .default(DEFAULT_LOAD_BALANCER.maxActiveReservations),
   PROXY_MAX_HANDLER_CACHE_ENTRIES: Joi.number()
     .integer()
     .min(1)

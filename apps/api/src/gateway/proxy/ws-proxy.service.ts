@@ -47,6 +47,7 @@ interface Connection {
   route: RouteConfig;
   service: ServiceConfig;
   target?: string;
+  releaseTarget?: () => void;
   principal?: string;
   policy: string;
   opened: boolean;
@@ -163,6 +164,8 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
     connection.earlyChunks.length = 0;
     connection.socket.unpipe();
     connection.upstream?.unpipe();
+    if (!connection.request && !connection.upstream)
+      connection.releaseTarget?.();
     connection.request?.destroy();
     connection.upstream?.destroy();
     if (destroyClient) connection.socket.destroy();
@@ -445,12 +448,15 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
         currentService?.targets.some((current) => current.url === target.url),
       );
       try {
-        active.target = this.loadBalancer.selectTarget(
+        const lease = this.loadBalancer.acquireTarget(
           service.id,
           targets,
           this.upstreamHealth.getHealthyUrls(targets, service.id),
           currentService?.unhealthyFallback === true,
+          currentService?.loadBalancing,
         );
+        active.target = lease.url;
+        active.releaseTarget = lease.release;
       } catch {
         throw new WsFailure(
           503,
@@ -498,6 +504,9 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
         agent: false,
         signal: active.abort.signal,
         maxHeaderSize: this.settings.maxHeaderBytes,
+      });
+      active.request.once('close', () => {
+        if (!active.upstream) active.releaseTarget?.();
       });
       active.request.on('error', () =>
         this.fail(
@@ -582,6 +591,7 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
       ),
     );
     upstream.once('close', () => {
+      connection.releaseTarget?.();
       if (!upstream.readableEnded) this.finish(connection);
     });
     try {
