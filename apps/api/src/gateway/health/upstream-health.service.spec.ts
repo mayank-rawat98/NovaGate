@@ -170,52 +170,70 @@ describe('active upstream health with real network peers', () => {
     },
   );
 
-  it('rejects an untrusted HTTPS certificate without disabling TLS verification', async () => {
-    const artifacts = resolve(__dirname, '../../../../..', '.local-work');
-    mkdirSync(artifacts, { recursive: true });
-    const directory = mkdtempSync(resolve(artifacts, 'health-tls-'));
-    try {
-      const key = resolve(directory, 'key.pem');
-      const cert = resolve(directory, 'cert.pem');
-      execFileSync(
-        'openssl',
-        [
-          'req',
-          '-x509',
-          '-newkey',
-          'rsa:2048',
-          '-nodes',
-          '-keyout',
-          key,
-          '-out',
-          cert,
-          '-days',
-          '1',
-          '-subj',
-          '/CN=localhost',
-          '-addext',
-          'subjectAltName=IP:127.0.0.1',
-        ],
-        { stdio: 'ignore' },
-      );
-      let requests = 0;
-      const server = https.createServer(
-        { key: readFileSync(key), cert: readFileSync(cert) },
-        (_, response) => {
-          requests++;
-          response.end('ok');
-        },
-      );
-      const url = (await listen(server)).replace('http:', 'https:');
-      const svc = service(url);
-      await install([svc]);
-      const health = start({ failureThreshold: 1, probeTimeoutMs: 1000 });
-      await until(() => health.getSnapshots([svc])[0].status === 'unhealthy');
-      expect(requests).toBe(0);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
+  it('keeps HTTP/1 peers healthy for an h2 service using verified predispatch fallback', async () => {
+    let checked = 0;
+    const http1 = http.createServer((req, res) => {
+      expect(req.url).toBe('/health');
+      checked++;
+      res.end('healthy');
+    });
+    const url = await listen(http1);
+    const svc = { ...service(url), h2: true };
+    await install([svc]);
+    const health = start();
+    await until(() => health.getSnapshots([svc])[0].status === 'healthy');
+    expect(checked).toBeGreaterThan(0);
+    expect(health.getHealthyUrls(svc.targets, svc.id)).toEqual(new Set([url]));
   });
+  it.each([false, true])(
+    'rejects an untrusted HTTPS certificate without disabling TLS verification (h2=%s)',
+    async (h2) => {
+      const artifacts = resolve(__dirname, '../../../../..', '.local-work');
+      mkdirSync(artifacts, { recursive: true });
+      const directory = mkdtempSync(resolve(artifacts, 'health-tls-'));
+      try {
+        const key = resolve(directory, 'key.pem');
+        const cert = resolve(directory, 'cert.pem');
+        execFileSync(
+          'openssl',
+          [
+            'req',
+            '-x509',
+            '-newkey',
+            'rsa:2048',
+            '-nodes',
+            '-keyout',
+            key,
+            '-out',
+            cert,
+            '-days',
+            '1',
+            '-subj',
+            '/CN=localhost',
+            '-addext',
+            'subjectAltName=IP:127.0.0.1',
+          ],
+          { stdio: 'ignore' },
+        );
+        let requests = 0;
+        const server = https.createServer(
+          { key: readFileSync(key), cert: readFileSync(cert) },
+          (_, response) => {
+            requests++;
+            response.end('ok');
+          },
+        );
+        const url = (await listen(server)).replace('http:', 'https:');
+        const svc = { ...service(url), h2 };
+        await install([svc]);
+        const health = start({ failureThreshold: 1, probeTimeoutMs: 1000 });
+        await until(() => health.getSnapshots([svc])[0].status === 'unhealthy');
+        expect(requests).toBe(0);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('checks named gRPC health services separately and switches from HTTP probes', async () => {
     const requests: Buffer[] = [];

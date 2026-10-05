@@ -14,6 +14,7 @@ import {
   UpstreamHealthSettings,
 } from '../../config/configuration';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
+import { isHttp2NegotiationFallback } from '../shared/http2-negotiation';
 import { grpcHealthRequest, grpcHealthServing } from './grpc-health-wire';
 import { GatewayTelemetryService } from '../telemetry/gateway-telemetry.service';
 
@@ -276,11 +277,35 @@ export class UpstreamHealthService implements OnModuleInit, OnModuleDestroy {
           finish(false);
           return;
         }
+        const probeHttp1 = () => {
+          if (settled || signal.aborted) return;
+          const client = url.protocol === 'https:' ? https : http;
+          request = client.get(url, { agent: false }, (response) => {
+            const code = response.statusCode ?? 500;
+            response.destroy();
+            finish(code >= 200 && code < 300);
+          });
+          request.on('error', () => finish(false));
+        };
         if (state.h2 || state.protocol === 'grpc') {
           const connection = http2.connect(url.origin);
           session = connection;
-          connection.on('error', () => finish(false));
-          connection.once('connect', () => {
+          let dispatched = false,
+            fallingBack = false;
+          connection.on('error', (error: NodeJS.ErrnoException) => {
+            if (
+              !settled &&
+              !dispatched &&
+              !fallingBack &&
+              state.protocol === 'http' &&
+              isHttp2NegotiationFallback(error)
+            ) {
+              fallingBack = true;
+              connection.destroy();
+              probeHttp1();
+            } else if (!fallingBack) finish(false);
+          });
+          connection.once('remoteSettings', () => {
             if (settled) return;
             try {
               const headers: http2.OutgoingHttpHeaders = {
@@ -302,6 +327,7 @@ export class UpstreamHealthService implements OnModuleInit, OnModuleDestroy {
                 headers['grpc-timeout'] = `${this.settings.probeTimeoutMs}m`;
               }
               // Headers must be complete before opening the HTTP/2 stream.
+              dispatched = true;
               request = connection.request(headers);
               request.on('error', () => finish(false));
               if (state.protocol === 'grpc') {
@@ -349,13 +375,7 @@ export class UpstreamHealthService implements OnModuleInit, OnModuleDestroy {
             }
           });
         } else {
-          const client = url.protocol === 'https:' ? https : http;
-          request = client.get(url, { agent: false }, (response) => {
-            const code = response.statusCode ?? 500;
-            response.destroy();
-            finish(code >= 200 && code < 300);
-          });
-          request.on('error', () => finish(false));
+          probeHttp1();
         }
       } catch {
         finish(false);

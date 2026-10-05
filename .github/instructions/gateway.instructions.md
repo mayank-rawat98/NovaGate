@@ -73,6 +73,7 @@ apps/api/src/
       gateway-exception.filter.ts
       redis.tokens.ts
       request-context.ts
+      http2-negotiation.ts          -- shared predispatch protocol/connection fallback classification
       request-body.service.ts       -- shared bounded body capture and request-lifetime admission
       request-body.service.spec.ts  -- real stream/deadline/admission regression tests
       tls-client-trust.ts           -- update native listener trust from validated tenant CA changes

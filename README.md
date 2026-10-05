@@ -441,3 +441,28 @@ Complexity is a conservative schema-free weighted field count, including repeate
 HMAC, GraphQL and request-size policies share one bounded capture of original bytes; the smallest applicable byte and deadline limit wins. Shared and mode-specific admission remain held until response finish, close or cancellation. No policy reconstructs signed bytes from parsed JSON. Capacity failures return 503, body overflow 413 and capture timeout 408; GraphQL policy/parse failures return 400, invalid configuration 500. Errors retain the gateway request ID and omit query contents. Native WebSocket/gRPC listeners reject HTTP-only GraphQL policies and cancel affected existing streams after policy changes.
 
 Request telemetry uses matched route patterns (or `unmatched`), excludes raw query strings and user agents, and replaces malformed client request IDs with UUIDs. Broader telemetry/redaction acceptance remains part of phase 4 and the final campaign.
+
+### Bounded HTTP/2 upstream connections
+
+A service with `h2: true` uses verified Node HTTP/2 connections and waits for peer SETTINGS before opening an application stream. No active request queues past the configured pool/peer capacity. Capacity and shutdown admission failures return 503; oversized request metadata returns 431; oversized responses or malformed/reset upstream streams return 502; absolute connection/stream deadlines return 504. Body capture uses the shared original-byte size, deadline and admission limits above and never reconstructs signed JSON.
+
+Idle eviction closes real sockets and deletes empty origins. GOAWAY prevents reuse; active streams retain their capacity until closure. Configuration changes close removed origins and tenant-changed sessions. Shutdown cancels work and stops admission. Buffered response bytes and headers are finite; these settings govern HTTP/2 forwarding, while native gRPC uses its separate transport limits.
+
+| Variable                          | Default | Valid range                                |
+| --------------------------------- | ------- | ------------------------------------------ |
+| `HTTP2_MAX_TARGETS`               | 64      | 1–1024 origins                             |
+| `HTTP2_MAX_SESSIONS`              | 64      | 1–1024 sessions globally                   |
+| `HTTP2_MAX_SESSIONS_PER_TARGET`   | 10      | 1–32 sessions per origin                   |
+| `HTTP2_MAX_STREAMS_PER_SESSION`   | 100     | 1–1024, further limited by peer SETTINGS   |
+| `HTTP2_MAX_ACTIVE_REQUESTS`       | 64      | 1–1024, including connection setup         |
+| `HTTP2_MAX_RESPONSE_BYTES`        | 4194304 | 1–67108864 bytes per buffered response     |
+| `HTTP2_MAX_HEADER_BYTES`          | 16384   | 1024–65536 bytes, including field overhead |
+| `HTTP2_CONNECT_TIMEOUT_MS`        | 5000    | 100–30000 ms absolute SETTINGS deadline    |
+| `HTTP2_IDLE_TIMEOUT_MS`           | 30000   | 100–300000 ms for inactive sessions        |
+| `PROXY_MAX_HANDLER_CACHE_ENTRIES` | 256     | 1–4096 HTTP proxy handlers                 |
+
+Size memory budgets for concurrency times request/response byte limits plus Node session overhead. Admission is bounded rather than an unbounded waiting queue. An idle sweep runs at most one second apart. Origin pooling shares connections, not request credentials; every request retains its own authenticated headers and policy context.
+
+HTTP health probes use the same predispatch negotiation fallback under their existing absolute probe deadline; gRPC health probes never fall back to HTTP/1.
+
+HTTP/1 fallback is allowed only for recognized connection/protocol negotiation failures before dispatch. Certificate/trust failures, capacity exhaustion, deadlines and already-dispatched streams cannot trigger fallback. The fallback retains verified HTTPS, original bytes, ordered response hooks and the remaining absolute upstream deadline. Before response headers, expiry returns 504; after streaming headers, expiry closes the connection because its status is already committed. Pool idle/deadline bookkeeping uses monotonic time. A reset POST is never replayed through HTTP/1; configured retries remain restricted to GET/HEAD/OPTIONS. Upstream response status and headers are passed through HTTP/2 response hooks before committing the buffered body. Private targets and raw upstream error strings are omitted from HTTP/2 error telemetry.

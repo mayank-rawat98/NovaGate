@@ -1,8 +1,10 @@
 import * as http from 'http';
+import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { EventEmitter } from 'events';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import type { Options } from 'http-proxy-middleware/dist/types';
+import { RequestBodyService } from '../shared/request-body.service';
 import { ProxyService } from './proxy.service';
 import { ProxyMiddleware } from './proxy.middleware';
 import { MetricsService } from '../metrics/metrics.service';
@@ -125,6 +127,8 @@ async function buildModule() {
       { provide: PluginRegistryService, useValue: mockPluginRegistry() },
       { provide: PluginRunnerService, useValue: mockPluginRunner() },
       { provide: Http2SessionPool, useValue: {} },
+      { provide: RequestBodyService, useValue: {} },
+      { provide: ConfigService, useValue: new ConfigService() },
     ],
   }).compile();
 
@@ -312,6 +316,8 @@ describe('ProxyService', () => {
         { provide: PluginRegistryService, useValue: mockPluginRegistry() },
         { provide: PluginRunnerService, useValue: mockPluginRunner() },
         { provide: Http2SessionPool, useValue: {} },
+        { provide: RequestBodyService, useValue: {} },
+        { provide: ConfigService, useValue: new ConfigService() },
       ],
     }).compile();
 

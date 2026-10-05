@@ -9,11 +9,64 @@ import {
   DEFAULT_HMAC,
   DEFAULT_GRAPHQL,
   DEFAULT_BODY_CAPTURE,
+  DEFAULT_HTTP2,
+  DEFAULT_PROXY_HANDLERS,
 } from './configuration';
 import { BlockList, isIP } from 'net';
 
 export const configSchema = Joi.object({
   PORT: Joi.number().default(3000),
+  PROXY_MAX_HANDLER_CACHE_ENTRIES: Joi.number()
+    .integer()
+    .min(1)
+    .max(4096)
+    .default(DEFAULT_PROXY_HANDLERS.maxCacheEntries),
+  HTTP2_MAX_TARGETS: Joi.number()
+    .integer()
+    .min(1)
+    .max(1024)
+    .default(DEFAULT_HTTP2.maxTargets),
+  HTTP2_MAX_SESSIONS: Joi.number()
+    .integer()
+    .min(1)
+    .max(1024)
+    .default(DEFAULT_HTTP2.maxSessions),
+  HTTP2_MAX_SESSIONS_PER_TARGET: Joi.number()
+    .integer()
+    .min(1)
+    .max(32)
+    .default(DEFAULT_HTTP2.maxSessionsPerTarget),
+  HTTP2_MAX_STREAMS_PER_SESSION: Joi.number()
+    .integer()
+    .min(1)
+    .max(1024)
+    .default(DEFAULT_HTTP2.maxStreamsPerSession),
+  HTTP2_MAX_ACTIVE_REQUESTS: Joi.number()
+    .integer()
+    .min(1)
+    .max(1024)
+    .default(DEFAULT_HTTP2.maxActiveRequests),
+  HTTP2_MAX_RESPONSE_BYTES: Joi.number()
+    .integer()
+    .min(1)
+    .max(67108864)
+    .default(DEFAULT_HTTP2.maxResponseBytes),
+  HTTP2_MAX_HEADER_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(65536)
+    .default(DEFAULT_HTTP2.maxHeaderBytes),
+  HTTP2_CONNECT_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(30000)
+    .default(DEFAULT_HTTP2.connectTimeoutMs),
+  HTTP2_IDLE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(300000)
+    .default(DEFAULT_HTTP2.idleTimeoutMs),
+
   BODY_CAPTURE_MAX_BODY_BYTES: Joi.number()
     .integer()
     .min(1)
