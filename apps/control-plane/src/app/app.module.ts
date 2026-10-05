@@ -1,3 +1,5 @@
+import { TraceIngestionService } from '../ingestion/trace-ingestion.service';
+import { validateTracingConfiguration } from '../config/tracing.configuration';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -12,7 +14,10 @@ import { HealthController } from './health.controller';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validate: validateTracingConfiguration,
+    }),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
@@ -27,6 +32,10 @@ import { HealthController } from './health.controller';
     TypeOrmModule.forFeature([Tenant, ApiKey, PendingConfigUpdate]),
   ],
   controllers: [HealthController],
-  providers: [TenantConnectionManager, LogIngestionService],
+  providers: [
+    TenantConnectionManager,
+    LogIngestionService,
+    TraceIngestionService,
+  ],
 })
 export class AppModule {}

@@ -30,6 +30,9 @@ const context = await chromium.launchPersistentContext(profile, {
 });
 const tenant = '12345678-1234-1234-1234-123456789abc';
 const service = '23456789-1234-1234-1234-123456789abc';
+const traceId = '0123456789abcdef0123456789abcdef';
+let traceMode = 'normal';
+const traceRequests = [];
 const createdAt = '2026-10-04T12:00:00.000Z';
 const routes = [
   {
@@ -147,6 +150,65 @@ await context.route('**/api/**', async (route) => {
     'Dashboard must use its configured API origin',
   );
   const resource = url.pathname.split('/').at(-1);
+  if (url.pathname.includes('/traces')) {
+    traceRequests.push(url.searchParams.toString());
+    const detail = url.pathname.endsWith(`/${traceId}`);
+    const fail = traceMode === 'error';
+    const spans = [
+      {
+        traceId,
+        spanId: '0123456789abcdef',
+        name: 'Gateway request',
+        kind: 'server',
+        timestamp: createdAt,
+        durationMs: 24.125,
+        status: 'error',
+        attributes: { 'http.route': '/orders', 'gateway.request.id': tenant },
+      },
+      {
+        traceId,
+        spanId: '1123456789abcdef',
+        parentSpanId: '0123456789abcdef',
+        name: 'upstream HTTP1',
+        kind: 'client',
+        timestamp: createdAt,
+        durationMs: 12.25,
+        status: 'error',
+        attributes: { 'http.response.status_code': 502 },
+      },
+    ];
+    await route.fulfill({
+      status: fail ? 503 : 200,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        fail
+          ? { message: 'Trace fixture outage' }
+          : detail
+            ? { traceId, spans, truncated: true }
+            : {
+                traces:
+                  traceMode === 'empty'
+                    ? []
+                    : [
+                        {
+                          traceId,
+                          timestamp: createdAt,
+                          durationMs: 24.125,
+                          spanCount: 2,
+                          status: 'error',
+                          route: '/orders',
+                          requestId: tenant,
+                        },
+                      ],
+                nextCursor: url.searchParams.has('cursor')
+                  ? null
+                  : 'fixture-next-page',
+              },
+      ),
+    });
+    return;
+  }
+
   if (resource === 'ca-cert' && route.request().method() === 'PUT') {
     caSaves++;
     const body = route.request().postDataJSON();
@@ -769,6 +831,7 @@ try {
     '/consumers',
     '/errors',
     '/logs',
+    '/traces',
     '/settings',
   ]) {
     await page.goto(`${base}${path}`);
@@ -780,6 +843,80 @@ try {
     );
     await audit(path);
   }
+  await page.goto(`${base}/traces`);
+  await expect(
+    page.getByRole('heading', { name: 'Traces', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: traceId, exact: true }),
+  ).toBeVisible();
+  await page.getByLabel('Trace ID', { exact: true }).fill(traceId);
+  await page.getByLabel('Request ID', { exact: true }).fill(tenant);
+  await page.getByLabel('Route', { exact: true }).fill('/orders');
+  await page.getByLabel('Errors only', { exact: true }).check();
+  await page
+    .getByRole('button', { name: 'Search traces', exact: true })
+    .click();
+  await expect
+    .poll(() =>
+      traceRequests.some((value) => {
+        const query = new URLSearchParams(value);
+        return (
+          query.get('traceId') === traceId &&
+          query.get('requestId') === tenant &&
+          query.get('route') === '/orders' &&
+          query.get('errorsOnly') === 'true' &&
+          query.has('from') &&
+          query.has('to')
+        );
+      }),
+    )
+    .toBe(true);
+  await page.getByRole('button', { name: traceId, exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Request timeline' }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('This large trace is truncated.', { exact: false }),
+  ).toBeVisible();
+  await page.locator('summary').filter({ hasText: 'upstream HTTP1' }).click();
+  await expect(
+    page.getByText('http.response.status_code', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('12.25 ms', { exact: false }).first(),
+  ).toBeVisible();
+  await audit('Trace filters and waterfall mobile');
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(page.getByText('Page 2', { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Next', exact: true }),
+  ).toBeDisabled();
+  await page.getByRole('button', { name: 'Previous', exact: true }).click();
+  await expect(page.getByText('Page 1', { exact: true })).toBeVisible();
+  traceMode = 'empty';
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(
+    page.getByText('No traces match.', { exact: false }),
+  ).toBeVisible();
+  traceMode = 'error';
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'Traces could not be loaded' }),
+  ).toContainText('Traces could not be loaded');
+  traceMode = 'normal';
+  await page.getByRole('button', { name: 'Try again', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: traceId, exact: true }),
+  ).toBeVisible();
+  await page.goto(`${base}/traces?traceId=${traceId}`);
+  await expect(
+    page.getByRole('heading', { name: 'Request timeline' }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await audit('Trace linked waterfall desktop');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${base}/settings`);
   await expect(
     page.getByText(/Clients must prove possession of their private key/),
   ).toBeVisible();

@@ -1,8 +1,15 @@
+import { ConfigService } from '@nestjs/config';
+import {
+  DEFAULT_SOCKET_ADMISSION,
+  type SocketAdmissionSettings,
+} from '../config/tracing.configuration';
+import { TraceIngestionService } from '../ingestion/trace-ingestion.service';
 import {
   Injectable,
   Logger,
   OnModuleInit,
   OnModuleDestroy,
+  Optional,
 } from '@nestjs/common';
 import { WebSocket, WebSocketServer } from 'ws';
 import * as crypto from 'crypto';
@@ -37,6 +44,7 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
   private redisSub!: Redis;
   private heartbeatTimer?: NodeJS.Timeout;
   private stopped = false;
+  private readonly admission: SocketAdmissionSettings;
 
   constructor(
     @InjectRepository(Tenant)
@@ -47,11 +55,21 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
     private readonly pendingUpdateRepo: Repository<PendingConfigUpdate>,
     private readonly ingestionService: LogIngestionService,
     private readonly dataSource: DataSource,
-  ) {}
+    @Optional() private readonly traceIngestion?: TraceIngestionService,
+    @Optional() config: ConfigService = new ConfigService(),
+  ) {
+    this.admission = {
+      ...DEFAULT_SOCKET_ADMISSION,
+      ...config.get<SocketAdmissionSettings>('socketAdmission'),
+    };
+  }
 
   onModuleInit() {
     const port = parseInt(process.env.WS_PORT || '8080', 10);
-    this.wss = new WebSocketServer({ port });
+    this.wss = new WebSocketServer({
+      port,
+      maxPayload: this.admission.maxMessageBytes,
+    });
     this.logger.log(`WebSocket server started on port ${port}`);
 
     const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
@@ -73,7 +91,19 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
       }
     });
 
-    this.wss.on('connection', (ws) => this.handleConnection(ws));
+    this.wss.on('connection', (ws) => {
+      ws.on('error', () => {
+        /* Malformed/oversized messages terminate inside ws. */
+      });
+      if (this.wss.clients.size > this.admission.maxConnections) {
+        ws.close(
+          GatewayCloseCode.RESOURCE_LIMIT,
+          'Connection capacity exhausted',
+        );
+        return;
+      }
+      this.handleConnection(ws);
+    });
 
     // Heartbeat: ping all connections every 30s
     this.heartbeatTimer = setInterval(() => this.heartbeat(), 30000);
@@ -100,10 +130,35 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
     }, 5000);
 
     let messageQueue = Promise.resolve();
+    let queuedMessages = 0;
+    let queuedBytes = 0;
     ws.on('message', (data) => {
+      const bytes = Array.isArray(data)
+        ? data.reduce((total, part) => total + part.length, 0)
+        : data.byteLength;
+      if (this.stopped || ws.readyState !== WebSocket.OPEN) return;
+      if (
+        queuedMessages >= this.admission.maxQueuedMessages ||
+        queuedBytes + bytes > this.admission.maxQueuedBytes
+      ) {
+        ws.close(
+          GatewayCloseCode.RESOURCE_LIMIT,
+          'Message admission exhausted',
+        );
+        return;
+      }
+      queuedMessages++;
+      queuedBytes += bytes;
       messageQueue = messageQueue.then(async () => {
         try {
+          if (this.stopped || ws.readyState !== WebSocket.OPEN) return;
           const message = JSON.parse(data.toString()) as BaseWsMessage;
+          if (
+            !message ||
+            typeof message !== 'object' ||
+            typeof message.type !== 'string'
+          )
+            return;
 
           if (!authenticated && message.type === 'auth') {
             const authPayload = (message as AuthMessage).payload;
@@ -148,10 +203,11 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
 
           // Handle other message types (logs, health, etc.)
           if (tenantId) await this.handleInboundMessage(tenantId, message);
-        } catch (err) {
-          this.logger.error(
-            `Error processing message: ${(err as Error).message}`,
-          );
+        } catch {
+          this.logger.warn('Gateway message processing failed');
+        } finally {
+          queuedMessages--;
+          queuedBytes -= bytes;
         }
       });
     });
@@ -257,6 +313,10 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
         }
         break;
       }
+      case 'traces':
+        if (this.traceIngestion)
+          await this.traceIngestion.ingest(tenantId, message.payload);
+        break;
       case 'logs':
         await this.ingestionService.ingestLogs(
           tenantId,

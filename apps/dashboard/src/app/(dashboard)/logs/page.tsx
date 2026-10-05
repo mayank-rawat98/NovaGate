@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import Link from 'next/link';
 import { ChevronDown, ChevronRight, Search } from 'lucide-react';
 import { getLogs } from '../../../lib/api-client';
 import { DataLoadNotice } from '../../../components/data-load-notice';
@@ -351,6 +352,14 @@ export default function LogsPage() {
                               </dt>
                               <dd className="mt-0.5 font-mono text-xs text-gray-700 break-all">
                                 {log.requestId}
+                                {log.traceId && (
+                                  <Link
+                                    href={`/traces?traceId=${encodeURIComponent(log.traceId)}`}
+                                    className="mt-2 block text-indigo-700 underline"
+                                  >
+                                    View trace
+                                  </Link>
+                                )}
                               </dd>
                             </div>
                             <div>

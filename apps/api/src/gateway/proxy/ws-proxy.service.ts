@@ -1,5 +1,8 @@
+import { OtelService } from '../telemetry/otel.service';
+import type { GatewayTraceHandle } from '../shared/request-context';
 import {
   Injectable,
+  Optional,
   Logger,
   type OnModuleInit,
   type OnModuleDestroy,
@@ -48,6 +51,9 @@ interface Connection {
   service: ServiceConfig;
   target?: string;
   releaseTarget?: () => void;
+  trace?: GatewayTraceHandle;
+  upstreamTrace?: GatewayTraceHandle;
+  traceOutcome?: number;
   principal?: string;
   policy: string;
   opened: boolean;
@@ -79,6 +85,7 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
     private readonly rateLimit: RateLimitService,
     private readonly registry: PluginRegistryService,
     private readonly runner: PluginRunnerService,
+    @Optional() private readonly tracing?: OtelService,
   ) {
     this.settings = {
       ...DEFAULT_WEBSOCKET,
@@ -184,6 +191,7 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
     }
   }
   private fail(connection: Connection, failure: WsFailure) {
+    connection.traceOutcome = failure.status;
     if (connection.done) return;
     if (!connection.opened)
       this.reject(connection.socket, failure, connection.requestId);
@@ -266,6 +274,15 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
     socket.on('error', () => socket.destroy());
     const requestId = randomUUID();
     let connection: Connection | undefined;
+    let traceOutcome = 499;
+    const rootTrace = this.tracing?.startServer(
+      req.headers,
+      requestId,
+      'websocket',
+    );
+    socket.once('close', () =>
+      rootTrace?.end(connection?.traceOutcome ?? traceOutcome),
+    );
     try {
       if (this.stopping)
         throw new WsFailure(
@@ -312,6 +329,8 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
       connection = {
         socket,
         requestId,
+        trace: rootTrace,
+        traceOutcome: 499,
         tenantId: this.configManager.getTenantId(),
         route,
         service,
@@ -324,6 +343,12 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
         earlyBytes: head.length,
       };
       const active = connection;
+      rootTrace?.set({
+        'http.request.method': 'GET',
+        'http.route': route.pathPattern,
+        'gateway.route.id': route.id,
+        'gateway.service.id': service.id,
+      });
       this.connections.add(active);
       socket.once('close', () => this.finish(active));
       socket.once('end', () => {
@@ -490,6 +515,16 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
         'sec-websocket-version': '13',
         'x-request-id': requestId,
       };
+      active.upstreamTrace = rootTrace?.child('upstream WebSocket tunnel', {
+        'gateway.service.id': service.id,
+        'http.route': route.pathPattern,
+      });
+      if (active.upstreamTrace) {
+        delete headers.traceparent;
+        delete headers.tracestate;
+        delete headers.baggage;
+        Object.assign(headers, active.upstreamTrace.headers());
+      }
       if (protocols) headers['sec-websocket-protocol'] = protocols;
       if (extensions) headers['sec-websocket-extensions'] = extensions;
       if (wsHeaderBytes(headers) > this.settings.maxHeaderBytes)
@@ -506,7 +541,10 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
         maxHeaderSize: this.settings.maxHeaderBytes,
       });
       active.request.once('close', () => {
-        if (!active.upstream) active.releaseTarget?.();
+        if (!active.upstream) {
+          active.releaseTarget?.();
+          active.upstreamTrace?.end(active.traceOutcome ?? 499);
+        }
       });
       active.request.on('error', () =>
         this.fail(
@@ -554,11 +592,16 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
               'WebSocket admission unavailable',
             );
       if (connection) this.fail(connection, failure);
-      else this.reject(socket, failure, requestId);
+      else {
+        traceOutcome = failure.status;
+        this.reject(socket, failure, requestId);
+      }
     } finally {
       if (connection) {
         connection.admitting = false;
         this.detachedAdmissions.delete(connection);
+        if (!connection.request && !connection.upstream)
+          connection.upstreamTrace?.end(connection.traceOutcome ?? 499);
       }
     }
   }
@@ -592,6 +635,7 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
     );
     upstream.once('close', () => {
       connection.releaseTarget?.();
+      connection.upstreamTrace?.end(connection.traceOutcome ?? 499);
       if (!upstream.readableEnded) this.finish(connection);
     });
     try {
@@ -640,6 +684,9 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
         );
       connection.socket.write(wsSerialize(101, output));
       connection.opened = true;
+      connection.traceOutcome = 200;
+      connection.trace?.set({ 'http.response.status_code': 101 });
+      connection.upstreamTrace?.set({ 'http.response.status_code': 101 });
       clearTimeout(connection.timer);
       this.metricsService.incrementWsConnections();
       const expired = () => this.finish(connection, true, 'IDLE_TIMEOUT');

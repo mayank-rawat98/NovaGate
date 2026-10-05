@@ -9,6 +9,7 @@ import {
   HealthSnapshot,
   ErrorEvent,
   BaseWsMessage,
+  TraceSpan,
 } from '@api-gateway/shared-types';
 import { ControlPlaneConnectorService } from '../connector/control-plane-connector.service';
 
@@ -70,6 +71,13 @@ export class GatewayTelemetryService implements OnModuleInit, OnModuleDestroy {
     } catch {
       this.logger.warn('Telemetry delivery failed');
     }
+  }
+
+  sendTraces(spans: TraceSpan[], maxBufferedBytes: number): boolean {
+    return this.connector.sendTransient(
+      { type: 'traces', payload: spans },
+      maxBufferedBytes,
+    );
   }
 
   sendMetrics(metrics: Record<string, unknown>) {

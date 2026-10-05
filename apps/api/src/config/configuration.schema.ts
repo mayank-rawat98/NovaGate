@@ -12,10 +12,52 @@ import {
   DEFAULT_HTTP2,
   DEFAULT_PROXY_HANDLERS,
   DEFAULT_LOAD_BALANCER,
+  DEFAULT_TRACING,
 } from './configuration';
 import { BlockList, isIP } from 'net';
 
 export const configSchema = Joi.object({
+  TRACING_ENABLED: Joi.boolean().default(DEFAULT_TRACING.enabled),
+  TRACING_SAMPLE_RATE: Joi.number()
+    .min(0)
+    .max(1)
+    .default(DEFAULT_TRACING.sampleRate),
+  TRACING_MAX_ACTIVE_SPANS: Joi.number()
+    .integer()
+    .min(1)
+    .max(16384)
+    .default(DEFAULT_TRACING.maxActiveSpans),
+  TRACING_MAX_QUEUED_SPANS: Joi.number()
+    .integer()
+    .min(1)
+    .max(8192)
+    .default(DEFAULT_TRACING.maxQueuedSpans),
+  TRACING_MAX_QUEUE_BYTES: Joi.number()
+    .integer()
+    .min(8192)
+    .max(16777216)
+    .default(DEFAULT_TRACING.maxQueueBytes),
+  TRACING_MAX_BATCH_SPANS: Joi.number()
+    .integer()
+    .min(1)
+    .max(128)
+    .default(DEFAULT_TRACING.maxBatchSpans),
+  TRACING_MAX_BATCH_BYTES: Joi.number()
+    .integer()
+    .min(8192)
+    .max(65536)
+    .default(DEFAULT_TRACING.maxBatchBytes),
+  TRACING_FLUSH_INTERVAL_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(30000)
+    .default(DEFAULT_TRACING.flushIntervalMs),
+  TRACING_MAX_BUFFERED_BYTES: Joi.number()
+    .integer()
+    .min(8192)
+    .max(1048576)
+    .default(DEFAULT_TRACING.maxBufferedBytes),
+
   PORT: Joi.number().default(3000),
   LOAD_BALANCER_MAX_SERVICES: Joi.number()
     .integer()

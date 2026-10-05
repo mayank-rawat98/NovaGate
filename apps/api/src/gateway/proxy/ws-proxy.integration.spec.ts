@@ -1,3 +1,7 @@
+import { OtelService } from '../telemetry/otel.service';
+import { MetricsService } from '../metrics/metrics.service';
+import type { GatewayTelemetryService } from '../telemetry/gateway-telemetry.service';
+import type { TraceSpan } from '@api-gateway/shared-types';
 import { IdentityProviderService } from '../plugins/identity-provider/identity-provider.service';
 import * as http from 'node:http';
 import * as net from 'node:net';
@@ -66,7 +70,22 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
     get: jest.fn().mockResolvedValue(null),
     set: jest.fn().mockResolvedValue('OK'),
   };
+  let tracing: OtelService;
+  const traceServices = new Set<OtelService>();
+  const exported: TraceSpan[] = [];
   function makeGateway(settings: Partial<WebSocketSettings> = {}) {
+    tracing = new OtelService(
+      new ConfigService({ tracing: { sampleRate: 1 } }),
+      manager,
+      {
+        sendTraces: (batch: TraceSpan[]) => {
+          exported.push(...batch);
+          return true;
+        },
+      } as unknown as GatewayTelemetryService,
+      new MetricsService(),
+    );
+    traceServices.add(tracing);
     const provider = new IdentityProviderService(
       new ConfigService({ identityProvider: { allowInsecureHttp: true } }),
     );
@@ -97,6 +116,7 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
         ...extraPlugins,
       ]),
       new PluginRunnerService(),
+      tracing,
     );
   }
   async function restart(settings: Partial<WebSocketSettings> = {}) {
@@ -143,6 +163,7 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
     });
   }
   beforeEach(async () => {
+    exported.length = 0;
     version = 0;
     healthy = true;
     mode = 'echo';
@@ -262,6 +283,8 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
     for (const client of clients) client.terminate();
     clients.clear();
     await gateway?.onModuleDestroy();
+    for (const service of traceServices) await service.onModuleDestroy();
+    traceServices.clear();
     for (const socket of sockets) socket.destroy();
     for (const client of wss.clients) client.terminate();
     await new Promise<void>((resolve) => wss.close(() => resolve()));
@@ -269,6 +292,32 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
       new Promise<void>((resolve) => upstream.close(() => resolve())),
       new Promise<void>((resolve) => listener.close(() => resolve())),
     ]);
+  });
+  it('keeps root and child trace scopes active through the tunnel and propagates a private-safe context', async () => {
+    const traceId = '0123456789abcdef0123456789abcdef';
+    const ws = connect({
+      headers: {
+        traceparent: `00-${traceId}-0123456789abcdef-01`,
+        baggage: 'authorization=private-trace-marker',
+      },
+    });
+    await once(ws, 'open');
+    expect(tracing.activeSpans).toBe(2);
+    const context = String(received[0].headers.traceparent);
+    expect(context).toMatch(new RegExp(`^00-${traceId}-[0-9a-f]{16}-01$`));
+    expect(received[0].headers.baggage).toBeUndefined();
+    ws.close(1000, 'done');
+    await once(ws, 'close');
+    await until(() => tracing.activeSpans === 0);
+    tracing.flush();
+    const spans = exported.filter((span) => span.traceId === traceId);
+    expect(spans).toHaveLength(2);
+    const root = spans.find((span) => span.kind === 'server');
+    const child = spans.find((span) => span.kind === 'client');
+    expect(child?.parentSpanId).toBe(root?.spanId);
+    expect(context).toBe(`00-${traceId}-${child?.spanId}-01`);
+    expect(spans.every((span) => span.status === 'ok')).toBe(true);
+    expect(JSON.stringify(spans)).not.toContain('private-trace-marker');
   });
   it('relays text, binary, fragments, subprotocol, negotiated compression, ping/pong and close; counts only accepted traffic', async () => {
     const ws = connect({ perMessageDeflate: true }, '/ws?room=one', ['chat']);

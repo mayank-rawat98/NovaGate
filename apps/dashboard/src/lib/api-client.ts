@@ -9,6 +9,8 @@ import type {
   LogExportFilter,
   LogExportJob,
   LogExportList,
+  TraceListResponse,
+  TraceDetailResponse,
 } from '@api-gateway/shared-types';
 import { getToken, clearToken } from './auth';
 
@@ -420,3 +422,23 @@ export type { MtlsPluginConfig } from '@api-gateway/shared-types';
 export type { HmacPluginConfig } from '@api-gateway/shared-types';
 
 export type { GraphqlPolicy } from '@api-gateway/shared-types';
+
+export type TraceParams = {
+  from?: string;
+  to?: string;
+  traceId?: string;
+  requestId?: string;
+  route?: string;
+  errorsOnly?: boolean;
+  cursor?: string;
+};
+export function getTraces(tenantId: string, params: TraceParams = {}) {
+  return request<TraceListResponse>(
+    `/tenants/${tenantId}/traces${toQuery(params)}`,
+  );
+}
+export function getTrace(tenantId: string, traceId: string) {
+  return request<TraceDetailResponse>(
+    `/tenants/${tenantId}/traces/${encodeURIComponent(traceId)}`,
+  );
+}

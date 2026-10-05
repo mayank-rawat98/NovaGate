@@ -4,6 +4,38 @@ import { Counter, Gauge, Histogram, Registry } from 'prom-client';
 @Injectable()
 export class MetricsService {
   private readonly registry = new Registry();
+  private readonly traceActive = new Gauge({
+    name: 'gateway_trace_active_spans',
+    help: 'Active recording spans',
+    registers: [this.registry],
+  });
+  private readonly traceQueued = new Gauge({
+    name: 'gateway_trace_queued_spans',
+    help: 'Pending trace spans',
+    registers: [this.registry],
+  });
+  private readonly traceDropped = new Counter({
+    name: 'gateway_trace_dropped_spans_total',
+    help: 'Trace spans dropped under finite admission and transport limits',
+    labelNames: ['reason'],
+    registers: [this.registry],
+  });
+  setTraceActiveSpans(count: number): void {
+    this.traceActive.set(count);
+  }
+  setTraceQueuedSpans(count: number): void {
+    this.traceQueued.set(count);
+  }
+  incrementTraceDropped(
+    reason:
+      | 'active-capacity'
+      | 'queue-capacity'
+      | 'tenant-change'
+      | 'transport-backpressure',
+  ): void {
+    this.traceDropped.labels(reason).inc();
+  }
+
   private readonly httpRequestsTotal = new Counter({
     name: 'http_requests_total',
     help: 'Total number of HTTP requests',

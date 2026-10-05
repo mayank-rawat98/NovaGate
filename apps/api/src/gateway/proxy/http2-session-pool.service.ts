@@ -117,7 +117,7 @@ export class Http2SessionPool implements OnModuleInit, OnModuleDestroy {
     body: Buffer | null,
     timeoutMs = 10000,
     signal?: AbortSignal,
-    lifecycle?: { onDispatch: () => void; onClose: () => void },
+    lifecycle?: { onDispatch: () => void; onClose: (status: number) => void },
   ): Promise<H2Response> {
     if (signal?.aborted) throw new Http2PoolError(499, 'HTTP2_CANCELLED');
     if (this.stopping || this.active >= this.settings.maxActiveRequests)
@@ -165,6 +165,7 @@ export class Http2SessionPool implements OnModuleInit, OnModuleDestroy {
       let stream: ClientHttp2Stream | undefined;
       let settled = false,
         released = false;
+      let outcome = 499;
       let chunks: Buffer[] = [],
         bytes = 0;
       let responseHeaders: IncomingHttpHeaders | undefined;
@@ -184,6 +185,7 @@ export class Http2SessionPool implements OnModuleInit, OnModuleDestroy {
       const fail = (error: unknown) => {
         if (settled) return;
         settled = true;
+        outcome = error instanceof Http2PoolError ? error.status : 502;
         chunks = [];
         cleanup();
         reject(
@@ -216,7 +218,7 @@ export class Http2SessionPool implements OnModuleInit, OnModuleDestroy {
           lifecycle?.onDispatch();
           stream.once('close', () => {
             release();
-            lifecycle?.onClose();
+            lifecycle?.onClose(outcome);
             if (!settled) fail(new Http2PoolError(502, 'DOWNSTREAM_ERROR'));
           });
           stream.on('error', () =>
@@ -255,6 +257,7 @@ export class Http2SessionPool implements OnModuleInit, OnModuleDestroy {
             )
               return fail(new Http2PoolError(502, 'DOWNSTREAM_ERROR'));
             settled = true;
+            outcome = statusCode;
             cleanup();
             resolve({
               statusCode,

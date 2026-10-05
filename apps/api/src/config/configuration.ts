@@ -1,3 +1,15 @@
+export const DEFAULT_TRACING = {
+  enabled: true,
+  sampleRate: 0.1,
+  maxActiveSpans: 1024,
+  maxQueuedSpans: 512,
+  maxQueueBytes: 1048576,
+  maxBatchSpans: 32,
+  maxBatchBytes: 65536,
+  flushIntervalMs: 1000,
+  maxBufferedBytes: 131072,
+};
+export type TracingSettings = typeof DEFAULT_TRACING;
 import {
   MAX_TENANT_CA_BUNDLE_BYTES,
   MAX_TENANT_CA_CERTIFICATES,
@@ -164,6 +176,7 @@ export interface GatewayConfig {
   bodyCapture: BodyCaptureSettings;
   http2: Http2Settings;
   loadBalancer: LoadBalancerSettings;
+  tracing: TracingSettings;
   tls: ListenerTlsSettings;
   rateLimit: {
     windowMs: number;
@@ -182,6 +195,38 @@ const parseProxyServices = (): ProxyServiceConfig[] => {
 };
 
 export default (): GatewayConfig => ({
+  tracing: {
+    enabled:
+      process.env.TRACING_ENABLED === undefined
+        ? DEFAULT_TRACING.enabled
+        : process.env.TRACING_ENABLED.toLowerCase() !== 'false',
+    sampleRate: Number(
+      process.env.TRACING_SAMPLE_RATE ?? DEFAULT_TRACING.sampleRate,
+    ),
+    maxActiveSpans: Number(
+      process.env.TRACING_MAX_ACTIVE_SPANS ?? DEFAULT_TRACING.maxActiveSpans,
+    ),
+    maxQueuedSpans: Number(
+      process.env.TRACING_MAX_QUEUED_SPANS ?? DEFAULT_TRACING.maxQueuedSpans,
+    ),
+    maxQueueBytes: Number(
+      process.env.TRACING_MAX_QUEUE_BYTES ?? DEFAULT_TRACING.maxQueueBytes,
+    ),
+    maxBatchSpans: Number(
+      process.env.TRACING_MAX_BATCH_SPANS ?? DEFAULT_TRACING.maxBatchSpans,
+    ),
+    maxBatchBytes: Number(
+      process.env.TRACING_MAX_BATCH_BYTES ?? DEFAULT_TRACING.maxBatchBytes,
+    ),
+    flushIntervalMs: Number(
+      process.env.TRACING_FLUSH_INTERVAL_MS ?? DEFAULT_TRACING.flushIntervalMs,
+    ),
+    maxBufferedBytes: Number(
+      process.env.TRACING_MAX_BUFFERED_BYTES ??
+        DEFAULT_TRACING.maxBufferedBytes,
+    ),
+  },
+
   loadBalancer: {
     maxServices: Number(
       process.env.LOAD_BALANCER_MAX_SERVICES ??

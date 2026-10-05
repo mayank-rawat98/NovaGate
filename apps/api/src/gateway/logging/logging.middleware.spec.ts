@@ -56,6 +56,9 @@ describe('HTTP response lifetime observation', () => {
     f.res.emit('close');
     expect(f.metrics.decrementActiveConnections).toHaveBeenCalledTimes(1);
     expect(f.telemetry.logRequest).toHaveBeenCalledTimes(1);
+    expect(
+      Number.isInteger(f.telemetry.logRequest.mock.calls[0][0].responseTimeMs),
+    ).toBe(true);
     expect(f.metrics.incrementHttpRequests).toHaveBeenCalledWith(
       'GET',
       '/users/:id',

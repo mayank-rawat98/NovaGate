@@ -10,6 +10,7 @@ export type WsMessageType =
   | 'health'
   | 'errors'
   | 'metrics'
+  | 'traces'
   | 'ack';
 
 export interface BaseWsMessage {
@@ -60,6 +61,42 @@ export interface ConfigRequestMessage extends BaseWsMessage {
 export interface LogsMessage extends BaseWsMessage {
   type: 'logs';
   payload: RequestLog[];
+}
+
+export const MAX_TRACE_BATCH_SPANS = 128;
+export const MAX_TRACE_BATCH_BYTES = 65536;
+export const MAX_TRACE_SPAN_BYTES = 8192;
+export const MAX_TRACE_ATTRIBUTES = 16;
+export const MAX_TRACE_ATTRIBUTE_BYTES = 256;
+export const TRACE_ATTRIBUTE_KEYS = [
+  'http.request.method',
+  'http.route',
+  'http.response.status_code',
+  'gateway.route.id',
+  'gateway.service.id',
+  'gateway.retry.count',
+  'gateway.protocol',
+  'gateway.request.id',
+  'gateway.incomplete',
+  'rpc.system.name',
+  'rpc.service',
+  'rpc.method',
+  'rpc.grpc.status_code',
+] as const;
+export interface TraceSpan {
+  traceId: string;
+  spanId: string;
+  parentSpanId?: string;
+  name: string;
+  kind: 'server' | 'client' | 'internal';
+  timestamp: string;
+  durationMs: number;
+  status: 'unset' | 'ok' | 'error';
+  attributes: Record<string, string | number | boolean>;
+}
+export interface TracesMessage extends BaseWsMessage {
+  type: 'traces';
+  payload: TraceSpan[];
 }
 
 export interface HealthMessage extends BaseWsMessage {
@@ -163,6 +200,8 @@ export interface ConsumerConfig {
 }
 
 export interface RequestLog {
+  traceId?: string;
+  spanId?: string;
   id: string;
   consumerId?: string;
   method: string;
@@ -195,4 +234,23 @@ export interface ErrorEvent {
   path?: string;
   statusCode?: number;
   timestamp: string;
+}
+
+export interface TraceSummary {
+  traceId: string;
+  timestamp: string;
+  durationMs: number;
+  spanCount: number;
+  status: TraceSpan['status'];
+  route: string;
+  requestId?: string;
+}
+export interface TraceListResponse {
+  traces: TraceSummary[];
+  nextCursor: string | null;
+}
+export interface TraceDetailResponse {
+  traceId: string;
+  spans: TraceSpan[];
+  truncated: boolean;
 }

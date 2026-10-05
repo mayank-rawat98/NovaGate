@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import * as crypto from 'crypto';
+import { traceSchemaSql } from '../database/trace-schema';
 import { tenantSchema } from './tenant-schema';
 
 @Injectable()
@@ -15,6 +16,8 @@ export class TenantProvisioningService {
 
     await this.dataSource.transaction(async (manager) => {
       await manager.query(`CREATE SCHEMA IF NOT EXISTS ${schemaName}`);
+
+      await manager.query(traceSchemaSql(schemaName));
 
       // Create tables for the tenant
       await manager.query(`
@@ -74,6 +77,8 @@ export class TenantProvisioningService {
           "statusCode" INTEGER,
           "responseTimeMs" INTEGER,
           "requestId" VARCHAR,
+          "traceId" VARCHAR(32),
+          "spanId" VARCHAR(16),
           "downstreamService" VARCHAR,
           "downstreamLatencyMs" INTEGER,
           "clientIp" VARCHAR,
@@ -91,6 +96,8 @@ export class TenantProvisioningService {
         CREATE TABLE IF NOT EXISTS ${schemaName}.error_events (
           id UUID PRIMARY KEY,
           "requestId" VARCHAR,
+          "traceId" VARCHAR(32),
+          "spanId" VARCHAR(16),
           "errorCode" VARCHAR,
           message TEXT,
           "serviceId" UUID,

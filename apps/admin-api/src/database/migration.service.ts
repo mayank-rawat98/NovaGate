@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { LOG_EXPORT_SCHEMA } from '../log-export/log-export-schema';
+import { traceSchemaSql } from './trace-schema';
 import { tenantSchema } from '../tenants/tenant-schema';
 
 @Injectable()
@@ -37,6 +38,10 @@ export class MigrationService implements OnModuleInit {
       );
       for (const tenant of tenants) {
         const schema = tenantSchema(tenant.id);
+        await manager.query(traceSchemaSql(schema));
+        await manager.query(
+          `ALTER TABLE IF EXISTS ${schema}.request_logs ADD COLUMN IF NOT EXISTS "traceId" VARCHAR(32), ADD COLUMN IF NOT EXISTS "spanId" VARCHAR(16)`,
+        );
         await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "loadBalancing" VARCHAR NOT NULL DEFAULT 'weighted-round-robin' CHECK ("loadBalancing" IN ('weighted-round-robin', 'least-connections'))`,
         );

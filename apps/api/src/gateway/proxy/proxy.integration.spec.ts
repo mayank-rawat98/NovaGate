@@ -1,3 +1,5 @@
+import { OtelService } from '../telemetry/otel.service';
+import type { TraceSpan } from '@api-gateway/shared-types';
 import { Global, INestApplication, Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
@@ -48,12 +50,14 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
   let jwks: http.Server;
   let pool: Http2SessionPool;
   let balancer: LoadBalancerService;
+  let tracing: OtelService;
   let url: string;
   let target: string;
   let h2target: string;
   let h1Trickle: boolean;
   let h2Mode: 'normal' | 'reset' | 'stall';
   let h2Bodies: Buffer[];
+  let h2Headers: http2.IncomingHttpHeaders[];
   let jwksUrl: string;
   let config: TenantConfig;
   let allUnhealthy = false;
@@ -66,7 +70,11 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
   const rateLimit = {
     check: jest.fn().mockResolvedValue({ allowed: true, retryAfterMs: null }),
   };
-  const telemetry = { sendError: jest.fn(), logRequest: jest.fn() };
+  const telemetry = {
+    sendError: jest.fn(),
+    logRequest: jest.fn(),
+    sendTraces: jest.fn().mockReturnValue(true),
+  };
   const metrics = {
     incrementActiveConnections: jest.fn(),
     decrementActiveConnections: jest.fn(),
@@ -76,6 +84,9 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
     incrementRateLimitHit: jest.fn(),
     incrementRateLimitRedisError: jest.fn(),
     incrementProxyRetry: jest.fn(),
+    setTraceActiveSpans: jest.fn(),
+    setTraceQueuedSpans: jest.fn(),
+    incrementTraceDropped: jest.fn(),
   };
   const keys = generateKeyPairSync('rsa', { modulusLength: 2048 });
 
@@ -140,7 +151,8 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
     });
     target = await listen(upstream);
     h2upstream = http2.createServer();
-    h2upstream.on('stream', (stream) => {
+    h2upstream.on('stream', (stream, headers) => {
+      h2Headers.push(headers);
       stream.on('error', () => undefined);
       const chunks: Buffer[] = [];
       stream.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -181,6 +193,7 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
           useValue: {
             get: (key: string) =>
               ({
+                tracing: { sampleRate: 1 },
                 jwt: { secret: 'test-secret-with-more-than-32-characters' },
                 rateLimit: { windowMs: 60000, authMax: 500, unauthMax: 100 },
               })[key as 'jwt' | 'rateLimit'],
@@ -201,6 +214,7 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
         { provide: APP_FILTER, useClass: GatewayExceptionFilter },
         { provide: APP_GUARD, useClass: RateLimitGuard },
         LoggingMiddleware,
+        OtelService,
         RateLimitService,
       ],
     })
@@ -218,6 +232,7 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
     url = await app.getUrl();
     pool = module.get(Http2SessionPool);
     balancer = module.get(LoadBalancerService);
+    tracing = module.get(OtelService);
   });
 
   beforeEach(() => {
@@ -225,12 +240,15 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
     h1Trickle = false;
     h2Mode = 'normal';
     h2Bodies = [];
+    h2Headers = [];
     received = [];
     mode = { status: 200, failOnce: false };
     rateLimit.check.mockClear();
     for (const method of Object.values(metrics)) method.mockClear();
     telemetry.sendError.mockClear();
     telemetry.logRequest.mockClear();
+    tracing.flush();
+    telemetry.sendTraces.mockClear();
     config = {
       routes: [
         {
@@ -866,6 +884,73 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
       (await fetch(`${url}/api?query=${encodeURIComponent('{ a }')}`)).status,
     ).toBe(500);
     expect(received).toHaveLength(0);
+  });
+  it.each([false, true])(
+    'records and propagates real upstream attempts with h2=%s',
+    async (h2) => {
+      config.services[0].h2 = h2;
+      if (h2) config.services[0].targets[0].url = h2target;
+      const traceId = '0123456789abcdef0123456789abcdef';
+      const response = await fetch(`${url}/api?private-trace-marker=secret`, {
+        headers: {
+          traceparent: `00-${traceId}-0123456789abcdef-01`,
+          baggage: 'authorization=private-trace-marker',
+        },
+      });
+      expect(response.status).toBe(200);
+      await response.arrayBuffer();
+      for (let i = 0; i < 100 && tracing.activeSpans; i++)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(tracing.activeSpans).toBe(0);
+      tracing.flush();
+      const spans: TraceSpan[] = telemetry.sendTraces.mock.calls
+        .flatMap(([batch]) => batch)
+        .filter((span: TraceSpan) => span.traceId === traceId);
+      expect(spans).toHaveLength(2);
+      const root = spans.find((span) => span.kind === 'server');
+      const child = spans.find((span) => span.kind === 'client');
+      expect(child?.parentSpanId).toBe(root?.spanId);
+      expect(spans.every((span) => span.status === 'ok')).toBe(true);
+      expect(telemetry.logRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ traceId, spanId: root?.spanId }),
+      );
+      const headers = h2 ? h2Headers[0] : received[0].headers;
+      expect(headers.traceparent).toBe(`00-${traceId}-${child?.spanId}-01`);
+      expect(headers.baggage).toBeUndefined();
+      expect(JSON.stringify(spans)).not.toContain('private-trace-marker');
+    },
+  );
+  it('records each retried attempt under one successful root with distinct propagated span IDs', async () => {
+    config.routes[0].retry = { attempts: 2, on: [502], methods: ['GET'] };
+    mode.failOnce = true;
+    const response = await fetch(`${url}/api`);
+    expect(response.status).toBe(200);
+    await response.arrayBuffer();
+    for (let i = 0; i < 100 && tracing.activeSpans; i++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(tracing.activeSpans).toBe(0);
+    tracing.flush();
+    const spans: TraceSpan[] = telemetry.sendTraces.mock.calls.flatMap(
+      ([batch]) => batch,
+    );
+    const root = spans.find((span) => span.kind === 'server');
+    const attempts = spans.filter((span) => span.kind === 'client');
+    expect(root?.status).toBe('ok');
+    expect(attempts).toHaveLength(2);
+    expect(
+      attempts.map((span) => span.attributes['gateway.retry.count']),
+    ).toEqual([0, 1]);
+    expect(attempts.map((span) => span.status)).toEqual(['error', 'ok']);
+    expect(new Set(attempts.map((span) => span.spanId)).size).toBe(2);
+    expect(
+      attempts.every(
+        (span) =>
+          span.parentSpanId === root?.spanId && span.traceId === root?.traceId,
+      ),
+    ).toBe(true);
+    expect(received.map((entry) => entry.headers.traceparent)).toEqual(
+      attempts.map((span) => `00-${span.traceId}-${span.spanId}-01`),
+    );
   });
   it('records authentication middleware and quota guard rejections exactly once without raw URLs', async () => {
     const privatePath = '/api?token=private-telemetry-marker';

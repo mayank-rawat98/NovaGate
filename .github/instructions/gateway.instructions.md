@@ -67,6 +67,8 @@ apps/api/src/
     connector/
       control-plane-connector.service.ts
     telemetry/
+      otel.service.ts             bounded manual OpenTelemetry tracing and export
+      otel.service.spec.ts        context, sampling, privacy and lifecycle checks
       gateway-telemetry.service.ts
       gateway-telemetry.service.spec.ts
     shared/
