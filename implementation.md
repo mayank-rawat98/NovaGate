@@ -22,7 +22,7 @@ Live-network checks now verify a trusted TLS listener and rejection of its certi
 
 The slow-client regression streams over 8 MB while a paused client holds the producer below 1 MB, then verifies complete delivery and successful trailers after resuming. Normal upstream closure no longer cancels response bytes waiting to drain. Shutdown checks cover successful calls during grace and unavailable responses after grace. The repeatable `api:grpc-container-smoke` Nx task verifies the non-root Node 24 production image through trusted listener/upstream TLS, the actual registered native health RPC, authenticated protobuf unary calls with pinned grpcurl, configuration ACKs, metadata/trailers and rejection of an untrusted upstream certificate. Its current verifier removes disposable containers, its private network and certificates afterward; issue #44 removes the data-plane database requirement.
 
-These are issue-level implementation and regression results. Full phase 3 acceptance, formal WebSocket runtime acceptance, least-connections has issue-level verification (#57); the final all-phase campaign remains required.
+These are issue-level implementation and regression results. Least-connections also has issue-level verification (#57). Full phase 3 acceptance, formal WebSocket runtime acceptance and the final all-phase campaign remain required.
 
 ## Data-plane administration boundary — issue #44
 
@@ -670,15 +670,22 @@ This is not a feature — it is the core product value for teams who would other
 
 ---
 
+### 4.0 Accurate request lifecycle foundation — issue #59
+
+Before tracing and analytics, HTTP observation must begin before authentication and guards and finish on actual response completion or cancellation. RxJS interceptor finalization can precede exception filters and streamed response closure. A real regression demonstrated a wire HTTP 500 recorded as 200. Middleware now records completed final statuses once, tracks streamed responses until close, records internal 499 for incomplete responses, and includes early JWT/quota rejections. Normalize method/route labels, validate request IDs, omit raw URLs/query/user-agent payloads and use monotonic duration. Quota guards retain only quota-specific counters. Best-effort telemetry failures must not alter responses; dispose the single flush timer and flush bounded remaining batches during shutdown.
+
+Fresh test/lint/typecheck/build gates pass across all five projects with 691 tests (523 gateway, 157 admin, 10 control plane, 1 dashboard), including real middleware/guard failures, plugin error status, stream cancellation, privacy, exactly-once accounting and flush cleanup. A rebuilt nonroot OrbStack image passes retained HTTP/gRPC/WebSocket TLS/auth/config/streaming checks and actual control-plane log-batch assertions for 401, 400 and cancelled 499 responses. Delivery follows an issue-linked PR against dev. This is a foundation for phase 4, not phase acceptance or durable audit delivery.
+
 ### 4.1 Distributed Tracing (OpenTelemetry)
 
 `apps/api/src/gateway/telemetry/otel.service.ts`:
 
 - Emit OpenTelemetry spans for every proxied request
-- Span attributes: `http.method`, `http.target`, `http.status_code`, `http.user_agent`, `net.peer.ip`, `gateway.tenant_id`, `gateway.route_id`, `gateway.service_id`, `gateway.retry_count`
-- Propagate `traceparent` header to downstream (W3C Trace Context)
-- Export to control plane via existing WS `telemetry` message; control plane stores in DB
+- Span attributes use current OpenTelemetry semantic conventions with normalized route patterns, final response status and tenant/route/service/retry identifiers. Do not export raw targets, query strings, authorization, bodies, user agents or client IPs by default.
+- Validate W3C `traceparent` and bounded `tracestate`; generate valid context for missing/malformed headers, propagate across each upstream attempt and correlate logs. Do not forward arbitrary baggage by default.
+- Export bounded batches through a typed control-plane message with authenticated tenant attribution, schema/byte/count/deadline validation, retention and per-tenant storage/query budgets. The gateway response must not wait for export; queues need explicit drop/backpressure metrics and shutdown cleanup.
 - Phase 5 will add OTLP export for third-party backends (Jaeger, Zipkin, Tempo)
+- Apply parent-aware sampling and finite pending spans/attribute budgets; cover HTTP, native gRPC and WebSocket handshake/tunnel lifecycles without retaining unbounded message spans. Verify context isolation, cancellation, retry/fallback child spans and tenant separation with real transports.
 
 `apps/dashboard` — new `Traces` page:
 

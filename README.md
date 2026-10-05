@@ -143,7 +143,7 @@ docker/
 Request path (order is load-bearing):
 
 ```text
-JwtMiddleware → [RateLimitGuard] → [LoggingInterceptor] → ProxyMiddleware
+LoggingMiddleware → JwtMiddleware → [RateLimitGuard] → ProxyMiddleware
                                                                ↓
                                                        PluginRunner.onRequest
                                                        → forward to downstream
@@ -152,7 +152,7 @@ JwtMiddleware → [RateLimitGuard] → [LoggingInterceptor] → ProxyMiddleware
 
 - `JwtMiddleware` — attaches `req.user` when it recognises a platform JWT or consumer API key; passes through otherwise. Only hard-blocks on `TOKEN_EXPIRED` (platform-signed token that has expired). Third-party OIDC tokens are passed through for the `oidc` plugin to validate.
 - `RateLimitGuard` — Redis sliding window; separate limits for authenticated vs unauthenticated clients
-- `LoggingInterceptor` — captures latency, status, `X-Request-ID`; batches logs for async upload
+- `LoggingMiddleware` — observes actual response finish/close before authentication; captures monotonic latency, final status and validated `X-Request-ID`; batches logs for async upload
 - `ProxyMiddleware` → `ProxyService.forward()` — resolves and runs route plugins, then forwards to downstream
 
 CORS, IP restriction, rate limiting, body size limits, auth, and all other per-route policies run as **plugins** — not middleware. This keeps the middleware pipeline thin and makes every policy configurable per route without gateway restarts.

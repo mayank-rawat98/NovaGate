@@ -48,8 +48,8 @@ apps/api/src/
         <plugin-name>.plugin.ts
         <plugin-name>.plugin.spec.ts
     logging/
-      logging.interceptor.ts
-      logging.interceptor.spec.ts
+      logging.middleware.ts
+      logging.middleware.spec.ts
     metrics/
       metrics.service.ts
       metrics.service.spec.ts
@@ -68,6 +68,7 @@ apps/api/src/
       control-plane-connector.service.ts
     telemetry/
       gateway-telemetry.service.ts
+      gateway-telemetry.service.spec.ts
     shared/
       gateway-error.ts
       gateway-exception.filter.ts
@@ -117,9 +118,9 @@ The data plane uses tenant configuration from the control plane and Redis. It mu
 
 The current Nest pipeline is:
 
-1. `JwtMiddleware` verifies gateway consumer JWTs and attaches `req.user`.
+1. `LoggingMiddleware` attaches exactly-once response finish/close accounting before authentication, with monotonic duration and normalized labels. `JwtMiddleware` verifies gateway consumer JWTs and attaches `req.user`.
 2. `RateLimitGuard` checks the consumer tier. Browser CORS preflights bypass quota consumption.
-3. `LoggingInterceptor` wraps the controller/proxy lifecycle.
+3. HTTP observation remains active through actual response finish/close, including guard rejection and streamed responses; guards do not duplicate request accounting.
 4. `ProxyService` matches the route. Bounded `prepareRequest` hooks capture signed raw bytes without authentication or transformations before body-aware policy hooks.
 5. Configured plugin request hooks execute in saved order.
 6. Pure `validateRequest` hooks recheck effective GraphQL queries/headers after ordered transformations. They must not authenticate or mutate requests.

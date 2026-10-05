@@ -1,77 +1,9 @@
-# API Gateway (NestJS)
+# NovaGate data plane
 
-## Architecture
+The NestJS gateway routes tenant traffic from control-plane configuration and a Redis warm-start cache. It does not connect to PostgreSQL or expose local administrative CRUD. Tenant administration belongs to the admin API and dashboard.
 
-```
-Client
-  |
-  v
-API Gateway (NestJS)
-  - JwtMiddleware
-  - RateLimitGuard (Redis sliding window)
-  - LoggingInterceptor
-  - ProxyMiddleware
-  - Metrics (/metrics)
-  - Health (/health)
-  |
-  +--> Redis (rate limit storage)
-  |
-  +--> Downstream services (users/products)
-```
+HTTP requests pass through `LoggingMiddleware`, `JwtMiddleware`, the quota guard, and route/plugin processing before upstream dispatch. Observation holds active accounting until response finish/close and records final statuses exactly once, including early failures and interrupted streams. Native gRPC and WebSocket listeners have their own bounded transport lifecycles.
 
-## Run locally
+Build from the workspace root with `npm exec -- nx build @api-gateway/api`. Run checks with `npm exec -- nx run-many -t test lint typecheck -p @api-gateway/api`. Configuration comes from the validated factory/schema and [gateway environment template](../../docker/gateway.env.example); legacy `PROXY_SERVICES` examples are not the tenant configuration contract.
 
-### Option 1: Docker Compose (gateway + Redis + mock downstream)
-
-```sh
-docker compose up --build
-```
-
-The mock downstream exposes:
-
-- `http://localhost:3001/users`
-- `http://localhost:3001/products`
-
-The gateway proxies:
-
-- `http://localhost:3000/users`
-- `http://localhost:3000/products`
-
-### Option 2: Run with Node + Nx
-
-```sh
-npm install
-cp .env.example .env
-```
-
-Set `PROXY_SERVICES` to point at the local downstream:
-
-```sh
-export PROXY_SERVICES='[{"name":"users","targetUrl":"http://localhost:3001","pathPrefix":"/users"},{"name":"products","targetUrl":"http://localhost:3001","pathPrefix":"/products"}]'
-```
-
-Then build and run:
-
-```sh
-npm exec nx build @api-gateway/api
-node apps/apps/api/dist/main.js
-```
-
-## Load test
-
-```sh
-autocannon -c 50 -d 10 http://localhost:3000/users
-```
-
-## Environment variables
-
-| Variable                | Description                                     | Default    |
-| ----------------------- | ----------------------------------------------- | ---------- |
-| `PORT`                  | Gateway port                                    | `3000`     |
-| `REDIS_URL`             | Redis connection URL                            | _required_ |
-| `JWT_SECRET`            | JWT verification secret (min 32 chars)          | _required_ |
-| `PROXY_TIMEOUT_MS`      | Downstream timeout in ms                        | `10000`    |
-| `PROXY_SERVICES`        | JSON array of `{ name, targetUrl, pathPrefix }` | `[]`       |
-| `RATE_LIMIT_WINDOW_MS`  | Sliding window size in ms                       | `60000`    |
-| `RATE_LIMIT_UNAUTH_MAX` | Max requests per window (unauth)                | `100`      |
-| `RATE_LIMIT_AUTH_MAX`   | Max requests per window (auth)                  | `500`      |
+See the [root README](../../README.md) for OrbStack setup, operator bounds, private RustFS verification and deployment instructions. Read [gateway instructions](../../.github/instructions/gateway.instructions.md), [API conventions](CLAUDE.md), [gateway rules](../../AI_RULES_GATEWAY.md), and [Redis key design](../../REDIS_KEY_DESIGN.md) before implementation. Final phase acceptance and comparative load testing follow [implementation.md](../../implementation.md).
