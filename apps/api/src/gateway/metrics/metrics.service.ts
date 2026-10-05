@@ -3,8 +3,10 @@ import { GatewayConfigManagerService } from '../config-manager/gateway-config-ma
 import {
   MAX_METRIC_RATE,
   MAX_METRIC_LATENCY_MS,
+  MAX_METRIC_WINDOW_MS,
   METRIC_LATENCY_BUCKETS,
-  type MetricsSnapshot,
+  metricPercentile,
+  type MetricReportSnapshot,
 } from '@api-gateway/shared-types';
 import { Counter, Gauge, Histogram, Registry } from 'prom-client';
 
@@ -14,6 +16,7 @@ export class MetricsService {
   private windowStarted = performance.now();
   private completed = 0;
   private errors = 0;
+  private timeouts = 0;
   private readonly latencyCounts = METRIC_LATENCY_BUCKETS.map(() => 0);
   constructor(
     @Optional() private readonly configManager?: GatewayConfigManagerService,
@@ -23,12 +26,14 @@ export class MetricsService {
     this.windowStarted = performance.now();
     this.completed = 0;
     this.errors = 0;
+    this.timeouts = 0;
     this.latencyCounts.fill(0);
   }
   recordCompletedHttp(
     status: number,
     durationMs: number,
     tenant: string | null,
+    downstreamTimedOut = false,
   ): void {
     const current = this.configManager?.getTenantId() ?? null;
     if (
@@ -41,34 +46,38 @@ export class MetricsService {
     if (this.windowTenant !== current) this.resetWindow(current);
     if (this.completed >= MAX_METRIC_RATE) return;
     this.completed++;
-    if (status >= 400) this.errors++;
+    if (status >= 400) {
+      this.errors++;
+      if (downstreamTimedOut) this.timeouts++;
+    }
     const bounded = Math.min(MAX_METRIC_LATENCY_MS, durationMs);
     const bucket = METRIC_LATENCY_BUCKETS.findIndex(
       (ceiling) => bounded <= ceiling,
     );
     this.latencyCounts[bucket]++;
   }
-  takeSnapshot(): MetricsSnapshot {
+  takeSnapshot(): MetricReportSnapshot {
     const tenant = this.configManager?.getTenantId() ?? null;
-    if (tenant !== this.windowTenant) this.resetWindow(tenant);
+    if (
+      tenant !== this.windowTenant ||
+      performance.now() - this.windowStarted > MAX_METRIC_WINDOW_MS
+    )
+      this.resetWindow(tenant);
     const elapsed = Math.max(1, performance.now() - this.windowStarted);
-    const percentile = (fraction: number): number => {
-      if (!this.completed) return 0;
-      const rank = Math.ceil(this.completed * fraction);
-      let cumulative = 0;
-      for (let i = 0; i < this.latencyCounts.length; i++) {
-        cumulative += this.latencyCounts[i];
-        if (cumulative >= rank) return METRIC_LATENCY_BUCKETS[i];
-      }
-      return MAX_METRIC_LATENCY_MS;
-    };
-    const snapshot: MetricsSnapshot = {
+    const snapshot: MetricReportSnapshot = {
       rps: Math.min(MAX_METRIC_RATE, (this.completed * 1000) / elapsed),
-      p50Ms: percentile(0.5),
-      p95Ms: percentile(0.95),
-      p99Ms: percentile(0.99),
+      p50Ms: metricPercentile(this.latencyCounts, this.completed, 0.5),
+      p95Ms: metricPercentile(this.latencyCounts, this.completed, 0.95),
+      p99Ms: metricPercentile(this.latencyCounts, this.completed, 0.99),
       errorRate: this.completed ? this.errors / this.completed : 0,
       timestamp: new Date().toISOString(),
+      window: {
+        windowMs: elapsed,
+        requestCount: this.completed,
+        errorCount: this.errors,
+        timeoutCount: this.timeouts,
+        latencyCounts: [...this.latencyCounts],
+      },
     };
     this.resetWindow(tenant);
     return snapshot;

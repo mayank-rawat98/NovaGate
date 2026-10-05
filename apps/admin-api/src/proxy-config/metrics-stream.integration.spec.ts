@@ -121,7 +121,7 @@ integration(
           { provide: ConfigPushService, useValue: {} },
         ],
       }).compile();
-      app = module.createNestApplication();
+      app = module.createNestApplication({ forceCloseConnections: true });
       await app.listen(0, '127.0.0.1');
       url = await app.getUrl();
     }, 30000);

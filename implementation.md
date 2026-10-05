@@ -2,6 +2,25 @@
 
 Each phase builds on the previous. Track implementation, regression verification, and production acceptance separately. A phase is complete only after its acceptance criteria have evidence. Run feature and regression checks after each issue; perform the formal end-to-end acceptance campaign after all phases are implemented. Production deployment is a separate release gate.
 
+## Current checkpoint — 5 October 2026
+
+See [PROGRESS.md](PROGRESS.md) for the consolidated record of completed work,
+verification evidence and the remaining work at the bottom of that report.
+
+- Previous merged development checkpoint: PR #64, commit `2325c7fd`, delivering live
+  metrics after distributed tracing in PR #62. Phases 0–3 have substantial merged
+  implementations and issue-level verification; formal phase acceptance is pending.
+- Phase 4 has merged request lifecycle fixes, tracing, live metrics and manual RustFS
+  archives. Alerting foundations are recorded in [checkpoint issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66); full delivery remains under
+  [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65).
+- The foundation checkpoint contains verified storage, CRUD, evaluation and retention.
+  Its module is absent from AppModule, so these alert APIs/workers
+  are not enabled in the normal application. Delivery transport and UI remain to build.
+- Phases 5–6 and the additional enterprise/operational requirements below remain open.
+  Exit checkboxes stay unchecked until the requested formal acceptance campaign.
+- CI runs only as the verification dependency of deployment on a push to `main`.
+  Verification failure blocks image builds and deployment. Current work targets `dev`.
+
 ## Dashboard usability implementation — issue #35
 
 The workspace now has responsive grouped navigation, an ivory/mint/indigo palette, CSS clay illustrations, clear gateway loading/unavailable states, actual enabled-route counts, fetch retry controls and accessible native configuration dialogs. The browser verifier covers mobile/desktop layouts, saved-session hydration, keyboard containment/Escape/focus restoration, expanded route plugin controls, one-time consumer keys and axe WCAG A/AA rules. CI runs the verifier against a standalone production build and retains screenshots/findings. This is incremental implementation evidence; visual checks with real users, full live API acceptance and the final all-phase campaign remain required.
@@ -42,7 +61,7 @@ Per the 5 October 2026 workflow instruction, CI is reusable only and runs before
 
 Authentication applies to the handshake. Opaque tunnels drain during shutdown grace, then remaining sockets are terminated without injecting frames into partially streamed messages. Least-connections has issue-level verification (#57). Formal protocol/phase acceptance, remaining phases and comparative benchmarks are still pending.
 
-## Code audit — 4 October 2026
+## Baseline code audit — 4 October 2026 (historical)
 
 The code contains substantial work for phases 0–3, but file presence does not prove production acceptance. No phase is marked complete by this audit.
 
@@ -78,7 +97,7 @@ The code contains substantial work for phases 0–3, but file presence does not 
 
 Kong already documents [AI Gateway](https://developer.konghq.com/ai-gateway/), [OpenTelemetry](https://developer.konghq.com/gateway/otel-metrics/) and [health checks/circuit breakers](https://developer.konghq.com/gateway/traffic-control/health-checks-circuit-breakers/). Differentiate through operational simplicity, included capabilities and measured performance; do not claim these capabilities are impossible in Kong.
 
-Issue #27 also disables destructive control-plane entity synchronization and adds explicit initial public DDL, durable pre-publication snapshots, database config versions, ACK-based cleanup, revoked-key rejection, cache identity recovery and PR CI with PostgreSQL/Redis integration checks. Production acceptance remains a separate gate.
+Issue #27 also disables destructive control-plane entity synchronization and adds explicit initial public DDL, durable pre-publication snapshots, database config versions, ACK-based cleanup, revoked-key rejection, cache identity recovery and PostgreSQL/Redis integration checks. The later deployment-only CI instruction supersedes its original PR trigger. Production acceptance remains a separate gate.
 
 Issue #29 adds real upstream HTTP/HTTP2 regression tests for CORS preflight, Basic/OIDC authentication, binary/chunked upload limits, transformed queries/headers, safe retries and GraphQL depth enforcement. External subjects are kept separate from consumer UUIDs. Trusted reverse proxies are opt-in and validated at startup.
 
@@ -697,46 +716,71 @@ Fresh test/lint/typecheck/build gates pass across all five projects with 691 tes
 
 ### 4.2 Real-Time Metrics Streaming
 
-Currently: dashboard polls `GET /tenants/:id/metrics` on interval.
-Replace with: Server-Sent Events from admin-api; metrics pushed to dashboard as they arrive.
+**Implemented and merged in issue #63 / PR #64.** The overview uses authenticated
+fetch-based SSE with bounded history, parsing, reconnect/backoff, workspace cleanup,
+manual retry and live/reconnecting/stale feedback. Other resource lists retain their
+30-second refresh. Session tokens never appear in stream URLs.
 
-`apps/admin-api/src/analytics/metrics-stream.controller.ts`:
+- `apps/api/src/gateway/metrics/metrics-reporter.service.ts` reports bounded completed
+  HTTP intervals; metrics include final errors and fixed-bucket latency estimates.
+- `apps/control-plane/src/ingestion/log-ingestion.service.ts` validates reports,
+  persists canonical tenant snapshots with admission/deadline/retention limits,
+  then publishes committed snapshots to `metrics:<tenant UUID>`.
+- `apps/admin-api/src/proxy-config/analytics.controller.ts` and
+  `metrics-stream.service.ts` serve authenticated history and
+  `GET /tenants/:tenantId/metrics/stream` with bounded connections/read/write budgets.
+- `apps/dashboard/src/lib/use-live-metrics.ts` manages the overview stream lifecycle.
+- Issue #65 adds optional validated request/error/timeout counts and histogram
+  metadata for alerts. Legacy rows remain readable with NULL metadata and the
+  public live summary stays unchanged. Admin migrations must precede the updated
+  control-plane deployment.
 
-- `GET /tenants/:id/metrics/stream` — SSE endpoint
-- Subscribes to Redis pub/sub channel `metrics:{tenantId}`
-- Control plane publishes metrics to this channel when it receives the WS `metrics` message
-- Dashboard authenticated fetch stream connects with the existing bearer header; bounded SSE parsing and reconnect recovery update charts without polling. Never put session tokens in URLs.
-
-`apps/dashboard` — dashboard overview uses an authenticated fetch-based SSE stream for live samples and a bounded initial historical query. Preserve 30-second polling for unrelated resource lists. Show live/reconnecting/stale status and cancel streaming on workspace change or unmount. Native EventSource cannot set the bearer header used by this application.
+Keep packaged latency/reconnect/privacy/shutdown regressions and prove the two-second
+phase criterion again during formal acceptance.
 
 ---
 
 ### 4.3 Alerting
 
-`libs/shared-types` — new `AlertRule` type:
+**In progress under issue #65; not merged or enabled in AppModule.** Canonical public
+contracts live in `libs/shared-types/src/lib/alerts.ts`. They support all four metrics,
+all four comparisons (`>`, `<`, `>=`, `<=`), request minimums, selected channel IDs,
+revisions, evaluation state and redacted delivery history. Secret credentials appear
+only in explicit write requests and encrypted channel storage, never rule reads.
 
-```typescript
-interface AlertRule {
-  id: string;
-  name: string;
-  metric: 'error_rate' | 'p95_latency_ms' | 'rps' | 'downstream_timeout_rate';
-  operator: '>' | '<' | '>=';
-  threshold: number;
-  windowMinutes: number;
-  channels: AlertChannel[];
-  enabled: boolean;
-}
+Implemented and locally verified on the branch:
 
-type AlertChannel = { type: 'webhook'; url: string; secret?: string } | { type: 'email'; address: string } | { type: 'slack'; webhookUrl: string };
-```
+- Strict bounded rule/channel input and authenticated tenant-scoped HTTP CRUD.
+- Per-tenant tables, public due queues, atomic scheduling, revision conflict checks,
+  cancellation on edits/deletion, and history-preserving nullable references.
+- Dedicated rotatable AES-256-GCM keys bound to tenant/channel identity; metadata
+  edits preserve credentials and reads show only webhook origins/email recipients.
+- Validated interval aggregation: merge histograms for p95; weight rates by counts
+  and duration. Legacy, stale, incomplete or ambiguous evidence produces `no_data`.
+- `AlertEvaluatorService`: one non-overlapping one-second timer after bootstrap;
+  claim at most 16 rules with 30-second leases, evaluate at most four concurrently,
+  and schedule successful evaluations after 15 seconds. Token fencing rejects old
+  claims. Events, delivery jobs and cooldown state commit together.
+- Five-minute firing cooldown; verified recovery emits resolution, while missing
+  reports preserve the last notified state. Empty channel selection means history only.
+- Evaluation-time and bounded idle cleanup: 30 days/1,000 events per tenant; remove
+  matching due jobs and cascade delivery history. Clear timers and drain actual work.
 
-`apps/admin-api/src/alerts/`:
+Still required before completing issue #65:
 
-- `AlertEvaluatorService` runs every 60s per tenant; queries recent metrics snapshots; fires matching rules
-- `AlertDeliveryService` sends webhook POST (signed), email via SMTP, or Slack block kit
-- Deduplication: rule cannot fire more than once per `windowMinutes`
-
-`apps/dashboard` — Alerts page: CRUD for rules, channel config, recent alert history.
+- Actual signed webhook, Slack and email transport. Email currently uses the existing
+  Mailtr API integration; the earlier SMTP wording was not an implemented transport.
+- Validate all DNS answers, pin the actual connection, block private/metadata egress
+  by default, reject redirects and enforce finite request/response/deadline budgets.
+  URL validation alone does not prove safe network delivery.
+- Leased delivery claims, bounded retries/backoff, idempotency/fencing and cancellation
+  of actual network work; sanitized failure history and safe shutdown.
+- Accessible Alerts dashboard: rule/channel CRUD, deliberate credential replacement,
+  disabled-delivery explanations, coverage/no-data/cooldown status and recent history.
+- Enable AlertsModule only after the feature works; verify real local delivery, replica
+  races, restored leases, packaged services and production desktop/mobile browser UX.
+- Run retained regressions, document evidence, commit/push, open a dev PR with
+  `Closes #65`, merge and close the issue. Do not deploy to main as part of this work.
 
 ---
 
@@ -1097,20 +1141,27 @@ For teams using Apollo Federation or Rover — the gateway stitches multiple sub
 
 ## The Test at the End of Phase 6
 
-Take a team currently running Kong. Ask them to migrate. The answer should be yes to every question:
+These are target migration outcomes, not claims that unfinished features already
+exist. Run this campaign after all phases and additional requirements are implemented.
 
-- Can we run on Kubernetes and define routes as CRDs? **Yes.** (Phase 6)
-- Can we use our existing Auth0 identity provider? **Yes.** (Phase 2)
-- Can we proxy our gRPC services? **Yes.** (Phase 3)
-- Can we keep our Terraform config as source of truth? **Yes.** (Phase 5)
-- Can we see traces without setting up Jaeger? **Yes.** (Phase 4)
-- Can we expose our API to our own customers with self-service keys? **Yes.** (Phase 5)
-- Can we get alerted when error rates spike automatically without configuring thresholds? **Yes.** (Phase 6)
-- Can we trust the gateway to keep routing if your SaaS goes down? **Yes.** (already built)
-- Do we have to manage a database for our gateway? **No.** (already built)
-- Do we pay per request? **No.** (already built)
+- [ ] Kubernetes CRDs reconcile routes into the dashboard and gateway.
+- [ ] A real Auth0 deployment issues tokens that the gateway validates correctly,
+      including provider isolation, rotation and failure behavior.
+- [ ] Packaged gRPC, WebSocket, HTTP/2 and GraphQL behavior meets protocol criteria.
+- [ ] Terraform is a supported source of truth with safe import/update/delete/drift behavior.
+- [ ] Built-in tracing works without requiring Jaeger; optional OTLP export interoperates.
+- [ ] Portal customers create scoped keys, call APIs and see their own usage.
+- [ ] Automatic anomaly detection creates and actually delivers an alert.
+- [ ] Last-known-good routing survives SaaS/control-plane outages and regional failover
+      without tenant/configuration loss.
+- [ ] Customer gateways operate without PostgreSQL; retain issue #44 packaged evidence
+      and verify supported installation/upgrade paths.
+- [ ] Quota/billing behavior and the pricing claims match the implemented product.
+- [ ] Publish performance comparisons only after reproducible Kong/NovaGate benchmarks,
+      current vendor verification and documented operational/restore drills.
 
-Validate every comparison against current vendor documentation and measured deployment results before publishing it.
+Validate every comparison against current vendor documentation and measured deployment
+results before publishing it. Production release remains a separate gate.
 
 ## Least-connections verification — issue #57
 
@@ -1147,3 +1198,33 @@ Fresh checks pass 830 tests: 553 gateway, 201 admin, 66 control plane and 10 das
 The rebuilt non-root Node 24 gateway retains HTTP/gRPC/WebSocket/TLS/auth/config regressions, 108 trace spans and 10 finite private metric reports. The reusable OrbStack metrics-container-smoke verifier runs all three production images with disposable PostgreSQL/Redis, checks 20 actual HTTP completions through gateway → control plane → committed storage → Redis → authenticated admin SSE within two seconds, confirms matching stored history and fresh reconnect, and removes its resources, including anonymous fixture volumes. All three services finish lifecycle shutdown within Docker’s ten-second grace without SIGKILL; the admin adapter closes remaining transport sockets after stream cleanup, and control-plane shutdown hooks are enabled. Verified image IDs are gateway sha256:70144afdc9b86d8f2eaa122ddfd0d4178b698adca831fe06d11ae067d85619be, admin sha256:27f3c02916a0240cefc95a42c523abc20c33f07c1fb96689493054366d579624, and control plane sha256:ff58e27a0d06aa56df9924961fc4ac3c635ff9d7d5c41682595638e7463e2cd6.
 
 These are issue-level results. Alerting, scheduled/external exports, consumer analytics, phases 5–6, additional hardening, comparative benchmarks and formal all-phase acceptance remain pending. Deployment CI remains limited to pushes to main; this issue does not deploy production.
+
+## Alerting implementation and verification checkpoint — issue #65
+
+The authoritative feature status and build requirements are in Phase 4.3 above and
+[PROGRESS.md](PROGRESS.md). This replaces incremental notes that incorrectly continued
+calling already-implemented rule storage, encryption, evaluator and retention pending.
+
+Historical foundation evidence:
+
+| Scope                                        | Latest available result                        | Evidence                                            |
+| -------------------------------------------- | ---------------------------------------------- | --------------------------------------------------- |
+| Gateway interval/timeout foundations         | 559 tests passed                               | `.local-work/issue65-aggregation-tests-recheck.log` |
+| Control-plane validated interval storage     | 91 tests passed                                | `.local-work/issue65-storage-final-tests.log`       |
+| Admin alert foundations/evaluation/retention | 367 tests passed                               | `.local-work/issue65-evaluator-timer-recheck.log`   |
+| Admin final evaluator gates                  | Lint, typecheck and build passed               | `.local-work/issue65-evaluator-timer-gates.log`     |
+| Earlier backend/shared interval gates        | Four projects passed lint, typecheck and build | `.local-work/issue65-schema-gates.log`              |
+
+Checkpoint #66 additionally passes a combined Nx run of 1,027 tests (559 gateway,
+367 admin, 91 control-plane and 10 dashboard), plus lint/typecheck for all five
+projects and builds for all four applications. Matching Nx cache results were reused for one test task and some static/build
+tasks. Evidence: `.local-work/checkpoint-tests.log`, `checkpoint-static.log` and
+`checkpoint-build.log`. These ignored local logs do not establish final alert acceptance. Real PostgreSQL/Redis/RustFS checks, authenticated HTTP,
+AES-GCM tampering/rotation, cross-tenant isolation, concurrent rule/channel capacity,
+revision conflicts, transaction rollback, lease fencing/expiry, cooldown/resolution,
+no-data and idle history cleanup are covered by the current tests.
+
+No external Slack/email delivery was exercised. Secure transport, actual delivery
+retries/fencing, Alerts UI, module enablement, fresh production images, runtime/browser
+regressions and the full feature's dev PR/merge remain outstanding under #65. Existing
+issue #63 image and browser results prove the metrics checkpoint, not alert delivery.

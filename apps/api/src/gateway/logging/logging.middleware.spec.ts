@@ -62,6 +62,22 @@ describe('HTTP response lifetime observation', () => {
       503,
       expect.any(Number),
       'original',
+      false,
+    );
+  });
+  it('attributes the final downstream timeout once at response completion', () => {
+    const f = fixture(() => 'tenant');
+    f.res.locals.errorCode = 'DOWNSTREAM_TIMEOUT';
+    f.res.statusCode = 504;
+    Object.assign(f.res, { writableFinished: true });
+    f.res.emit('finish');
+    f.res.emit('close');
+    expect(f.metrics.recordCompletedHttp).toHaveBeenCalledTimes(1);
+    expect(f.metrics.recordCompletedHttp).toHaveBeenCalledWith(
+      504,
+      expect.any(Number),
+      'tenant',
+      true,
     );
   });
   it('holds active accounting until response finish and records the final filter status once', () => {

@@ -5,6 +5,10 @@ import { MetricsService } from './metrics.service';
 import { MetricsReporterService } from './metrics-reporter.service';
 import { configSchema } from '../../config/configuration.schema';
 import configuration from '../../config/configuration';
+import {
+  METRIC_LATENCY_BUCKETS,
+  validateMetricPayload,
+} from '@api-gateway/shared-types';
 
 describe('Bounded aggregate HTTP metrics reporting', () => {
   let tenant: string | null;
@@ -41,6 +45,52 @@ describe('Bounded aggregate HTTP metrics reporting', () => {
       p50Ms: 0,
       errorRate: 0,
     });
+  });
+  it('reports coherent histograms and counts only final failed downstream timeouts', () => {
+    metrics.recordCompletedHttp(504, 1200, tenant, true);
+    metrics.recordCompletedHttp(502, 20, tenant);
+    metrics.recordCompletedHttp(200, 3, tenant, true);
+    reporter.report();
+    const payload = send.mock.calls[0][0].payload;
+    expect(validateMetricPayload(payload)).toEqual(payload);
+    expect(payload.window).toMatchObject({
+      requestCount: 3,
+      errorCount: 2,
+      timeoutCount: 1,
+    });
+    expect(payload.window.latencyCounts).toHaveLength(
+      METRIC_LATENCY_BUCKETS.length,
+    );
+    expect(
+      payload.window.latencyCounts.reduce(
+        (sum: number, count: number) => sum + count,
+        0,
+      ),
+    ).toBe(3);
+    expect(metrics.takeSnapshot().window).toMatchObject({
+      requestCount: 0,
+      errorCount: 0,
+      timeoutCount: 0,
+    });
+    expect(payload.window.requestCount).toBe(3);
+  });
+  it('discards reporting intervals after a prolonged process stall', () => {
+    jest.useFakeTimers();
+    try {
+      // Initialize the interval using the same monotonic clock as the timer.
+      metrics = new MetricsService({
+        getTenantId: () => tenant,
+      } as GatewayConfigManagerService);
+      metrics.recordCompletedHttp(504, 5, tenant, true);
+      jest.advanceTimersByTime(60001);
+      expect(metrics.takeSnapshot().window).toMatchObject({
+        requestCount: 0,
+        errorCount: 0,
+        timeoutCount: 0,
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
   it('rejects stale completions, invalid durations and prior-tenant aggregate state', () => {
     metrics.recordCompletedHttp(500, 2, tenant);

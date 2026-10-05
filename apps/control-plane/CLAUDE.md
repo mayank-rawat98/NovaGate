@@ -80,3 +80,11 @@ Trace retention also runs for idle tenants: a single non-overlapping lifecycle t
 Issue #63 extends metrics ingestion: validate the five numeric wire fields before SQL; tenant attribution comes from the authenticated socket. Admit a finite number of active transactions and serialize each tenant's retention/row trimming with statement and lock deadlines. Publish only the canonical stored snapshot, after commit, to `metrics:<tenant UUID>`. Preserve fractional RPS with admin-owned migrations and finite Redis publication behavior.
 
 Metric idle retention uses a single non-overlapping lifecycle timer over at most 64 validated metric tables per tick, sharing ingestion admission and the same per-tenant lock/deadlines. Continue past a failed tenant, clear the timer and await in-flight cleanup on shutdown.
+
+Issue #65 adds optional validated interval metadata to the metric wire payload.
+Require count/histogram/scalar coherence before SQL. Persist the normalized
+aggregateWindow JSONB alongside the summary; old five-field frames store NULL.
+Admin migrations must add this column before deploying the updated control plane.
+Return and publish only the existing canonical summary fields, never private or
+unvalidated metadata. Actual PostgreSQL/WebSocket checks cover authenticated
+attribution, histogram preservation, legacy nulls and unchanged live payloads.

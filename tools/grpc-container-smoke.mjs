@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { validateMetricPayload } from '../libs/shared-types/src/lib/ws-messages.ts';
 import { execFile, execFileSync } from 'node:child_process';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import {
@@ -572,28 +573,8 @@ try {
       if (message.type === 'logs') requestLogs.push(...message.payload);
       if (message.type === 'metrics') {
         const value = message.payload;
-        assert.deepEqual(Object.keys(value).sort(), [
-          'errorRate',
-          'p50',
-          'p95',
-          'p99',
-          'rps',
-        ]);
-        assert.ok(
-          Object.values(value).every(
-            (number) =>
-              typeof number === 'number' &&
-              Number.isFinite(number) &&
-              number >= 0,
-          ),
-        );
-        assert.ok(value.errorRate <= 1);
-        assert.ok(
-          value.p50 <= value.p95 &&
-            value.p95 <= value.p99 &&
-            value.p99 <= 3600000,
-        );
-        assert.ok(value.rps <= 1000000000);
+        assert.deepEqual(validateMetricPayload(value), value);
+        assert.ok(value.window, 'Packaged gateway includes interval evidence');
         assert.ok(Buffer.byteLength(bytes) <= 1024);
         metricSnapshots.push(value);
         assert.ok(

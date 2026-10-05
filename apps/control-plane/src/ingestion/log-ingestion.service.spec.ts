@@ -1,7 +1,10 @@
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { LogIngestionService } from './log-ingestion.service';
-import { validateMetricPayload } from '@api-gateway/shared-types';
+import {
+  METRIC_LATENCY_BUCKETS,
+  validateMetricPayload,
+} from '@api-gateway/shared-types';
 const TENANT = 'aabbccdd-1111-2222-3333-444455556666';
 const PAYLOAD = { rps: 1.25, p50: 1, p95: 2, p99: 3, errorRate: 0.25 };
 describe('Telemetry ingestion safety', () => {
@@ -66,6 +69,128 @@ describe('Telemetry ingestion safety', () => {
       'Invalid metric',
     );
     expect(transaction).not.toHaveBeenCalled();
+  });
+  describe('reporting interval validation', () => {
+    const window = {
+      windowMs: 1000,
+      requestCount: 2,
+      errorCount: 1,
+      timeoutCount: 1,
+      latencyCounts: METRIC_LATENCY_BUCKETS.map((bucket) =>
+        bucket === 5 || bucket === 50 ? 1 : 0,
+      ),
+    };
+    const payload = {
+      rps: 2,
+      p50: 5,
+      p95: 50,
+      p99: 50,
+      errorRate: 0.5,
+      window,
+    };
+    it('retains coherent interval counts while copying the histogram', () => {
+      const validated = validateMetricPayload(payload);
+      expect(validated).toEqual(payload);
+      expect(validated.window).not.toBe(window);
+      expect(validated.window?.latencyCounts).not.toBe(window.latencyCounts);
+    });
+    it.each(
+      [
+        null,
+        undefined,
+        [],
+        { ...window, tenantId: TENANT },
+        { ...window, windowMs: 0 },
+        { ...window, windowMs: 60001 },
+        { ...window, windowMs: Infinity },
+        { ...window, requestCount: 2.5 },
+        { ...window, requestCount: 1000000001 },
+        { ...window, errorCount: 3 },
+        { ...window, timeoutCount: 2 },
+        { ...window, timeoutCount: -1 },
+        { ...window, latencyCounts: [2] },
+        {
+          ...window,
+          requestCount: 0,
+          errorCount: 0,
+          timeoutCount: 0,
+          latencyCounts: Array(18),
+        },
+        { ...window, latencyCounts: METRIC_LATENCY_BUCKETS.map(() => 0) },
+        { ...window, latencyCounts: METRIC_LATENCY_BUCKETS.map(() => NaN) },
+      ].map((value) => [value]),
+    )('rejects malformed interval metadata: %j', (value) => {
+      expect(() =>
+        validateMetricPayload({ ...payload, window: value }),
+      ).toThrow('Invalid metric');
+    });
+    it.each([
+      { rps: 3 },
+      { errorRate: 0.25 },
+      { p50: 2 },
+      { p95: 25 },
+      { p99: 100 },
+    ])(
+      'rejects summaries inconsistent with interval evidence: %j',
+      (summary) => {
+        expect(() => validateMetricPayload({ ...payload, ...summary })).toThrow(
+          'Invalid metric window summary',
+        );
+      },
+    );
+    it('accepts coherent idle windows and fractional elapsed time', () => {
+      expect(
+        validateMetricPayload({
+          rps: 0,
+          p50: 0,
+          p95: 0,
+          p99: 0,
+          errorRate: 0,
+          window: {
+            ...window,
+            requestCount: 0,
+            errorCount: 0,
+            timeoutCount: 0,
+            latencyCounts: METRIC_LATENCY_BUCKETS.map(() => 0),
+          },
+        }).window?.requestCount,
+      ).toBe(0);
+      expect(
+        validateMetricPayload({
+          ...payload,
+          rps: 2000 / 1000.25,
+          window: { ...window, windowMs: 1000.25 },
+        }).window?.windowMs,
+      ).toBe(1000.25);
+    });
+    it('stores interval evidence without exposing it on the canonical live snapshot', async () => {
+      const timestamp = new Date();
+      const query = jest.fn(async (sql: string, _params?: unknown[]) =>
+        sql.startsWith('INSERT')
+          ? [
+              {
+                rps: 2,
+                p50Ms: 5,
+                p95Ms: 50,
+                p99Ms: 50,
+                errorRate: 0.5,
+                timestamp,
+              },
+            ]
+          : [],
+      );
+      const service = new LogIngestionService({
+        transaction: async (
+          fn: (manager: { query: typeof query }) => Promise<unknown>,
+        ) => fn({ query }),
+      } as unknown as DataSource);
+      const result = await service.ingestMetrics(TENANT, payload);
+      const insert = query.mock.calls.find(([sql]) => sql.startsWith('INSERT'));
+      expect(insert?.[0]).toContain('"aggregateWindow"');
+      expect(JSON.parse(String(insert?.[1]?.[5]))).toEqual(window);
+      expect(result).not.toHaveProperty('window');
+      expect(result).not.toHaveProperty('aggregateWindow');
+    });
   });
   it('rejects invalid tenant identifiers before SQL', async () => {
     const transaction = jest.fn();

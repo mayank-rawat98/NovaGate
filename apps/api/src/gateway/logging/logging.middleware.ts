@@ -89,6 +89,7 @@ export class LoggingMiddleware implements NestMiddleware {
           statusCode,
           responseTimeMs,
           requestTenant,
+          response.locals.errorCode === 'DOWNSTREAM_TIMEOUT',
         ),
       );
       this.observe(() => {
