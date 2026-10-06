@@ -1,3 +1,4 @@
+import { canonicalConsumerId } from '@api-gateway/shared-types';
 import { Injectable, Logger, NestMiddleware, Optional } from '@nestjs/common';
 import type { NextFunction } from 'express';
 import { randomUUID } from 'node:crypto';
@@ -99,6 +100,7 @@ export class LoggingMiddleware implements NestMiddleware {
         });
         response.locals.trace?.end(statusCode);
       });
+      const consumerId = canonicalConsumerId(request.user?.consumerId);
       const entry: RequestLog = {
         id: randomUUID(),
         timestamp: new Date().toISOString(),
@@ -116,7 +118,7 @@ export class LoggingMiddleware implements NestMiddleware {
         clientIp: request.ips?.[0] ?? request.ip ?? 'unknown',
         downstreamService: response.locals.downstreamService,
         downstreamLatencyMs: response.locals.downstreamLatencyMs,
-        ...(request.user?.id ? { consumerId: request.user.id } : {}),
+        ...(consumerId ? { consumerId } : {}),
       };
       this.observe(() => this.telemetry.logRequest(entry));
       this.observe(() => this.logger.log(JSON.stringify(entry)));

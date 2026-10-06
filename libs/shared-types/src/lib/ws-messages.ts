@@ -365,10 +365,19 @@ export interface ConsumerConfig {
   groups?: string[];
 }
 
+/** Registered consumer attribution is UUID-only; unrelated principals have no consumer ID. */
+export function canonicalConsumerId(value: unknown): string | undefined {
+  return typeof value === 'string' &&
+    /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(value)
+    ? value.toLowerCase()
+    : undefined;
+}
+
 export interface RequestLog {
   traceId?: string;
   spanId?: string;
   id: string;
+  /** Registered consumer UUID, independent of JWT/provider authentication identity. */
   consumerId?: string;
   method: string;
   path: string;

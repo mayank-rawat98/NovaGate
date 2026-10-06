@@ -1,3 +1,5 @@
+import { randomUUID, createHash } from 'node:crypto';
+import type { TenantConfig } from '@api-gateway/shared-types';
 import { Test } from '@nestjs/testing';
 import jwt from 'jsonwebtoken';
 import { ConfigService } from '@nestjs/config';
@@ -33,6 +35,7 @@ const createResponse = () => {
 
 describe('JwtMiddleware', () => {
   let middleware: JwtMiddleware;
+  let manager: GatewayConfigManagerService;
 
   beforeEach(async () => {
     const module = await Test.createTestingModule({
@@ -50,6 +53,7 @@ describe('JwtMiddleware', () => {
     }).compile();
 
     middleware = module.get(JwtMiddleware);
+    manager = module.get(GatewayConfigManagerService);
   });
 
   it('allows missing tokens', () => {
@@ -83,6 +87,66 @@ describe('JwtMiddleware', () => {
     expect(next).toHaveBeenCalled();
   });
 
+  it('captures a canonical registered consumer for a mapped JWT without changing its subject', () => {
+    const id = randomUUID();
+    const config = {
+      consumers: [
+        {
+          id,
+          name: 'consumer',
+          keyHash: 'unused',
+          rateLimitTier: 'authenticated',
+        },
+      ],
+    } as unknown as TenantConfig;
+    const read = jest.spyOn(manager, 'getConfig').mockReturnValue(config);
+    const token = jwt.sign({ sub: id.toUpperCase() }, secret, {
+      expiresIn: '1h',
+    });
+    const req = {
+      headers: { authorization: `Bearer ${token}` },
+    } as RequestWithUser;
+    const next = jest.fn();
+    middleware.use(req, createResponse(), next);
+    expect(next).toHaveBeenCalled();
+    expect(req.user).toEqual({ id: id.toUpperCase(), consumerId: id });
+    read.mockReturnValue({ ...config, consumers: [] });
+    expect(req.user?.consumerId).toBe(id);
+  });
+  it('keeps unknown UUID subjects authenticated without consumer attribution', () => {
+    const id = randomUUID();
+    const req = {
+      headers: { authorization: `Bearer ${jwt.sign({ sub: id }, secret)}` },
+    } as RequestWithUser;
+    const next = jest.fn();
+    middleware.use(req, createResponse(), next);
+    expect(next).toHaveBeenCalled();
+    expect(req.user).toEqual({ id });
+  });
+  it('captures registered consumer-key attribution independently of subsequent configuration replacement', () => {
+    const id = randomUUID();
+    const key = 'consumer-attribution-fixture-only';
+    const config = {
+      consumers: [
+        {
+          id,
+          name: 'consumer',
+          keyHash: createHash('sha256').update(key).digest('hex'),
+          rateLimitTier: 'authenticated',
+        },
+      ],
+    } as unknown as TenantConfig;
+    const read = jest.spyOn(manager, 'getConfig').mockReturnValue(config);
+    const req = {
+      headers: { authorization: `Bearer ${key}` },
+    } as RequestWithUser;
+    const next = jest.fn();
+    middleware.use(req, createResponse(), next);
+    expect(next).toHaveBeenCalled();
+    expect(req.user).toEqual({ id, consumerId: id });
+    read.mockReturnValue({ ...config, consumers: [] });
+    expect(req.user?.consumerId).toBe(id);
+  });
   it('returns TOKEN_EXPIRED for expired token', () => {
     const token = jwt.sign({ sub: 'user-123' }, secret, { expiresIn: '-1s' });
     const req = {

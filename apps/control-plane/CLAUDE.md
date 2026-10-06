@@ -98,3 +98,9 @@ bounded, with local statement/lock deadlines, finite pool acquisition and shutdo
 drain. Real checks retain legacy optional-column conversion, reject blocked writes
 within the lock deadline, and prove successful retry and receipt preservation on
 replayed IDs.
+
+Issue #76 canonicalizes consumer UUID attribution before JSON record conversion.
+Malformed legacy principal IDs become unassigned logs; keep their request records,
+receipt lock/default behavior and duplicate IDs intact. Arbitrary gateway/provider
+principals are not consumer IDs. Verify mixed batches on actual modern and legacy
+schemas and through authenticated production fixture sockets.

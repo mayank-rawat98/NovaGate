@@ -375,6 +375,50 @@ try {
     until,
     trafficStartedAt: receivedAt,
   });
+  const principalRequestIds = [randomUUID(), randomUUID()];
+  const principalSubjects = [
+    usageConsumer.toUpperCase(),
+    'unrelated-principal-fixture',
+  ];
+  for (let i = 0; i < principalSubjects.length; i++) {
+    const response = await fetch(`${gatewayUrl}/traffic/success`, {
+      headers: {
+        authorization: `Bearer ${jwt.sign({ sub: principalSubjects[i] }, secret, { expiresIn: '5m' })}`,
+        'x-request-id': principalRequestIds[i],
+      },
+    });
+    assert.equal(
+      response.status,
+      200,
+      'Signed principal requests must retain their existing authentication behavior',
+    );
+  }
+  await until(
+    async () =>
+      (
+        await db.query(
+          `SELECT id FROM ${schema}.request_logs WHERE "requestId"=ANY($1::text[])`,
+          [principalRequestIds],
+        )
+      ).rowCount === 2,
+    'Actual signed principal request persistence',
+  );
+  const principalRows = (
+    await db.query(
+      `SELECT "requestId","consumerId" FROM ${schema}.request_logs WHERE "requestId"=ANY($1::text[])`,
+      [principalRequestIds],
+    )
+  ).rows;
+  assert.equal(
+    principalRows.find((row) => row.requestId === principalRequestIds[0])
+      .consumerId,
+    usageConsumer,
+  );
+  assert.equal(
+    principalRows.find((row) => row.requestId === principalRequestIds[1])
+      .consumerId,
+    null,
+  );
   await archiveFixture.lateLog(`ws://127.0.0.1:${port(plane, 8080)}`, apiKey);
   const archives = await archiveFixture.verify({
     db,
@@ -382,7 +426,7 @@ try {
     until,
     storageUrl,
     bucket: 'runtime-archives',
-    trafficRequests: 20 + alerts.healthyRequests,
+    trafficRequests: 22 + alerts.healthyRequests,
   });
   const usagePath = `${adminUrl}/tenants/${tenant}/consumers/${usageConsumer}/stats?period=1h`;
   assert.equal((await fetch(usagePath)).status, 401);
@@ -409,24 +453,24 @@ try {
   assert.equal(usageResponse.headers.get('cache-control'), 'no-store');
   const usage = await usageResponse.json();
   assert.equal(usage.source, 'persisted_request_logs');
-  assert.equal(usage.requests, 20);
+  assert.equal(usage.requests, 21);
   assert.equal(usage.serverErrors, 10);
-  assert.equal(usage.errorRate, 0.5);
-  assert.equal(usage.rps, 20 / 3600);
+  assert.equal(usage.errorRate, 10 / 21);
+  assert.equal(usage.rps, 21 / 3600);
   assert.equal(usage.series.length, 60);
   assert.equal(
     usage.series.reduce((sum, b) => sum + b.requests, 0),
-    20,
+    21,
   );
   const actualUsage = await db.query(
     `SELECT COUNT(*)::integer AS requests,percentile_cont(0.95) WITHIN GROUP (ORDER BY "responseTimeMs") AS p95 FROM ${schema}.request_logs WHERE "consumerId"=$1 AND timestamp>=$2::timestamptz AND timestamp<$3::timestamptz`,
     [usageConsumer, usage.from, usage.to],
   );
-  assert.equal(actualUsage.rows[0].requests, 20);
+  assert.equal(actualUsage.rows[0].requests, 21);
   assert.equal(usage.p95Ms, actualUsage.rows[0].p95);
   assert.equal(usage.topPaths.length, 1);
   assert.equal(usage.topPaths[0].path, '/traffic');
-  assert.equal(usage.topPaths[0].requests, 20);
+  assert.equal(usage.topPaths[0].requests, 21);
   assert.ok(!JSON.stringify(usage).includes(usageConsumerKey));
   assert.ok(!JSON.stringify(usage).includes('keyHash'));
   const consumerMetricsResponse = await fetch(
@@ -489,6 +533,12 @@ try {
         alerts,
         archives,
         consumerUsage,
+        consumerAttribution: {
+          mappedJwt: true,
+          unrelatedPrincipalRetained: true,
+          legacyPrincipalIngested: true,
+          jwtRequests: 2,
+        },
         checks: [
           'production-gateway-control-plane-PostgreSQL-Redis-admin-SSE-within-two-seconds',
           'authenticated-workspace-isolation',
