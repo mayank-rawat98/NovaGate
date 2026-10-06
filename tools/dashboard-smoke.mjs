@@ -16,6 +16,13 @@ import { chromium, expect } from '@playwright/test';
 const require = createRequire(import.meta.url);
 const base = process.env.DASHBOARD_VERIFY_URL ?? 'http://127.0.0.1:3333';
 const artifacts = resolve('.local-work/dashboard-verification');
+const hydrationPasses = Number(process.env.DASHBOARD_HYDRATION_PASSES ?? '1');
+assert.ok(
+  Number.isInteger(hydrationPasses) &&
+    hydrationPasses >= 1 &&
+    hydrationPasses <= 20,
+  'DASHBOARD_HYDRATION_PASSES must be an integer from 1 to 20.',
+);
 mkdirSync(artifacts, { recursive: true });
 const systemChrome =
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -30,9 +37,15 @@ const context = await chromium.launchPersistentContext(profile, {
   downloadsPath: resolve(artifacts, 'downloads'),
   viewport: { width: 1440, height: 960 },
 });
+let traceStarted = false;
+let traceWritten = false;
+let passed = false;
+let coldLoads = 0;
+const startedAt = Date.now();
 let metricsConnections = 0;
 let metricsDisconnects = 0;
 let failLiveMetrics = false;
+const runtimeErrors = [];
 const metricsServer = createServer((request, response) => {
   response.setHeader('Access-Control-Allow-Origin', new URL(base).origin);
   response.setHeader(
@@ -44,10 +57,19 @@ const metricsServer = createServer((request, response) => {
     response.end();
     return;
   }
-  assert.equal(
-    request.headers.authorization,
-    'Bearer browser-verification-token',
-  );
+  try {
+    assert.equal(
+      request.headers.authorization,
+      'Bearer browser-verification-token',
+    );
+  } catch (error) {
+    runtimeErrors.push(
+      `Metric fixture: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+    );
+    response.writeHead(500, { 'content-type': 'application/json' });
+    response.end('{"message":"Browser fixture contract failed"}');
+    return;
+  }
   metricsConnections++;
   if (failLiveMetrics) {
     response.writeHead(503, { 'content-type': 'application/json' });
@@ -165,7 +187,6 @@ let serviceRequests = 0;
 let servicePolicy = 'weighted-round-robin';
 let servicePolicySaves = 0;
 const violations = [];
-const runtimeErrors = [];
 const apiRequests = [];
 const page = await context.newPage();
 page.on('pageerror', (error) =>
@@ -189,7 +210,7 @@ await context.addInitScript(
   },
   { tenant },
 );
-await context.route('**/api/**', async (route) => {
+const handleApiFixture = async (route) => {
   const url = new URL(route.request().url());
   if (url.origin === metricsOrigin) {
     await route.continue();
@@ -515,6 +536,22 @@ await context.route('**/api/**', async (route) => {
     contentType: 'application/json',
     body: JSON.stringify(body),
   });
+};
+await context.route('**/api/**', async (route) => {
+  try {
+    await handleApiFixture(route);
+  } catch (error) {
+    runtimeErrors.push(
+      `Fixture ${route.request().url()}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+    );
+    await route
+      .fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: '{"message":"Browser fixture contract failed"}',
+      })
+      .catch(() => undefined);
+  }
 });
 async function audit(label) {
   await page.addScriptTag({ path: require.resolve('axe-core') });
@@ -535,6 +572,12 @@ async function audit(label) {
     });
 }
 try {
+  await context.tracing.start({
+    screenshots: true,
+    snapshots: true,
+    sources: true,
+  });
+  traceStarted = true;
   await expect(async () => {
     const response = await page.request.get(base);
     expect(response.ok()).toBeTruthy();
@@ -542,21 +585,24 @@ try {
   // Cold loads exercise the server/session boundary independently of client navigation.
   const browserSession = await context.newCDPSession(page);
   await browserSession.send('Emulation.setCPUThrottlingRate', { rate: 6 });
-  for (const path of [
-    '/dashboard',
-    '/services',
-    '/routes',
-    '/consumers',
-    '/logs',
-    '/traces',
-    '/settings',
-  ]) {
-    await page.goto(`${base}${path}`);
-    await expect(
-      page
-        .getByRole('complementary')
-        .getByText('Bluebird Studio', { exact: true }),
-    ).toBeVisible();
+  for (let pass = 0; pass < hydrationPasses; pass++) {
+    for (const path of [
+      '/dashboard',
+      '/services',
+      '/routes',
+      '/consumers',
+      '/logs',
+      '/traces',
+      '/settings',
+    ]) {
+      await page.goto(`${base}${path}`);
+      await expect(
+        page
+          .getByRole('complementary')
+          .getByText('Bluebird Studio', { exact: true }),
+      ).toBeVisible();
+      coldLoads++;
+    }
   }
   await browserSession.send('Emulation.setCPUThrottlingRate', { rate: 1 });
   await browserSession.detach();
@@ -1161,6 +1207,7 @@ try {
     tenant,
     audit,
     artifacts,
+    onFixtureError: (error) => runtimeErrors.push(error),
   });
   writeFileSync(
     resolve(artifacts, 'accessibility.json'),
@@ -1172,6 +1219,7 @@ try {
     [],
     'Dashboard WCAG A/AA checks failed; see accessibility.json',
   );
+  passed = true;
   console.log(
     'Dashboard browser checks passed: desktop/mobile layouts, API retry, navigation and form focus/Escape/restoration, reduced motion, and axe WCAG A/AA checks.',
   );
@@ -1186,8 +1234,35 @@ try {
   console.error(JSON.stringify({ runtimeErrors, apiRequests }));
   throw error;
 } finally {
-  await context.close();
-  metricsServer.closeAllConnections();
-  await new Promise((resolve) => metricsServer.close(resolve));
-  rmSync(profile, { recursive: true, force: true });
+  try {
+    if (traceStarted) {
+      await context.tracing.stop({
+        path: resolve(artifacts, 'browser-trace.zip'),
+      });
+      traceWritten = true;
+    }
+  } finally {
+    await context.close();
+    metricsServer.closeAllConnections();
+    await new Promise((resolve) => metricsServer.close(resolve));
+    rmSync(profile, { recursive: true, force: true });
+    writeFileSync(
+      resolve(artifacts, 'run.json'),
+      JSON.stringify(
+        {
+          ok: passed && traceWritten,
+          origin: new URL(base).origin,
+          hydrationPasses,
+          coldLoads,
+          cpuThrottlingRate: 6,
+          elapsedMs: Date.now() - startedAt,
+          traceWritten,
+          runtimeErrors,
+          accessibilityViolations: violations,
+        },
+        null,
+        2,
+      ),
+    );
+  }
 }
