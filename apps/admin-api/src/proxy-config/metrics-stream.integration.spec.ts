@@ -1,3 +1,4 @@
+import { ConsumerAnalyticsService } from './consumer-analytics.service';
 import { randomUUID } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -104,6 +105,7 @@ integration(
       const module = await Test.createTestingModule({
         controllers: [AnalyticsController],
         providers: [
+          ConsumerAnalyticsService,
           MetricsStreamService,
           { provide: APP_GUARD, useClass: TenantAuthGuard },
           { provide: DataSource, useValue: ds },

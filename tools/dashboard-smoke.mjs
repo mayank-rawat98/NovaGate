@@ -190,6 +190,10 @@ const archives = ['queued', 'processing', 'completed', 'failed', 'expired'].map(
   }),
 );
 const newArchiveId = '45678901-1234-1234-1234-123456789abc';
+let failConsumerUsage = false;
+let emptyConsumerUsage = false;
+const consumerUsageRequests = [];
+const otherTenant = '87654321-1234-1234-1234-123456789abc';
 let failServices = false;
 let serviceRequests = 0;
 let servicePolicy = 'weighted-round-robin';
@@ -238,6 +242,87 @@ const handleApiFixture = async (route) => {
     );
     assert.equal(url.search, '', 'Metric sessions must never appear in URLs');
     await route.continue({ url: `${metricsOrigin}${url.pathname}` });
+    return;
+  }
+
+  if (resource === 'stats' && url.pathname.includes('/consumers/')) {
+    assert.equal(route.request().method(), 'GET');
+    assert.equal(
+      route.request().headers().authorization,
+      'Bearer browser-verification-token',
+    );
+    assert.match(url.pathname.split('/').at(-2), /^[a-f0-9-]{36}$/);
+    const period = url.searchParams.get('period');
+    assert(['1h', '24h', '7d'].includes(period));
+    consumerUsageRequests.push({
+      tenant:
+        url.pathname.split('/')[url.pathname.split('/').indexOf('tenants') + 1],
+      period,
+    });
+    if (failConsumerUsage) {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ message: 'Usage temporarily unavailable' }),
+      });
+      return;
+    }
+    const seconds = period === '1h' ? 3600 : period === '7d' ? 604800 : 86400;
+    const bucketSeconds = period === '1h' ? 60 : period === '7d' ? 3600 : 900;
+    const to = new Date().toISOString();
+    const from = new Date(Date.parse(to) - seconds * 1000).toISOString();
+    const counts = (requests, errors = 0) => ({
+      requests,
+      serverErrors: errors,
+      errorRate: requests ? errors / requests : 0,
+      rps: requests / seconds,
+      latencySamples: requests,
+      p50Ms: requests ? 50 : null,
+      p95Ms: requests ? 120 : null,
+      p99Ms: requests ? 150 : null,
+    });
+    const series = Array.from({ length: seconds / bucketSeconds }, (_, i) => ({
+      ...counts(
+        emptyConsumerUsage
+          ? 0
+          : i === 0
+            ? 12
+            : i === seconds / bucketSeconds - 1
+              ? 8
+              : 0,
+        emptyConsumerUsage ? 0 : i === 0 ? 4 : 0,
+      ),
+      timestamp: new Date(
+        Date.parse(from) + i * bucketSeconds * 1000,
+      ).toISOString(),
+      rps: emptyConsumerUsage
+        ? 0
+        : (i === 0 ? 12 : i === seconds / bucketSeconds - 1 ? 8 : 0) /
+          bucketSeconds,
+    }));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...counts(emptyConsumerUsage ? 0 : 20, emptyConsumerUsage ? 0 : 4),
+        consumer: {
+          id: url.pathname.split('/').at(-2),
+          name: 'Storefront app',
+          revokedAt: null,
+        },
+        period,
+        from,
+        to,
+        generatedAt: to,
+        source: 'persisted_request_logs',
+        bucketSeconds,
+        rowLimit: 100000,
+        series,
+        topPaths: emptyConsumerUsage
+          ? []
+          : [{ ...counts(20, 4), method: 'GET', path: '/orders' }],
+      }),
+    });
     return;
   }
 
@@ -1096,6 +1181,133 @@ try {
     }
     await page.keyboard.press('Escape');
   }
+  await page.goto(`${base}/consumers`);
+  const usageButton = page.getByRole('button', {
+    name: 'View usage for Storefront app',
+    exact: true,
+  });
+  await expect(usageButton).toBeVisible();
+  failConsumerUsage = true;
+  await usageButton.click();
+  const usageDialog = page.getByRole('dialog', {
+    name: 'Consumer usage',
+    exact: true,
+  });
+  await expect(usageDialog).toBeVisible();
+  await expect(usageDialog.getByRole('alert')).toContainText(
+    'could not be refreshed',
+  );
+  await expect(
+    usageDialog.getByLabel('Usage period', { exact: true }),
+  ).toHaveValue('24h');
+  failConsumerUsage = false;
+  await usageDialog
+    .getByRole('button', { name: 'Refresh usage', exact: true })
+    .click();
+  await expect(
+    usageDialog.getByRole('heading', { name: 'Storefront app', exact: true }),
+  ).toBeVisible();
+  await expect(usageDialog.getByText('20%', { exact: true })).toBeVisible();
+  await expect(
+    usageDialog.getByRole('region', { name: 'Consumer top paths table' }),
+  ).toContainText('GET /orders');
+  await usageDialog
+    .getByLabel('Usage period', { exact: true })
+    .selectOption('1h');
+  await expect
+    .poll(() =>
+      consumerUsageRequests.some((request) => request.period === '1h'),
+    )
+    .toBe(true);
+  await expect(usageDialog.getByText(/over 1 minute/)).toBeVisible();
+  const interval = usageDialog.getByLabel('Inspect an interval', {
+    exact: true,
+  });
+  await interval.focus();
+  await page.keyboard.press('End');
+  await expect(interval).toHaveValue('59');
+  await expect(
+    usageDialog.getByText(/8 requests · 0 server errors/),
+  ).toBeVisible();
+  failConsumerUsage = true;
+  await usageDialog
+    .getByRole('button', { name: 'Refresh usage', exact: true })
+    .click();
+  await expect(usageDialog.getByRole('alert')).toContainText(
+    'previous successful refresh',
+  );
+  await expect(usageDialog.getByText('20%', { exact: true })).toBeVisible();
+  await audit('consumer usage stale recovery mobile');
+  failConsumerUsage = false;
+  emptyConsumerUsage = true;
+  await usageDialog
+    .getByLabel('Usage period', { exact: true })
+    .selectOption('7d');
+  await expect(usageDialog.getByRole('status')).toContainText(
+    'No recorded requests',
+  );
+  await expect(
+    usageDialog.getByRole('region', { name: 'Consumer top paths table' }),
+  ).toContainText('No paths recorded');
+  await audit('consumer usage empty mobile');
+  emptyConsumerUsage = false;
+  await usageDialog
+    .getByRole('button', { name: 'Refresh usage', exact: true })
+    .click();
+  await expect(usageDialog.getByText('20%', { exact: true })).toBeVisible();
+  await expect(
+    usageDialog.getByText('0.000033', { exact: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: resolve(artifacts, 'consumer-usage-mobile.png'),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await audit('consumer usage desktop');
+  await page.screenshot({
+    path: resolve(artifacts, 'consumer-usage-desktop.png'),
+    fullPage: true,
+  });
+  const usageClose = usageDialog.getByRole('button', {
+    name: 'Close consumer usage',
+    exact: true,
+  });
+  await usageClose.focus();
+  await page.keyboard.press('Shift+Tab');
+  assert(
+    await page.evaluate(() => !!document.activeElement.closest('dialog:modal')),
+    'Usage dialog wraps keyboard focus',
+  );
+  await page.keyboard.press('Escape');
+  await expect(usageDialog).not.toBeVisible();
+  await expect(usageButton).toBeFocused();
+  await usageButton.click();
+  await expect(usageDialog).toBeVisible();
+  await page.evaluate((other) => {
+    localStorage.setItem('gw_tenant_id', other);
+    window.dispatchEvent(new Event('storage'));
+  }, otherTenant);
+  await expect(usageDialog).not.toBeVisible();
+  await page
+    .getByRole('button', { name: 'View usage for Storefront app', exact: true })
+    .click();
+  await expect(
+    page
+      .getByRole('dialog', { name: 'Consumer usage', exact: true })
+      .getByLabel('Usage period', { exact: true }),
+  ).toHaveValue('24h');
+  await expect
+    .poll(() =>
+      consumerUsageRequests.some((request) => request.tenant === otherTenant),
+    )
+    .toBe(true);
+  await page.keyboard.press('Escape');
+  await page.evaluate((current) => {
+    localStorage.setItem('gw_tenant_id', current);
+    window.dispatchEvent(new Event('storage'));
+  }, tenant);
+  await page.setViewportSize({ width: 390, height: 844 });
+
   for (const path of [
     '/routes',
     '/consumers',

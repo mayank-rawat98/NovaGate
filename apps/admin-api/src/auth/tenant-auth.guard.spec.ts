@@ -1,3 +1,4 @@
+import { ConsumerAnalyticsService } from '../proxy-config/consumer-analytics.service';
 import { INestApplication } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
@@ -24,6 +25,7 @@ describe('Tenant authorization through the HTTP pipeline', () => {
     const module = await Test.createTestingModule({
       controllers: [AnalyticsController, HealthController],
       providers: [
+        { provide: ConsumerAnalyticsService, useValue: {} },
         { provide: APP_GUARD, useClass: TenantAuthGuard },
         {
           provide: MetricsStreamService,

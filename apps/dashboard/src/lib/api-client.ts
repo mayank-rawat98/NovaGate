@@ -4,6 +4,8 @@ import type {
   RouteEntity,
   ServiceEntity,
   ConsumerEntity,
+  ConsumerAnalyticsPeriod,
+  ConsumerUsageStats,
   RequestLog,
   ErrorEvent,
   HealthSnapshot,
@@ -335,6 +337,18 @@ export function getConsumers(tenantId: string): Promise<ConsumerEntity[]> {
   return request(`/tenants/${tenantId}/consumers`);
 }
 
+export function getConsumerUsage(
+  tenantId: string,
+  consumerId: string,
+  period: ConsumerAnalyticsPeriod = '24h',
+  signal?: AbortSignal,
+): Promise<ConsumerUsageStats> {
+  return request(
+    `/tenants/${tenantId}/consumers/${consumerId}/stats${toQuery({ period })}`,
+    { signal },
+  );
+}
+
 export function createConsumer(
   tenantId: string,
   dto: CreateConsumerDto,
@@ -382,8 +396,12 @@ export function getMetrics(
   tenantId: string,
   period: Period = '24h',
   signal?: AbortSignal,
+  consumerId?: string,
 ): Promise<MetricsSnapshot[]> {
-  return request(`/tenants/${tenantId}/metrics?period=${period}`, { signal });
+  return request(
+    `/tenants/${tenantId}/metrics${toQuery({ period, consumerId })}`,
+    { signal },
+  );
 }
 
 export function getLogExports(tenantId: string): Promise<LogExportList> {

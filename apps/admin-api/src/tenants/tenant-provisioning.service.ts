@@ -96,6 +96,9 @@ export class TenantProvisioningService {
       await manager.query(
         `CREATE INDEX IF NOT EXISTS request_logs_receipt_cursor ON ${schemaName}.request_logs ("receivedAt", id)`,
       );
+      await manager.query(
+        `CREATE INDEX IF NOT EXISTS request_logs_consumer_time ON ${schemaName}.request_logs ("consumerId", timestamp DESC, id DESC) WHERE "consumerId" IS NOT NULL`,
+      );
 
       await manager.query(`
         CREATE TABLE IF NOT EXISTS ${schemaName}.error_events (

@@ -1,3 +1,4 @@
+import { ConsumerAnalyticsService } from './consumer-analytics.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AnalyticsController } from './analytics.controller';
 import { DataSource } from 'typeorm';
@@ -22,6 +23,7 @@ async function build(ds: MockDs, cp = mockConfigPush()) {
   const module: TestingModule = await Test.createTestingModule({
     controllers: [AnalyticsController],
     providers: [
+      { provide: ConsumerAnalyticsService, useValue: {} },
       { provide: DataSource, useValue: ds },
       { provide: ConfigPushService, useValue: cp },
       {
