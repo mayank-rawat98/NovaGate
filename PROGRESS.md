@@ -214,9 +214,31 @@ ambiguous retries are at least once. They are part of later formal/provider acce
 Formal phase exit criteria, comparative Kong benchmarks and production acceptance
 remain unverified. Include sanitized reproducible evidence in each eventual PR.
 
+## Hydration diagnostics checkpoint — issue #70
+
+The browser verifier records Playwright traces with screenshots, DOM snapshots and
+source on both success and failure. A validated 1–20 pass setting controls cold loads
+of seven workspace pages under sixfold CPU throttling; normal verification remains
+one pass plus the existing complete forms/live-metric/privacy/accessibility suite.
+Run metadata records actual completed cold loads, errors and accessibility findings.
+The existing deployment-only CI artifact step also retains the trace archive.
+
+The production six-pass sweep passes 42 cold loads and full feature flows. Its trace
+contains 59 navigations and 1,354 DOM snapshots (25.2 MB). A development-mode complete
+run also passes. Default tracing and intentional fixture-failure cleanup are checked
+separately. Asynchronous fixture exceptions remain visible to the strict error gate
+instead of terminating Node before trace finalization. The deliberate missing-workspace
+and unexpected-API-path fixtures both exit nonzero while retaining traces/error metadata.
+A deliberate invalid-auth request to the owned SSE fixture also fails the strict
+gate after all functional flows pass, preserving trace/error metadata.
+Evidence is in `.local-work/issue69-production-traced-browser.log` and
+`.local-work/issue70-default-evidence/` / `issue70-expected-failure-evidence/`.
+No hydration root cause/fix is claimed; issue #69 remains open. The diagnostics
+checkpoint supports continued roadmap work and later formal release acceptance.
+
 ## Remaining work
 
-### Next: resolve dashboard hydration follow-up #69
+### Next: continue phase 4; retain hydration follow-up #69
 
 - Reproduce the intermittent server/session hydration recovery, identify the DOM/state
   mismatch and fix its source. Keep strict browser error gates and record a regression

@@ -10,6 +10,7 @@ export async function verifyAlertsDashboard({
   tenant,
   audit,
   artifacts,
+  onFixtureError,
 }) {
   const uuid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
   const now = () => new Date().toISOString();
@@ -224,8 +225,26 @@ export async function verifyAlertsDashboard({
       }),
     });
   };
-  await context.route(otherWorkspaceUrl, otherWorkspaceHandler);
-  await context.route('**/api/tenants/*/alerts**', handler);
+  const checkedHandler = (callback) => async (route) => {
+    try {
+      await callback(route);
+    } catch (error) {
+      onFixtureError(
+        `Alert fixture ${route.request().url()}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+      );
+      await route
+        .fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: '{"message":"Browser fixture contract failed"}',
+        })
+        .catch(() => undefined);
+    }
+  };
+  const checkedOtherWorkspaceHandler = checkedHandler(otherWorkspaceHandler);
+  const checkedAlertHandler = checkedHandler(handler);
+  await context.route(otherWorkspaceUrl, checkedOtherWorkspaceHandler);
+  await context.route('**/api/tenants/*/alerts**', checkedAlertHandler);
   try {
     await page.setViewportSize({ width: 1440, height: 960 });
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -698,7 +717,7 @@ export async function verifyAlertsDashboard({
       page.getByRole('button', { name: 'Add channel', exact: true }),
     ).toBeDisabled();
   } finally {
-    await context.unroute('**/api/tenants/*/alerts**', handler);
-    await context.unroute(otherWorkspaceUrl, otherWorkspaceHandler);
+    await context.unroute('**/api/tenants/*/alerts**', checkedAlertHandler);
+    await context.unroute(otherWorkspaceUrl, checkedOtherWorkspaceHandler);
   }
 }

@@ -359,6 +359,22 @@ npm exec nx run dashboard:ui-smoke
 
 The verifier uses fixture credentials and intercepts tenant API requests. It checks desktop and mobile layouts, saved-session hydration, retry recovery, navigation and form keyboard behavior, every expanded plugin form, the one-time consumer key dialog, reduced motion and axe WCAG A/AA rules. Screenshots and accessibility findings are written under `.local-work/dashboard-verification/`. It uses local Google Chrome when available; otherwise install Playwright Chromium with `PLAYWRIGHT_BROWSERS_PATH="$PWD/.local-work/playwright" npm exec playwright install -- chromium`, and use the same environment variable when running checks. `DASHBOARD_BROWSER_EXECUTABLE` can select another Chromium executable. CI runs these checks and uploads the screenshots and findings.
 
+Completed runs retain `browser-trace.zip` (screenshots, DOM snapshots and source) plus
+`run.json` with actual completed cold-load counts, runtime errors and accessibility
+findings. Flow assertions and asynchronous API-fixture contract failures also retain
+`failure.json` and a screenshot; tracing finalization
+always closes the browser/fixture server and removes its temporary profile. CI retains
+these artifacts within the existing push-to-main deployment prerequisite.
+
+To investigate hydration, use `DASHBOARD_HYDRATION_PASSES=6` for 42 cold loads of seven
+workspace pages under sixfold CPU throttling, followed by the full functional suite
+and three Alerts reloads. The setting accepts only integers from 1 to 20; normal
+verification defaults to one pass. Open the local trace with
+`npm exec -- playwright show-trace .local-work/dashboard-verification/browser-trace.zip`.
+These runs use disposable fixture credentials/API responses. Passing sweeps do not
+establish a fix for an intermittent failure; issue #69 remains open until its cause
+and correction or an evidence-supported disposition are established.
+
 Browser API calls default to the dashboard's same-origin `/api` rewrite. `NEXT_PUBLIC_ADMIN_API_URL` optionally selects another browser API origin at build time. Set it to `/` for a same-origin verification build when a local production env file already defines an override. `ADMIN_API_URL` selects the server-side rewrite destination. Both settings participate in the Nx build cache key. These fixture checks complement integration tests; they do not establish production or final phase acceptance.
 
 ### Private log archives with RustFS

@@ -1286,3 +1286,20 @@ verifier passes. Evidence: `.local-work/issue65-ui-all-tests.log`, `issue65-ui-a
 No real Slack webhook/provider mailbox was used. Formal provider/inbox/deduplication
 acceptance, remaining phase 4 exports/analytics, phases 5–6, enterprise requirements
 and comparative/formal all-phase acceptance remain outstanding.
+
+## Browser diagnosis tooling checkpoint — issue #70
+
+`dashboard:ui-smoke` retains a browser trace (screenshots, DOM snapshots, source)
+and run metadata for both successful and failed runs. `DASHBOARD_HYDRATION_PASSES`
+accepts 1–20 passes of seven cold workspace loads with sixfold CPU throttling;
+the default is one pass before the full functional/accessibility suite. The existing
+push-to-main deployment prerequisite retains the trace artifact without changing
+CI/deployment triggers. The six-pass production sweep succeeds with 42 cold loads,
+59 captured navigations and 1,354 DOM snapshots. Default success and deliberate
+fixture-failure evidence/cleanup are also verified. API fixture exceptions are caught
+and recorded without weakening the runtime-error gate; a deliberate asynchronous
+contract failure exits nonzero with trace and failure metadata intact.
+
+This checkpoints diagnostics, not a hydration source fix. Issue #69 remains open
+for root-cause investigation before formal release acceptance; phase 4 exports and
+analytics, phases 5–6 and all additional requirements still need implementation.

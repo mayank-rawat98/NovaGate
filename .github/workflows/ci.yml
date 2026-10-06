@@ -93,4 +93,5 @@ jobs:
           path: |
             .local-work/dashboard-verification/*.png
             .local-work/dashboard-verification/*.json
+            .local-work/dashboard-verification/browser-trace.zip
           if-no-files-found: ignore
