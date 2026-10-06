@@ -18,9 +18,11 @@ CREATE TABLE IF NOT EXISTS public.alert_delivery_schedule (
   "dueAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   "leaseToken" UUID,
   "leaseUntil" TIMESTAMPTZ,
+  "leaseStarted" BOOLEAN NOT NULL DEFAULT false,
   PRIMARY KEY ("tenantId", "deliveryId"),
   CHECK (("leaseToken" IS NULL) = ("leaseUntil" IS NULL))
 );
+ALTER TABLE public.alert_delivery_schedule ADD COLUMN IF NOT EXISTS "leaseStarted" BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS alert_delivery_schedule_due ON public.alert_delivery_schedule ("dueAt");
 `;
 

@@ -2,20 +2,21 @@
 
 Each phase builds on the previous. Track implementation, regression verification, and production acceptance separately. A phase is complete only after its acceptance criteria have evidence. Run feature and regression checks after each issue; perform the formal end-to-end acceptance campaign after all phases are implemented. Production deployment is a separate release gate.
 
-## Current checkpoint — 5 October 2026
+## Current checkpoint — 6 October 2026
 
 See [PROGRESS.md](PROGRESS.md) for the consolidated record of completed work,
 verification evidence and the remaining work at the bottom of that report.
 
-- Previous merged development checkpoint: PR #64, commit `2325c7fd`, delivering live
-  metrics after distributed tracing in PR #62. Phases 0–3 have substantial merged
+- Latest merged development checkpoint: PR #67, commit `653d7a00`, recording alert
+  storage/evaluation foundations after metrics (PR #64) and tracing (PR #62). Phases 0–3 have substantial merged
   implementations and issue-level verification; formal phase acceptance is pending.
 - Phase 4 has merged request lifecycle fixes, tracing, live metrics and manual RustFS
   archives. Alerting foundations are recorded in [checkpoint issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66); full delivery remains under
   [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65).
 - The foundation checkpoint contains verified storage, CRUD, evaluation and retention.
   Its module is absent from AppModule, so these alert APIs/workers
-  are not enabled in the normal application. Delivery transport and UI remain to build.
+  are not enabled in the normal application. Transport and durable delivery are now locally implemented on
+  `65-feat-alert-delivery-and-dashboard`; UI and packaged acceptance remain to build.
 - Phases 5–6 and the additional enterprise/operational requirements below remain open.
   Exit checkboxes stay unchecked until the requested formal acceptance campaign.
 - CI runs only as the verification dependency of deployment on a push to `main`.
@@ -742,13 +743,14 @@ phase criterion again during formal acceptance.
 
 ### 4.3 Alerting
 
-**In progress under issue #65; not merged or enabled in AppModule.** Canonical public
+**In progress under issue #65; foundations merged in PR #67, delivery changes local,
+not enabled in AppModule.** Canonical public
 contracts live in `libs/shared-types/src/lib/alerts.ts`. They support all four metrics,
 all four comparisons (`>`, `<`, `>=`, `<=`), request minimums, selected channel IDs,
 revisions, evaluation state and redacted delivery history. Secret credentials appear
 only in explicit write requests and encrypted channel storage, never rule reads.
 
-Implemented and locally verified on the branch:
+Storage/evaluation foundations implemented and merged:
 
 - Strict bounded rule/channel input and authenticated tenant-scoped HTTP CRUD.
 - Per-tenant tables, public due queues, atomic scheduling, revision conflict checks,
@@ -766,15 +768,31 @@ Implemented and locally verified on the branch:
 - Evaluation-time and bounded idle cleanup: 30 days/1,000 events per tenant; remove
   matching due jobs and cascade delivery history. Clear timers and drain actual work.
 
+New local transport/delivery implementation (6 October 2026):
+
+- `AlertTransportService` sends signed webhook JSON, plain-text Slack blocks and
+  Mailtr API email. Public HTTPS/443 by default; validate all A/AAAA answers, reject
+  private/metadata egress and pin the selected connection with TLS verification.
+  Exact operator-trusted origins permit intentional private/HTTP endpoints.
+- Refuse redirects; admit at most eight transport operations; bound request/response
+  bytes to 16 KiB and headers to 8 KiB. The entire DNS/connect/write/read attempt has
+  a five-second deadline. Abort/shutdown cancel actual DNS and socket work.
+- `AlertDeliveryService` claims at most 16 jobs with 30-second tokens and processes
+  four concurrently. Persist a one-start-per-token guard before network work.
+  Retry transient failures after 5/20 seconds, with at most three total attempts;
+  crash recovery consumes attempts and retains the stable delivery ID.
+- Recheck ownership/configuration before and during network work; cancel on lease
+  loss or channel/rule changes. Fenced completion/retry and safe history commit
+  atomically with queue changes. Expired events are not delivered. Database pool
+  admission, SQL/lock deadlines, non-overlapping timers and shutdown are bounded.
+- Webhook signature: HMAC-SHA256(timestamp + `.` + exact body), `v1=` hex header.
+  Receivers verify timing/signature and deduplicate deliveryId. Mailtr and Slack
+  provider deduplication/final inbox behavior still need separate acceptance;
+  retries after ambiguous acceptance are at least once. No native SMTP transport
+  is claimed.
+
 Still required before completing issue #65:
 
-- Actual signed webhook, Slack and email transport. Email currently uses the existing
-  Mailtr API integration; the earlier SMTP wording was not an implemented transport.
-- Validate all DNS answers, pin the actual connection, block private/metadata egress
-  by default, reject redirects and enforce finite request/response/deadline budgets.
-  URL validation alone does not prove safe network delivery.
-- Leased delivery claims, bounded retries/backoff, idempotency/fencing and cancellation
-  of actual network work; sanitized failure history and safe shutdown.
 - Accessible Alerts dashboard: rule/channel CRUD, deliberate credential replacement,
   disabled-delivery explanations, coverage/no-data/cooldown status and recent history.
 - Enable AlertsModule only after the feature works; verify real local delivery, replica
@@ -1224,7 +1242,17 @@ AES-GCM tampering/rotation, cross-tenant isolation, concurrent rule/channel capa
 revision conflicts, transaction rollback, lease fencing/expiry, cooldown/resolution,
 no-data and idle history cleanup are covered by the current tests.
 
-No external Slack/email delivery was exercised. Secure transport, actual delivery
-retries/fencing, Alerts UI, module enablement, fresh production images, runtime/browser
-regressions and the full feature's dev PR/merge remain outstanding under #65. Existing
+The 6 October delivery branch adds a combined Nx run of 1,092 passing tests (559
+gateway, 432 admin, 91 control-plane, 10 dashboard), reusing matching cache results
+for two unchanged test tasks. Five-project lint/typecheck and four application builds
+pass, with a final admin/shared recheck after sender compatibility changes. Logs:
+`.local-work/issue65-delivery-all-tests-final.log`, `issue65-delivery-all-gates.log`,
+and `issue65-delivery-gates-final.log`. This includes actual local receivers, duplicate
+lease starts, finite retries, expired events, live configuration/lease cancellation,
+crash/finalization rollback recovery, saturated pool admission and shutdown.
+
+Transport and durable delivery now have real local receiver/replica/retry/crash/
+cancellation/rollback tests. No external Slack/email provider delivery was exercised.
+Alerts UI, module enablement, fresh production images, runtime/browser regressions
+and the full feature's dev PR/merge remain outstanding under #65. Existing
 issue #63 image and browser results prove the metrics checkpoint, not alert delivery.

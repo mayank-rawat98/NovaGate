@@ -45,6 +45,12 @@ import { MigrationService } from '../database/migration.service';
         url: config.get('DATABASE_URL'),
         entities: [Tenant, ApiKey, PendingConfigUpdate],
         synchronize: false,
+        // Bound pool admission as well as worker SQL/network deadlines.
+        extra: {
+          max: 20,
+          connectionTimeoutMillis: 3000,
+          idleTimeoutMillis: 30000,
+        },
       }),
     }),
     TypeOrmModule.forFeature([Tenant, ApiKey, PendingConfigUpdate]),

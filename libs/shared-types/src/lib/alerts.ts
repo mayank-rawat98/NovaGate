@@ -110,3 +110,11 @@ export interface AlertConfiguration {
   channels: AlertChannel[];
   deliveryEnabled: boolean;
 }
+
+/** Stable delivery ID allows receivers to deduplicate retry/recovery deliveries. */
+export interface AlertWebhookPayload {
+  version: 1;
+  deliveryId: string;
+  tenantId: string;
+  event: Omit<AlertEvent, 'deliveries'>;
+}
