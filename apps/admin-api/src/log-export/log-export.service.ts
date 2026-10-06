@@ -1,3 +1,4 @@
+import { redactRequestLog } from '@api-gateway/shared-types';
 import {
   Injectable,
   BadRequestException,
@@ -40,6 +41,8 @@ interface JobRow {
   kind: 'manual' | 'scheduled';
   time_basis: LogExportTimeBasis;
   schedule_id?: string;
+  privacy_policy?: unknown;
+  privacy_revision?: string;
 }
 const MAX_ATTEMPTS = 3;
 const MAX_ROWS = 1_000_000;
@@ -168,6 +171,11 @@ export class LogExportService
     string,
     { promise: Promise<void>; abort: AbortController }
   >();
+  private readonly downloads = new Set<{
+    tenantId: string;
+    abort: AbortController;
+    done: Promise<void>;
+  }>();
   constructor(
     private readonly db: DataSource,
     private readonly storage: ObjectStorageService,
@@ -182,8 +190,10 @@ export class LogExportService
   async onModuleDestroy() {
     this.closing = true;
     clearInterval(this.timer);
+    for (const download of this.downloads) download.abort.abort();
     for (const work of this.active.values()) work.abort.abort();
     await this.tickDone;
+    await Promise.allSettled([...this.downloads].map((work) => work.done));
     for (const work of this.active.values()) work.abort.abort();
     await Promise.allSettled(
       [...this.active.values()].map((work) => work.promise),
@@ -224,7 +234,7 @@ export class LogExportService
           'Wait for your pending archives before requesting more',
         );
       const [row]: JobRow[] = await manager.query(
-        `INSERT INTO public.log_export_jobs (tenant_id, filter, expires_at) VALUES ($1,$2,NOW() + $3 * INTERVAL '1 day') RETURNING *`,
+        `INSERT INTO public.log_export_jobs (tenant_id, filter, expires_at,privacy_policy,privacy_revision) SELECT $1,$2,NOW() + $3 * INTERVAL '1 day',"logPrivacy","logPrivacyRevision" FROM public.tenants WHERE id=$1 RETURNING *`,
         [tenantId, JSON.stringify(filter), this.storage.retentionDays],
       );
       return view(row);
@@ -272,17 +282,110 @@ export class LogExportService
       return view(queued);
     });
   }
-  async download(tenantId: string, id: string) {
+  private async eligibleDownload(
+    tenantId: string,
+    id: string,
+  ): Promise<JobRow | undefined> {
+    return this.db.transaction(async (manager) => {
+      await manager.query(
+        `SET LOCAL statement_timeout='3s'; SET LOCAL lock_timeout='1s'`,
+      );
+      const [row]: JobRow[] = await manager.query(
+        `SELECT j.* FROM public.log_export_jobs j JOIN public.tenants t ON t.id=j.tenant_id WHERE j.id=$1 AND j.tenant_id=$2 AND j.status='completed' AND j.expires_at>clock_timestamp() AND j.privacy_revision=t."logPrivacyRevision"`,
+        [id, tenantId],
+      );
+      return row;
+    });
+  }
+  async download(tenantId: string, id: string): Promise<Readable> {
     tenantId = tenantSchema(tenantId).slice(7).replace(/_/g, '-');
-    const [row]: JobRow[] = await this.db.query(
-      `SELECT * FROM public.log_export_jobs WHERE id=$1 AND tenant_id=$2 AND status='completed' AND expires_at>NOW()`,
-      [jobId(id), tenantId],
-    );
-    if (!row?.object_key)
-      throw new NotFoundException('Archive is not ready or has expired');
+    id = jobId(id);
+    if (
+      this.closing ||
+      this.downloads.size >= 8 ||
+      [...this.downloads].filter((d) => d.tenantId === tenantId).length >= 2
+    )
+      throw new ServiceUnavailableException(
+        'Archive downloads are busy. Try again shortly.',
+      );
+    const abort = new AbortController();
+    let resolveDone!: () => void;
+    const work = {
+      tenantId,
+      abort,
+      done: new Promise<void>((resolve) => {
+        resolveDone = resolve;
+      }),
+    };
+    this.downloads.add(work);
+    let source: Readable | undefined;
+    let output: Readable | undefined;
+    let checking: Promise<void> | undefined;
+    let finished = false;
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = setTimeout(() => abort.abort(), DEADLINE_MS);
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(deadline);
+      clearInterval(timer);
+      const sourceDone =
+        source && !source.closed
+          ? new Promise<void>((resolve) => source?.once('close', resolve))
+          : Promise.resolve();
+      abort.abort();
+      source?.destroy();
+      void Promise.allSettled([checking, sourceDone]).finally(() => {
+        this.downloads.delete(work);
+        resolveDone();
+      });
+    };
+    const cancel = () => {
+      source?.destroy();
+      output?.destroy(
+        new Error('Archive download revoked, cancelled or timed out'),
+      );
+    };
+    abort.signal.addEventListener('abort', cancel, { once: true });
     try {
-      return await this.storage.download(row.object_key);
-    } catch {
+      const row = await this.eligibleDownload(tenantId, id);
+      if (!row?.object_key)
+        throw new NotFoundException('Archive is not ready or has expired');
+      if (abort.signal.aborted) throw new Error('Download cancelled');
+      source = await this.storage.download(row.object_key, abort.signal);
+      source.on('error', () => undefined);
+      if (abort.signal.aborted) throw new Error('Download cancelled');
+      // Recheck after storage admission: policy may have changed during GetObject.
+      if (!(await this.eligibleDownload(tenantId, id)))
+        throw new NotFoundException('Archive is not ready or has expired');
+      if (abort.signal.aborted) throw new Error('Download cancelled');
+      const body = source;
+      output = Readable.from(
+        (async function* () {
+          for await (const chunk of body) {
+            if (abort.signal.aborted) throw new Error('Download cancelled');
+            yield chunk;
+          }
+        })(),
+      );
+      output.on('error', () => undefined);
+      output.once('close', finish);
+      timer = setInterval(() => {
+        if (checking || finished) return;
+        checking = this.eligibleDownload(tenantId, id)
+          .then((row) => {
+            if (!row) abort.abort();
+          })
+          .catch(() => abort.abort())
+          .finally(() => {
+            checking = undefined;
+          });
+      }, 1000);
+      timer.unref();
+      return output;
+    } catch (error) {
+      finish();
+      if (error instanceof NotFoundException) throw error;
       throw new ServiceUnavailableException(
         'Archive download is temporarily unavailable. Please try again.',
       );
@@ -435,7 +538,9 @@ export class LogExportService
               delete log.export_timestamp;
               delete log.export_cursor;
               delete log.receivedAt;
-              const line = JSON.stringify(log) + '\n';
+              const line =
+                JSON.stringify(redactRequestLog(log, row.privacy_policy)) +
+                '\n';
               rows++;
               bytes += Buffer.byteLength(line);
               if (rows > MAX_ROWS || bytes > MAX_BYTES)

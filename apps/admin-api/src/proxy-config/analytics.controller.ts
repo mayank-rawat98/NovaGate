@@ -1,3 +1,4 @@
+import { redactRequestLog } from '@api-gateway/shared-types';
 import type { Request, Response } from 'express';
 import { MetricsStreamService } from './metrics-stream.service';
 import {
@@ -54,6 +55,14 @@ export class AnalyticsController {
   ) {
     if (consumerId !== undefined) consumerId = consumerIdentity(consumerId);
     return this.withSchema(tenantId, async (manager) => {
+      await manager.query(
+        `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,
+        [`log-receipt:${tenantId.toLowerCase()}`],
+      );
+      const [tenant] = await manager.query(
+        `SELECT "logPrivacy" FROM public.tenants WHERE id=$1`,
+        [tenantId],
+      );
       const params: (string | number)[] = [];
       const conditions: string[] = [];
 
@@ -88,7 +97,9 @@ export class AnalyticsController {
         `SELECT * FROM request_logs ${where} ORDER BY timestamp DESC LIMIT 50 OFFSET $${params.length}`,
         params,
       );
-      return rows.map(({ receivedAt: _receivedAt, ...row }) => row);
+      return rows.map(({ receivedAt: _receivedAt, ...row }) =>
+        redactRequestLog(row, tenant?.logPrivacy),
+      );
     });
   }
 

@@ -83,7 +83,7 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
       ),
     );
     await ds.query(
-      'ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS "caCertPem" TEXT',
+      `ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS "caCertPem" TEXT, ADD COLUMN IF NOT EXISTS "logPrivacy" JSONB NOT NULL DEFAULT '{"clientIp":"omit","userAgent":"omit"}'::jsonb`,
     );
     await ds.query(
       'CREATE UNIQUE INDEX IF NOT EXISTS pending_config_updates_tenant_unique ON public.pending_config_updates ("tenantId")',
@@ -613,6 +613,71 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
       ),
     ).toHaveLength(0);
   });
+  it('enforces latest stored policy on older gateways and keeps receipt-lock ordering', async () => {
+    const ingestion = new LogIngestionService(ds);
+    const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
+    const log = {
+      id: randomUUID(),
+      method: 'GET',
+      path: '/privacy',
+      statusCode: 200,
+      responseTimeMs: 1,
+      requestId: randomUUID(),
+      clientIp: '192.0.2.123',
+      userAgent: 'old-gateway-agent',
+      timestamp: new Date().toISOString(),
+    };
+    await ds.query(
+      `UPDATE public.tenants SET "logPrivacy"='{"clientIp":"retain","userAgent":"retain"}'::jsonb WHERE id=$1`,
+      [tenantId],
+    );
+    await ingestion.ingestLogs(tenantId, [log]);
+    expect(
+      (
+        await ds.query(
+          `SELECT "clientIp","userAgent" FROM ${schema}.request_logs WHERE id=$1`,
+          [log.id],
+        )
+      )[0],
+    ).toEqual({ clientIp: '192.0.2.123', userAgent: 'old-gateway-agent' });
+    const lock = ds.createQueryRunner();
+    await lock.connect();
+    await lock.startTransaction();
+    try {
+      await lock.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [
+        `log-receipt:${tenantId}`,
+      ]);
+      let done = false;
+      const incoming = { ...log, id: randomUUID() };
+      const write = ingestion.ingestLogs(tenantId, [incoming]).then(() => {
+        done = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(done).toBe(false);
+      await lock.query(
+        `UPDATE public.tenants SET "logPrivacy"='{"clientIp":"omit","userAgent":"omit"}'::jsonb WHERE id=$1`,
+        [tenantId],
+      );
+      await lock.commitTransaction();
+      await write;
+      expect(
+        (
+          await ds.query(
+            `SELECT "clientIp","userAgent" FROM ${schema}.request_logs WHERE id=$1`,
+            [incoming.id],
+          )
+        )[0],
+      ).toEqual({ clientIp: '[redacted]', userAgent: null });
+      await ds.query(
+        `DELETE FROM ${schema}.request_logs WHERE id=ANY($1::uuid[])`,
+        [[log.id, incoming.id]],
+      );
+    } finally {
+      if (lock.isTransactionActive) await lock.rollbackTransaction();
+      await lock.release();
+    }
+    await ingestion.onModuleDestroy();
+  });
   it('stores correlated integer-duration logs in both upgraded and legacy schemas', async () => {
     const ingestion = new LogIngestionService(ds);
     for (const id of [tenantId, secondId]) {
@@ -624,6 +689,7 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
         responseTimeMs: 2,
         requestId: randomUUID(),
         clientIp: '127.0.0.1',
+        userAgent: 'legacy-private-agent',
         timestamp: new Date().toISOString(),
         traceId: trace().traceId,
         spanId: trace().spanId,
@@ -635,6 +701,8 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
         [log.id],
       );
       expect(rows[0].responseTimeMs).toBe(2);
+      expect(rows[0].clientIp).toBe('[redacted]');
+      expect(rows[0].userAgent).toBeNull();
       if (id === tenantId) {
         expect(rows[0].traceId).toBe(log.traceId);
         expect(rows[0].receivedAt.getTime()).toBeGreaterThan(

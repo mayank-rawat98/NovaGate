@@ -1,3 +1,4 @@
+import type { Response } from 'express';
 import {
   Controller,
   Header,
@@ -8,6 +9,7 @@ import {
   Param,
   Body,
   StreamableFile,
+  Res,
 } from '@nestjs/common';
 import { LogExportService } from './log-export.service';
 import { LogExportSchedulerService } from './log-export-scheduler.service';
@@ -45,8 +47,16 @@ export class LogExportController {
   }
   @Get(':id/download')
   @Header('Cache-Control', 'no-store')
-  async download(@Param('tenantId') tenantId: string, @Param('id') id: string) {
+  async download(
+    @Param('tenantId') tenantId: string,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
     const stream = await this.exports.download(tenantId, id);
+    const cancel = () => stream.destroy();
+    response.once('close', cancel);
+    stream.once('close', () => response.off('close', cancel));
+    if (response.destroyed) stream.destroy();
     return new StreamableFile(stream, {
       type: 'application/x-ndjson',
       disposition: `attachment; filename="novagate-logs-${id.toLowerCase()}.ndjson"`,

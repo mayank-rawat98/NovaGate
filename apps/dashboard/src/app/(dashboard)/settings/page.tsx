@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import useSWR from 'swr';
+import { LogPrivacyPanel } from '../../../components/log-privacy-panel';
 import { LogExportPanel } from '../../../components/log-export-panel';
 import { LogExportSchedulePanel } from '../../../components/log-export-schedule-panel';
 import { DataLoadNotice } from '../../../components/data-load-notice';
@@ -353,6 +354,7 @@ export default function SettingsPage() {
         </pre>
       </div>
 
+      <LogPrivacyPanel tenantId={tenantId} />
       <LogExportSchedulePanel tenantId={tenantId} />
       <LogExportPanel key={tenantId} tenantId={tenantId} />
 

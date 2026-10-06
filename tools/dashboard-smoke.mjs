@@ -162,6 +162,8 @@ let graphqlSaves = 0;
 let configuredCa;
 let failCaSave = false;
 let caSaves = 0;
+let failPrivacy = '';
+const privacyStates = new Map();
 let archivesEnabled = true;
 let failArchiveCreate = false;
 let failArchiveDownload = false;
@@ -235,6 +237,60 @@ const handleApiFixture = async (route) => {
     'Dashboard must use its configured API origin',
   );
   const resource = url.pathname.split('/').at(-1);
+  if (resource === 'log-privacy') {
+    const tenant =
+      url.pathname.split('/')[url.pathname.split('/').indexOf('tenants') + 1];
+    let state = privacyStates.get(tenant) ?? {
+      policy: { clientIp: 'omit', userAgent: 'omit' },
+      revision: randomUUID(),
+      historicalCleanup: 'complete',
+      gatewayUpdatePending: false,
+    };
+    privacyStates.set(tenant, state);
+    let status = 200;
+    let problem;
+    if (route.request().method() === 'PUT') {
+      const dto = route.request().postDataJSON();
+      assert.deepEqual(Object.keys(dto).sort(), ['expectedRevision', 'policy']);
+      assert.deepEqual(Object.keys(dto.policy).sort(), [
+        'clientIp',
+        'userAgent',
+      ]);
+      assert(['omit', 'retain'].includes(dto.policy.clientIp));
+      assert(['omit', 'retain'].includes(dto.policy.userAgent));
+      if (failPrivacy === 'save') {
+        status = 503;
+        problem = 'Privacy settings temporarily unavailable';
+      } else if (
+        failPrivacy === 'revision' ||
+        dto.expectedRevision !== state.revision
+      ) {
+        status = 409;
+        problem =
+          'Privacy settings changed. Reload the current settings before saving.';
+        state = { ...state, revision: randomUUID() };
+        privacyStates.set(tenant, state);
+      } else {
+        state = {
+          ...state,
+          policy: dto.policy,
+          revision: randomUUID(),
+          historicalCleanup: 'pending',
+          gatewayUpdatePending: true,
+        };
+        privacyStates.set(tenant, state);
+      }
+    } else if (failPrivacy === 'read') {
+      status = 503;
+      problem = 'Privacy settings temporarily unavailable';
+    }
+    await route.fulfill({
+      status,
+      contentType: 'application/json',
+      body: JSON.stringify(problem ? { message: problem } : state),
+    });
+    return;
+  }
   if (resource === 'stream' && url.pathname.endsWith('/metrics/stream')) {
     assert.equal(
       route.request().headers().authorization,
@@ -1399,6 +1455,125 @@ try {
   await audit('Trace linked waterfall desktop');
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`${base}/settings`);
+  const privacySection = page.getByRole('region', {
+    name: 'Log privacy',
+    exact: true,
+  });
+  await expect(
+    privacySection.getByText('Omitted', { exact: true }),
+  ).toHaveCount(2);
+  const privacyEdit = privacySection.getByRole('button', {
+    name: 'Edit log privacy',
+    exact: true,
+  });
+  await privacyEdit.click();
+  let privacyDialog = page.getByRole('dialog', {
+    name: 'Edit log privacy',
+    exact: true,
+  });
+  await expect(privacyDialog).toContainText('Removal is irreversible');
+  await privacyDialog
+    .getByLabel('Client IP addresses', { exact: true })
+    .selectOption('retain');
+  failPrivacy = 'save';
+  await privacyDialog
+    .getByRole('button', { name: 'Save privacy settings', exact: true })
+    .click();
+  await expect(privacyDialog.getByRole('alert')).toContainText(
+    'temporarily unavailable',
+  );
+  await expect(
+    privacyDialog.getByLabel('Client IP addresses', { exact: true }),
+  ).toHaveValue('retain');
+  await audit('Log privacy failed save mobile');
+  failPrivacy = 'revision';
+  await privacyDialog
+    .getByRole('button', { name: 'Save privacy settings', exact: true })
+    .click();
+  await expect(privacyDialog.getByRole('alert')).toContainText(
+    'Reload the current settings',
+  );
+  failPrivacy = '';
+  await privacyDialog
+    .getByRole('button', { name: 'Reload current revision', exact: true })
+    .click();
+  await expect(
+    privacyDialog.getByLabel('Client IP addresses', { exact: true }),
+  ).toHaveValue('retain');
+  await privacyDialog
+    .getByRole('button', { name: 'Save privacy settings', exact: true })
+    .click();
+  await expect(privacyDialog).toHaveCount(0);
+  await expect(privacySection).toContainText('Existing archives have expired');
+  await expect(privacySection).toContainText(
+    'Historical cleanup is in progress',
+  );
+  await privacyEdit.click();
+  privacyDialog = page.getByRole('dialog', {
+    name: 'Edit log privacy',
+    exact: true,
+  });
+  await privacyDialog
+    .getByLabel('User agents', { exact: true })
+    .selectOption('retain');
+  await page.keyboard.press('Escape');
+  await expect(privacyDialog).toHaveCount(0);
+  await expect(privacyEdit).toBeFocused();
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await privacyEdit.click();
+  privacyDialog = page.getByRole('dialog', {
+    name: 'Edit log privacy',
+    exact: true,
+  });
+  await expect(
+    privacyDialog.getByLabel('User agents', { exact: true }),
+  ).toHaveValue('omit');
+  await privacyDialog
+    .getByLabel('User agents', { exact: true })
+    .selectOption('retain');
+  await privacyDialog
+    .getByRole('button', { name: 'Save privacy settings', exact: true })
+    .focus();
+  await page.keyboard.press('Tab');
+  await expect(
+    privacyDialog.getByRole('button', {
+      name: 'Close log privacy editor',
+      exact: true,
+    }),
+  ).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(
+    privacyDialog.getByRole('button', {
+      name: 'Save privacy settings',
+      exact: true,
+    }),
+  ).toBeFocused();
+  await audit('Log privacy desktop dialog');
+  await page.keyboard.press('Escape');
+  failPrivacy = 'read';
+  await page.reload();
+  await expect(
+    page
+      .getByRole('alert')
+      .filter({ hasText: 'Log privacy settings could not be loaded' }),
+  ).toBeVisible();
+  await expect(
+    privacySection.getByRole('button', {
+      name: 'Edit log privacy',
+      exact: true,
+    }),
+  ).toBeDisabled();
+  failPrivacy = '';
+  await privacySection
+    .getByRole('button', { name: 'Try again', exact: true })
+    .click();
+  await expect(
+    privacySection.getByRole('button', {
+      name: 'Edit log privacy',
+      exact: true,
+    }),
+  ).toBeEnabled();
+  await page.setViewportSize({ width: 390, height: 844 });
   await expect(
     page.getByText(/Clients must prove possession of their private key/),
   ).toBeVisible();
@@ -1753,6 +1928,19 @@ try {
     scheduleDialog.getByLabel('Archive frequency', { exact: true }),
   ).toHaveValue('hourly');
   await page.keyboard.press('Escape');
+  await expect(
+    privacySection.getByText('Omitted', { exact: true }),
+  ).toHaveCount(2);
+  await privacySection
+    .getByRole('button', { name: 'Edit log privacy', exact: true })
+    .click();
+  privacyDialog = page.getByRole('dialog', {
+    name: 'Edit log privacy',
+    exact: true,
+  });
+  await privacyDialog
+    .getByLabel('User agents', { exact: true })
+    .selectOption('retain');
   await page.evaluate((tenant) => {
     localStorage.setItem('gw_tenant_id', tenant);
     window.dispatchEvent(new Event('storage'));
@@ -1765,7 +1953,22 @@ try {
       `/api/tenants/${otherArchiveWorkspace}/log-exports/schedule`,
     ),
   );
-  await audit('archive schedule workspace state reset');
+  await expect(privacyDialog).not.toBeVisible();
+  await privacySection
+    .getByRole('button', { name: 'Edit log privacy', exact: true })
+    .click();
+  privacyDialog = page.getByRole('dialog', {
+    name: 'Edit log privacy',
+    exact: true,
+  });
+  await expect(
+    privacyDialog.getByLabel('User agents', { exact: true }),
+  ).toHaveValue('omit');
+  await page.keyboard.press('Escape');
+  assert.ok(
+    apiRequests.includes(`/api/tenants/${otherArchiveWorkspace}/log-privacy`),
+  );
+  await audit('archive schedule and privacy workspace state reset');
   archivesEnabled = false;
   await page
     .getByRole('button', { name: 'Refresh archives', exact: true })
@@ -1779,6 +1982,12 @@ try {
   await expect(
     archivePanel.getByRole('button', { name: 'Create archive', exact: true }),
   ).not.toBeVisible();
+  await expect(
+    privacySection.getByRole('button', {
+      name: 'Edit log privacy',
+      exact: true,
+    }),
+  ).toBeEnabled();
   await schedulePanel
     .getByRole('button', { name: 'Refresh schedule', exact: true })
     .click();

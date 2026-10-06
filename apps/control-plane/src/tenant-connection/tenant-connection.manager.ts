@@ -1,3 +1,4 @@
+import { logPrivacyPolicy } from '@api-gateway/shared-types';
 import { ConfigService } from '@nestjs/config';
 import {
   DEFAULT_SOCKET_ADMISSION,
@@ -255,7 +256,7 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
     const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
     return this.dataSource.transaction('REPEATABLE READ', async (manager) => {
       const [tenant] = await manager.query(
-        `SELECT "gatewayConfigVersion", "caCertPem" FROM public.tenants WHERE id = $1`,
+        `SELECT "gatewayConfigVersion", "caCertPem", "logPrivacy" FROM public.tenants WHERE id = $1`,
         [tenantId],
       );
       if (!tenant) throw new Error('Tenant not found');
@@ -274,6 +275,7 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
           services,
           consumers,
           caCertPem: tenant.caCertPem ?? undefined,
+          logPrivacy: logPrivacyPolicy(tenant.logPrivacy),
           rateLimit: { windowMs: 60000, unauthMax: 100, authMax: 500 },
         },
         version: tenant.gatewayConfigVersion,

@@ -3,48 +3,106 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  OnApplicationBootstrap,
 } from '@nestjs/common';
 import Redis from 'ioredis';
 import { DataSource, EntityManager } from 'typeorm';
-import { TenantConfig } from '@api-gateway/shared-types';
+import { logPrivacyPolicy, TenantConfig } from '@api-gateway/shared-types';
 
 @Injectable()
-export class ConfigPushService implements OnModuleInit, OnModuleDestroy {
+export class ConfigPushService
+  implements OnModuleInit, OnModuleDestroy, OnApplicationBootstrap
+{
   private readonly logger = new Logger(ConfigPushService.name);
   private redis!: Redis;
+  private timer?: NodeJS.Timeout;
+  private retry?: Promise<void>;
+  private stopping = false;
 
   constructor(private readonly dataSource: DataSource) {}
 
   onModuleInit() {
-    this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+    this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+      commandTimeout: 3000,
+      maxRetriesPerRequest: 1,
+    });
   }
 
-  onModuleDestroy() {
+  onApplicationBootstrap() {
+    this.timer = setInterval(() => {
+      if (this.retry || this.stopping) return;
+      this.retry = this.retryPending()
+        .catch(() =>
+          this.logger.warn('Configuration retry will resume on the next tick'),
+        )
+        .finally(() => {
+          this.retry = undefined;
+        });
+    }, 5000);
+    this.timer.unref();
+  }
+  async onModuleDestroy() {
+    this.stopping = true;
+    clearInterval(this.timer);
     this.redis.disconnect();
+    await this.retry;
+  }
+  private async retryPending() {
+    const pending = await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `SET LOCAL statement_timeout='3s'; SET LOCAL lock_timeout='1s'`,
+      );
+      return manager.query<
+        Array<{
+          tenantId: string;
+          config: { config: TenantConfig; version: number };
+        }>
+      >(`WITH due AS (
+        SELECT id FROM public.pending_config_updates WHERE "lastPublishAt" IS NULL OR "lastPublishAt"<clock_timestamp()-INTERVAL '10 seconds'
+        ORDER BY "lastPublishAt" NULLS FIRST,"createdAt",id LIMIT 16 FOR UPDATE SKIP LOCKED
+      ), claimed AS (UPDATE public.pending_config_updates p SET "lastPublishAt"=clock_timestamp() FROM due WHERE p.id=due.id RETURNING p."tenantId",p.config) SELECT * FROM claimed`);
+    });
+    for (const row of pending) {
+      if (this.stopping) break;
+      await this.publish({ tenantId: row.tenantId, ...row.config });
+    }
+  }
+  async publish(payload: {
+    tenantId: string;
+    config: TenantConfig;
+    version: number;
+  }): Promise<boolean> {
+    try {
+      await this.redis.publish('config.update', JSON.stringify(payload));
+      return true;
+    } catch {
+      this.logger.warn('Configuration is persisted and waiting for delivery');
+      return false;
+    }
+  }
+  async persistUpdate(tenantId: string, manager: EntityManager) {
+    const [tenant] = await manager.query(
+      `WITH versioned AS (
+      UPDATE public.tenants SET "gatewayConfigVersion"="gatewayConfigVersion"+1 WHERE id=$1 RETURNING "gatewayConfigVersion"
+    ) SELECT * FROM versioned`,
+      [tenantId],
+    );
+    if (!tenant) throw new Error('Tenant not found');
+    const version = tenant.gatewayConfigVersion as number;
+    const config = await this.assembleConfig(tenantId, manager);
+    await manager.query(
+      `INSERT INTO public.pending_config_updates ("tenantId",config) VALUES ($1,$2)
+      ON CONFLICT ("tenantId") DO UPDATE SET config=$2,"createdAt"=NOW(),"lastPublishAt"=NULL`,
+      [tenantId, JSON.stringify({ config, version })],
+    );
+    return { tenantId, config, version };
   }
 
   async triggerUpdate(tenantId: string): Promise<void> {
     this.logger.log(`Publishing configuration for tenant ${tenantId}`);
-    const payload = await this.dataSource.transaction(async (manager) => {
-      // Lock and version first: concurrent updates cannot publish a newer version
-      // carrying an older snapshot assembled before another transaction committed.
-      const [tenant] = await manager.query(
-        `WITH versioned AS (
-           UPDATE public.tenants SET "gatewayConfigVersion" = "gatewayConfigVersion" + 1
-           WHERE id = $1 RETURNING "gatewayConfigVersion"
-         ) SELECT "gatewayConfigVersion" FROM versioned`,
-        [tenantId],
-      );
-      if (!tenant) throw new Error('Tenant not found');
-      const version = tenant.gatewayConfigVersion as number;
-      const config = await this.assembleConfig(tenantId, manager);
-      await manager.query(
-        `INSERT INTO public.pending_config_updates ("tenantId", config) VALUES ($1, $2)
-         ON CONFLICT ("tenantId") DO UPDATE SET config = $2, "createdAt" = NOW()`,
-        [tenantId, JSON.stringify({ config, version })],
-      );
-      return { tenantId, config, version };
-    });
+    const payload = await this.dataSource.transaction((manager) =>
+      this.persistUpdate(tenantId, manager),
+    );
     // Persist before publishing: subscriber presence does not imply delivery.
     await this.redis.publish('config.update', JSON.stringify(payload));
   }
@@ -67,7 +125,7 @@ export class ConfigPushService implements OnModuleInit, OnModuleDestroy {
       `SELECT * FROM ${schema}.consumers WHERE "revokedAt" IS NULL`,
     );
     const tenantRows = await manager.query(
-      `SELECT "caCertPem" FROM public.tenants WHERE id = $1`,
+      `SELECT "caCertPem", "logPrivacy" FROM public.tenants WHERE id = $1`,
       [tenantId],
     );
 
@@ -89,6 +147,7 @@ export class ConfigPushService implements OnModuleInit, OnModuleDestroy {
     const caCertPem: string | undefined = tenantRows[0]?.caCertPem ?? undefined;
 
     const config: TenantConfig = {
+      logPrivacy: logPrivacyPolicy(tenantRows[0]?.logPrivacy),
       routes,
       services,
       consumers,

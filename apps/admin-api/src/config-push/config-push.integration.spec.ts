@@ -134,6 +134,50 @@ integration(
       expect(tenant.passwordHash).toBe('preserve-auth-column');
     });
 
+    it('retries committed privacy snapshots without another edit or gateway reconnect', async () => {
+      const payload = await ds.transaction(async (manager) => {
+        await manager.query(
+          `UPDATE public.tenants SET "logPrivacy"='{"clientIp":"retain","userAgent":"omit"}'::jsonb WHERE id=$1`,
+          [tenantId],
+        );
+        return push.persistUpdate(tenantId, manager);
+      });
+      // No initial Redis publish: simulate a process dying after the durable commit.
+      expect(payload.config.logPrivacy).toEqual({
+        clientIp: 'retain',
+        userAgent: 'omit',
+      });
+      const recovery = new ConfigPushService(ds);
+      recovery.onModuleInit();
+      recovery.onApplicationBootstrap();
+      try {
+        for (
+          let attempt = 0;
+          attempt < 400 &&
+          !received.some(
+            (row) =>
+              row.tenantId === tenantId && row.version === payload.version,
+          );
+          attempt++
+        )
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(
+          received.some(
+            (row) =>
+              row.tenantId === tenantId && row.version === payload.version,
+          ),
+        ).toBe(true);
+        expect(await ds.getRepository(PendingConfigUpdate).count()).toBe(1);
+        const [tenant] = await ds.query(
+          `SELECT "gatewayConfigVersion" FROM public.tenants WHERE id=$1`,
+          [tenantId],
+        );
+        expect(tenant.gatewayConfigVersion).toBe(payload.version);
+      } finally {
+        await recovery.onModuleDestroy();
+      }
+    }, 15000);
+
     it('rejects unknown tenants without writing a pending snapshot', async () => {
       await expect(push.triggerUpdate(randomUUID())).rejects.toThrow(
         'Tenant not found',

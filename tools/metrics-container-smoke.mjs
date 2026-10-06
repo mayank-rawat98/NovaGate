@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -267,7 +267,7 @@ try {
     ],
     [3000],
   );
-  const gatewayUrl = `http://127.0.0.1:${port(gateway, 3000)}`;
+  let gatewayUrl = `http://127.0.0.1:${port(gateway, 3000)}`;
   await until(
     async () => (await fetch(`${gatewayUrl}/health`)).ok,
     'Production gateway startup',
@@ -493,6 +493,137 @@ try {
       'filtered-metrics-with-private-consumer-metadata',
     ],
   };
+  // The legacy-frame fixture deliberately replaces this tenant's sole gateway
+  // socket; replacement is a permanent close. Restore the fixture gateway before
+  // verifying subsequent live updates, without weakening production admission.
+  docker('restart', gateway);
+  // Ephemeral published ports can be reassigned on restart.
+  gatewayUrl = `http://127.0.0.1:${port(gateway, 3000)}`;
+  await until(
+    async () => (await fetch(`${gatewayUrl}/health`)).ok,
+    'Gateway restart after the legacy-frame replacement fixture',
+  );
+  const privacyUrl = `${adminUrl}/tenants/${tenant}/log-privacy`;
+  let privacyState = await (await fetch(privacyUrl, { headers })).json();
+  assert.deepEqual(privacyState.policy, {
+    clientIp: 'omit',
+    userAgent: 'omit',
+  });
+  await until(async () => {
+    privacyState = await (await fetch(privacyUrl, { headers })).json();
+    return privacyState.historicalCleanup === 'complete';
+  }, 'Initial historical privacy cleanup');
+  const savePrivacy = async (policy) => {
+    const response = await fetch(privacyUrl, {
+      method: 'PUT',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ policy, expectedRevision: privacyState.revision }),
+    });
+    assert.equal(response.status, 200);
+    privacyState = await response.json();
+    await until(async () => {
+      const cached = JSON.parse(
+        docker('exec', redis, 'redis-cli', 'GET', 'cfg:default'),
+      );
+      const pending = await db.query(
+        `SELECT 1 FROM public.pending_config_updates WHERE "tenantId"=$1`,
+        [tenant],
+      );
+      return (
+        cached?.tenantId === tenant &&
+        cached.config?.logPrivacy?.clientIp === policy.clientIp &&
+        pending.rowCount === 0
+      );
+    }, 'Privacy configuration installed and acknowledged by the production gateway');
+  };
+  await savePrivacy({ clientIp: 'retain', userAgent: 'retain' });
+  const retainedRequestId = randomUUID();
+  const retainedResponse = await fetch(`${gatewayUrl}/traffic/success`, {
+    headers: {
+      authorization: `Bearer ${usageConsumerKey}`,
+      'x-request-id': retainedRequestId,
+      'user-agent': 'privacy-fixture-agent',
+    },
+  });
+  assert.equal(retainedResponse.status, 200);
+  await until(
+    async () =>
+      (
+        await db.query(
+          `SELECT 1 FROM ${schema}.request_logs WHERE "requestId"=$1`,
+          [retainedRequestId],
+        )
+      ).rowCount === 1,
+    'Explicitly retained production request',
+  );
+  const retainedLog = (
+    await db.query(
+      `SELECT "clientIp","userAgent","consumerId" FROM ${schema}.request_logs WHERE "requestId"=$1`,
+      [retainedRequestId],
+    )
+  ).rows[0];
+  assert.notEqual(retainedLog.clientIp, '[redacted]');
+  assert.equal(retainedLog.userAgent, 'privacy-fixture-agent');
+  assert.equal(retainedLog.consumerId, usageConsumer);
+  await savePrivacy({ clientIp: 'omit', userAgent: 'omit' });
+  const omittedRequestId = randomUUID();
+  assert.equal(
+    (
+      await fetch(`${gatewayUrl}/traffic/success`, {
+        headers: {
+          authorization: `Bearer ${usageConsumerKey}`,
+          'x-request-id': omittedRequestId,
+          'user-agent': 'privacy-fixture-agent',
+        },
+      })
+    ).status,
+    200,
+  );
+  await until(
+    async () =>
+      (
+        await db.query(
+          `SELECT 1 FROM ${schema}.request_logs WHERE "requestId"=$1 AND "clientIp"='[redacted]' AND "userAgent" IS NULL`,
+          [omittedRequestId],
+        )
+      ).rowCount === 1,
+    'Omitted production request fields',
+  );
+  await until(async () => {
+    const state = await (await fetch(privacyUrl, { headers })).json();
+    const privateRows = await db.query(
+      `SELECT 1 FROM ${schema}.request_logs WHERE "clientIp" IS DISTINCT FROM '[redacted]' OR "userAgent" IS NOT NULL LIMIT 1`,
+    );
+    return state.historicalCleanup === 'complete' && privateRows.rowCount === 0;
+  }, 'Historical production rows permanently minimized');
+  const revokedArchive = (
+    await db.query(
+      `SELECT id FROM public.log_export_jobs WHERE tenant_id=$1 AND kind='scheduled' ORDER BY created_at LIMIT 1`,
+      [tenant],
+    )
+  ).rows[0];
+  assert.ok(revokedArchive);
+  assert.equal(
+    (
+      await fetch(
+        `${adminUrl}/tenants/${tenant}/log-exports/${revokedArchive.id}/download`,
+        { headers },
+      )
+    ).status,
+    404,
+  );
+  const logPrivacy = {
+    gatewayConfigAcknowledged: true,
+    retainedAndOmittedRequests: 2,
+    historicalCleanup: 'complete',
+    archivesRevoked: true,
+    checks: [
+      'conservative-defaults-and-legacy-collector-redaction',
+      'revision-aware-save-and-durable-gateway-ACK',
+      'explicit-retention-with-authentication-preserved',
+      'historical-redaction-and-expired-private-archives',
+    ],
+  };
   const shutdown = [];
   for (const [name, role] of [
     [gateway, 'gateway'],
@@ -533,6 +664,7 @@ try {
         alerts,
         archives,
         consumerUsage,
+        logPrivacy,
         consumerAttribution: {
           mappedJwt: true,
           unrelatedPrincipalRetained: true,
@@ -561,9 +693,13 @@ try {
   mkdirSync(resolve('.local-work'), { recursive: true });
   for (const name of names) {
     try {
+      const output = spawnSync('docker', ['logs', name], {
+        encoding: 'utf8',
+        timeout: 10000,
+      });
       writeFileSync(
         resolve('.local-work', `${name}.log`),
-        docker('logs', name),
+        (output.stdout ?? '') + (output.stderr ?? ''),
       );
     } catch {
       /* Container may have failed before creation. */

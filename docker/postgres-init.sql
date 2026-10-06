@@ -14,6 +14,12 @@ CREATE TABLE IF NOT EXISTS public.tenants (
   "verifyToken" VARCHAR,
   "verifyExpires" TIMESTAMP,
   "caCertPem" TEXT,
+  "logPrivacy" JSONB NOT NULL DEFAULT '{"clientIp":"omit","userAgent":"omit"}'::jsonb,
+  "logPrivacyRevision" UUID NOT NULL DEFAULT gen_random_uuid(),
+  "logPrivacyScrubCursor" UUID,
+  "logPrivacyScrubDone" BOOLEAN NOT NULL DEFAULT false,
+  "logPrivacyScrubError" BOOLEAN NOT NULL DEFAULT false,
+  "logPrivacyScrubCheckedAt" TIMESTAMPTZ,
   "createdAt" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
@@ -31,6 +37,7 @@ CREATE TABLE IF NOT EXISTS public.pending_config_updates (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "tenantId" UUID NOT NULL REFERENCES public.tenants(id),
   config JSONB NOT NULL,
+  "lastPublishAt" TIMESTAMPTZ,
   "createdAt" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 

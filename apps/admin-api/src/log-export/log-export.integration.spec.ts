@@ -1,4 +1,13 @@
-import type { LogExportScheduleState } from '@api-gateway/shared-types';
+import { LogPrivacyService } from '../log-privacy/log-privacy.service';
+import { LogPrivacyController } from '../log-privacy/log-privacy.controller';
+import { ConfigPushService } from '../config-push/config-push.service';
+import { AnalyticsController } from '../proxy-config/analytics.controller';
+import { MetricsStreamService } from '../proxy-config/metrics-stream.service';
+import { ConsumerAnalyticsService } from '../proxy-config/consumer-analytics.service';
+import type {
+  LogPrivacyState,
+  LogExportScheduleState,
+} from '@api-gateway/shared-types';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -39,6 +48,7 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
   let storage: ObjectStorageService;
   let exports: LogExportService;
   let schedules: LogExportSchedulerService;
+  let privacy: LogPrivacyService;
   let app: INestApplication;
   let url: string;
   const tenant = randomUUID();
@@ -131,9 +141,29 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
     jest
       .spyOn(exports, 'onApplicationBootstrap')
       .mockImplementation(() => undefined);
+    const push = new ConfigPushService(db);
+    jest.spyOn(push, 'onModuleInit').mockImplementation(() => undefined);
+    jest
+      .spyOn(push, 'onApplicationBootstrap')
+      .mockImplementation(() => undefined);
+    jest.spyOn(push, 'onModuleDestroy').mockResolvedValue(undefined);
+    jest.spyOn(push, 'publish').mockResolvedValue(false);
+    privacy = new LogPrivacyService(db, push);
+    jest
+      .spyOn(privacy, 'onApplicationBootstrap')
+      .mockImplementation(() => undefined);
     const module = await Test.createTestingModule({
-      controllers: [LogExportController],
+      controllers: [
+        LogExportController,
+        LogPrivacyController,
+        AnalyticsController,
+      ],
       providers: [
+        { provide: LogPrivacyService, useValue: privacy },
+        { provide: ConfigPushService, useValue: push },
+        { provide: DataSource, useValue: db },
+        { provide: MetricsStreamService, useValue: {} },
+        { provide: ConsumerAnalyticsService, useValue: {} },
         { provide: LogExportService, useValue: exports },
         { provide: ObjectStorageService, useValue: storage },
         {
@@ -721,4 +751,263 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
       'Wait for your pending archives',
     );
   });
+  it('redacts historical reads, durably saves revisions, revokes private archives and scrubs bounded pages', async () => {
+    const id = randomUUID();
+    const schema = tenantSchema(id);
+    await db.query(
+      `INSERT INTO public.tenants (id,name,email,"planId") VALUES ($1,'Privacy fixture',$2,'free')`,
+      [id, `${id}@example.test`],
+    );
+    await new TenantProvisioningService(db).provisionTenant(id);
+    const privacyUrl = `${url}/${id}/log-privacy`;
+    const save = async (
+      state: { revision: string },
+      policy: { clientIp: string; userAgent: string },
+    ) =>
+      fetch(privacyUrl, {
+        method: 'PUT',
+        headers: headers(id),
+        body: JSON.stringify({ expectedRevision: state.revision, policy }),
+      });
+    expect((await fetch(privacyUrl)).status).toBe(401);
+    expect((await fetch(privacyUrl, { headers: headers(tenant) })).status).toBe(
+      403,
+    );
+    const initial = await privacy.get(id);
+    expect(initial.policy).toEqual({ clientIp: 'omit', userAgent: 'omit' });
+    await privacy.scrub();
+    expect((await privacy.get(id)).historicalCleanup).toBe('complete');
+    const retain = await save(initial, {
+      clientIp: 'retain',
+      userAgent: 'retain',
+    });
+    expect(retain.status).toBe(200);
+    const retained = (await retain.json()) as LogPrivacyState;
+    expect(retained.gatewayUpdatePending).toBe(true);
+    await privacy.scrub();
+    const recordedAt = new Date(Date.now() - 30000).toISOString();
+    await db.query(
+      `INSERT INTO ${schema}.request_logs (id,method,path,"statusCode","clientIp","userAgent",timestamp) SELECT gen_random_uuid(),'GET','/privacy',200,'192.0.2.123','fixture-agent',$1 FROM generate_series(1,1201)`,
+      [recordedAt],
+    );
+    await db.query(
+      `UPDATE public.log_export_jobs SET status='expired',expires_at=clock_timestamp() WHERE tenant_id=$1 AND status IN ('queued','processing')`,
+      [other],
+    );
+    const job = await exports.create(id, filter);
+    const claimed = required(await exports.claim());
+    expect(claimed.id).toBe(job.id);
+    await exports.process(claimed);
+    const raw = await exports.download(id, job.id);
+    const lines = [];
+    for await (const chunk of raw) lines.push(String(chunk));
+    expect(lines.join('')).toContain('192.0.2.123');
+    const [object] = await db.query(
+      `SELECT object_key FROM public.log_export_jobs WHERE id=$1`,
+      [job.id],
+    );
+    const streams: Readable[] = [];
+    const slow = jest
+      .spyOn(storage, 'download')
+      .mockImplementation(async () => {
+        const source = new Readable({
+          read() {
+            /* Deliberately stalled fixture stream. */
+          },
+        });
+        streams.push(source);
+        return source;
+      });
+    const ongoing = await exports.download(id, job.id);
+    const second = await exports.download(id, job.id);
+    await expect(exports.download(id, job.id)).rejects.toThrow('busy');
+    second.destroy();
+    const reading = ongoing[Symbol.asyncIterator]();
+    streams[0].push('previously delivered bytes');
+    expect((await reading.next()).value.toString()).toBe(
+      'previously delivered bytes',
+    );
+    const revoked = reading.next();
+    const revocationAssertion = expect(revoked).rejects.toThrow('revoked');
+    const tightened = await save(retained, {
+      clientIp: 'omit',
+      userAgent: 'omit',
+    });
+    await revocationAssertion;
+    expect(streams[0].destroyed).toBe(true);
+    slow.mockRestore();
+    expect(tightened.status).toBe(200);
+    const latest = (await tightened.json()) as LogPrivacyState;
+    expect(latest.revision).not.toBe(retained.revision);
+    expect(
+      (
+        await fetch(`${url}/${id}/log-exports/${job.id}/download`, {
+          headers: headers(id),
+        })
+      ).status,
+    ).toBe(404);
+    const hidden = await fetch(`${url}/${id}/logs`, { headers: headers(id) });
+    expect(hidden.status).toBe(200);
+    const logs = (await hidden.json()) as Array<Record<string, unknown>>;
+    expect(logs).toHaveLength(50);
+    expect(
+      logs.every(
+        (row: Record<string, unknown>) =>
+          row.clientIp === '[redacted]' && !('userAgent' in row),
+      ),
+    ).toBe(true);
+    // Stored rows still exist until the sweep; reads have already minimized them.
+    expect(
+      (
+        await db.query(`SELECT "clientIp" FROM ${schema}.request_logs LIMIT 1`)
+      )[0].clientIp,
+    ).toBe('192.0.2.123');
+    expect(
+      (await save(retained, { clientIp: 'retain', userAgent: 'retain' }))
+        .status,
+    ).toBe(409);
+    expect(
+      (await save(latest, { clientIp: 'retain', userAgent: 'retain' })).status,
+    ).toBe(409);
+    await privacy.scrub();
+    expect((await privacy.get(id)).historicalCleanup).toBe('complete');
+    expect(
+      Number(
+        (
+          await db.query(
+            `SELECT count(*) FROM ${schema}.request_logs WHERE "clientIp"<>'[redacted]' OR "userAgent" IS NOT NULL`,
+          )
+        )[0].count,
+      ),
+    ).toBe(0);
+    const noOp = await save(latest, { clientIp: 'omit', userAgent: 'omit' });
+    expect(noOp.status).toBe(200);
+    expect(((await noOp.json()) as LogPrivacyState).revision).toBe(
+      latest.revision,
+    );
+    const [pending] = await db.query(
+      `SELECT config FROM public.pending_config_updates WHERE "tenantId"=$1`,
+      [id],
+    );
+    expect(pending.config.config.logPrivacy).toEqual({
+      clientIp: 'omit',
+      userAgent: 'omit',
+    });
+    for (let tick = 0; tick < 10; tick++) await exports.cleanupExpired();
+    await expect(storage.download(object.object_key)).rejects.toMatchObject({
+      name: 'NoSuchKey',
+    });
+    const fresh = await exports.create(id, filter);
+    const redacted = required(await exports.claim());
+    expect(redacted.id).toBe(fresh.id);
+    await exports.process(redacted);
+    const download = await exports.download(id, fresh.id);
+    const clean = [];
+    for await (const chunk of download) clean.push(String(chunk));
+    expect(clean.join('')).not.toContain('192.0.2.123');
+    expect(clean.join('')).not.toContain('fixture-agent');
+  }, 30000);
+  it('keeps failed tenant cleanup fair and resumes durable progress with a new worker', async () => {
+    const [failing, healthy] = [randomUUID(), randomUUID()].sort();
+    for (const id of [failing, healthy]) {
+      await db.query(
+        `INSERT INTO public.tenants (id,name,email,"planId") VALUES ($1,'Cleanup fixture',$2,'free')`,
+        [id, `${id}@example.test`],
+      );
+      await new TenantProvisioningService(db).provisionTenant(id);
+      await db.query(
+        `INSERT INTO ${tenantSchema(id)}.request_logs (id,method,path,"statusCode","clientIp","userAgent",timestamp) VALUES (gen_random_uuid(),'GET','/cleanup',200,'192.0.2.99','old-agent',clock_timestamp())`,
+      );
+    }
+    await db.query(
+      `ALTER TABLE ${tenantSchema(failing)}.request_logs RENAME TO temporarily_unavailable`,
+    );
+    try {
+      await privacy.scrub();
+      expect((await privacy.get(healthy)).historicalCleanup).toBe('complete');
+      expect((await privacy.get(failing)).historicalCleanup).toBe('retrying');
+      expect(
+        (
+          await db.query(
+            `SELECT "clientIp","userAgent" FROM ${tenantSchema(healthy)}.request_logs`,
+          )
+        )[0],
+      ).toEqual({ clientIp: '[redacted]', userAgent: null });
+    } finally {
+      await db.query(
+        `ALTER TABLE ${tenantSchema(failing)}.temporarily_unavailable RENAME TO request_logs`,
+      );
+    }
+    const restarted = new LogPrivacyService(db, {} as ConfigPushService);
+    await restarted.scrub();
+    expect((await restarted.get(failing)).historicalCleanup).toBe('complete');
+    expect(
+      (
+        await db.query(
+          `SELECT "clientIp","userAgent" FROM ${tenantSchema(failing)}.request_logs`,
+        )
+      )[0],
+    ).toEqual({ clientIp: '[redacted]', userAgent: null });
+    await restarted.onModuleDestroy();
+  }, 15000);
+  it('serializes archive admission and privacy changes without foreign-key lock deadlock', async () => {
+    const id = randomUUID();
+    await db.query(
+      `INSERT INTO public.tenants (id,name,email,"planId") VALUES ($1,'Admission fixture',$2,'free')`,
+      [id, `${id}@example.test`],
+    );
+    await new TenantProvisioningService(db).provisionTenant(id);
+    await privacy.scrub();
+    const state = await privacy.get(id);
+    const admission = db.createQueryRunner();
+    await admission.connect();
+    await admission.startTransaction();
+    let change: Promise<unknown> | undefined;
+    try {
+      await admission.query(
+        `SET LOCAL statement_timeout='3s'; SET LOCAL lock_timeout='1s'`,
+      );
+      await admission.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+        `log-export:${id}`,
+      ]);
+      change = privacy
+        .save(id, {
+          expectedRevision: state.revision,
+          policy: { clientIp: 'retain', userAgent: 'retain' },
+        })
+        .catch((error) => error);
+      for (let attempt = 0; attempt < 50; attempt++) {
+        const [{ waiting }] = await db.query(
+          `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database())) AS waiting`,
+        );
+        if (waiting) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        if (attempt === 49)
+          throw new Error('Privacy save did not reach archive admission lock');
+      }
+      // INSERT's tenant FK takes KEY SHARE. The privacy writer must use NO KEY
+      // UPDATE so the admitted insert can finish and release the export lock.
+      const [job] = await admission.query(
+        `INSERT INTO public.log_export_jobs (tenant_id,filter,expires_at,privacy_policy,privacy_revision) SELECT id,$2,clock_timestamp()+INTERVAL '7 days',"logPrivacy","logPrivacyRevision" FROM public.tenants WHERE id=$1 RETURNING id`,
+        [id, JSON.stringify(filter)],
+      );
+      await admission.commitTransaction();
+      const saved = await change;
+      expect(saved).toMatchObject({
+        policy: { clientIp: 'retain', userAgent: 'retain' },
+      });
+      expect(
+        (
+          await db.query(
+            `SELECT status FROM public.log_export_jobs WHERE id=$1`,
+            [job.id],
+          )
+        )[0].status,
+      ).toBe('expired');
+    } finally {
+      if (admission.isTransactionActive) await admission.rollbackTransaction();
+      await change;
+      await admission.release();
+    }
+  }, 10000);
 });

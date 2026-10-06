@@ -45,7 +45,8 @@ export async function configureArchiveFixture({ adminUrl, tenant, headers }) {
                 responseTimeMs: 1,
                 requestId: 'receipt-runtime-late',
                 consumerId: 'legacy-principal-fixture',
-                clientIp: '',
+                clientIp: '192.0.2.123',
+                userAgent: 'legacy-private-agent',
                 timestamp: '2000-01-01T00:00:00Z',
                 receivedAt: '1999-01-01T00:00:00Z',
               },
@@ -155,6 +156,8 @@ export async function configureArchiveFixture({ adminUrl, tenant, headers }) {
         rows.every(
           (row) =>
             row.path === '/traffic' &&
+            row.clientIp === '[redacted]' &&
+            !('userAgent' in row) &&
             !('receivedAt' in row) &&
             !('export_cursor' in row),
         ),

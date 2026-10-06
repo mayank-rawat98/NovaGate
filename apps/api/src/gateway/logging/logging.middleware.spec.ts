@@ -1,3 +1,9 @@
+import {
+  logPrivacyPolicy,
+  redactRequestLog,
+  stricterLogPrivacy,
+  validateLogPrivacy,
+} from '@api-gateway/shared-types';
 import { EventEmitter } from 'node:events';
 import { Logger } from '@nestjs/common';
 import type { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
@@ -14,7 +20,10 @@ describe('HTTP response lifetime observation', () => {
     jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined),
   );
   afterEach(() => jest.restoreAllMocks());
-  function fixture(getTenantId: () => string | null = () => null) {
+  function fixture(
+    getTenantId: () => string | null = () => null,
+    getConfig = () => ({ logPrivacy: logPrivacyPolicy(undefined) }),
+  ) {
     const metrics = {
       incrementActiveConnections: jest.fn(),
       decrementActiveConnections: jest.fn(),
@@ -27,7 +36,7 @@ describe('HTTP response lifetime observation', () => {
       metrics as unknown as MetricsService,
       telemetry as unknown as GatewayTelemetryService,
       undefined,
-      { getTenantId } as GatewayConfigManagerService,
+      { getTenantId, getConfig } as unknown as GatewayConfigManagerService,
     );
     const req = {
       method: 'GET',
@@ -48,6 +57,80 @@ describe('HTTP response lifetime observation', () => {
     middleware.use(req, res, next);
     return { middleware, metrics, telemetry, req, res, next };
   }
+  it('defaults to omitted observation fields without altering security inputs', () => {
+    const f = fixture();
+    f.res.emit('finish');
+    const entry = f.telemetry.logRequest.mock.calls[0][0];
+    expect(entry.clientIp).toBe('[redacted]');
+    expect(entry).not.toHaveProperty('userAgent');
+    expect(f.req.ip).toBe('127.0.0.1');
+    expect(f.req.headers['user-agent']).toBe('private-agent');
+    const output = jest
+      .mocked(Logger.prototype.log)
+      .mock.calls.map((call) => call[0])
+      .join('');
+    expect(output).not.toContain('127.0.0.1');
+    expect(output).not.toContain('private-agent');
+  });
+  it('captures only explicitly retained bounded fields and tightens unfinished requests', () => {
+    let policy: { clientIp: 'retain' | 'omit'; userAgent: 'retain' | 'omit' } =
+      { clientIp: 'retain', userAgent: 'retain' };
+    const f = fixture(
+      () => 'tenant',
+      () => ({ logPrivacy: policy }),
+    );
+    f.res.emit('finish');
+    expect(f.telemetry.logRequest.mock.calls[0][0]).toMatchObject({
+      clientIp: '127.0.0.1',
+      userAgent: 'private-agent',
+    });
+    const running = fixture(
+      () => 'tenant',
+      () => ({ logPrivacy: policy }),
+    );
+    policy = { clientIp: 'omit', userAgent: 'omit' };
+    running.res.emit('finish');
+    expect(running.telemetry.logRequest.mock.calls[0][0]).toMatchObject({
+      clientIp: '[redacted]',
+    });
+    expect(running.telemetry.logRequest.mock.calls[0][0]).not.toHaveProperty(
+      'userAgent',
+    );
+  });
+  it.each([
+    undefined,
+    null,
+    [],
+    {},
+    { clientIp: 'retain', userAgent: 'invalid' },
+    { clientIp: 'retain', userAgent: 'retain', extra: true },
+  ])('fails closed for legacy or malformed privacy policies: %#', (value) => {
+    expect(logPrivacyPolicy(value)).toEqual({
+      clientIp: 'omit',
+      userAgent: 'omit',
+    });
+    expect(() => validateLogPrivacy(value)).toThrow();
+    const raw = {
+      clientIp: 'private-ip',
+      userAgent: 'private-agent',
+      consumerId: 'consumer',
+      path: '/safe',
+    };
+    expect(redactRequestLog(raw, value)).toEqual({
+      clientIp: '[redacted]',
+      consumerId: 'consumer',
+      path: '/safe',
+    });
+    expect(raw.clientIp).toBe('private-ip');
+  });
+  it('uses omission when either request-start or request-finish policy omits a field', () => {
+    expect(
+      stricterLogPrivacy(
+        { clientIp: 'retain', userAgent: 'omit' },
+        { clientIp: 'omit', userAgent: 'retain' },
+      ),
+    ).toEqual({ clientIp: 'omit', userAgent: 'omit' });
+  });
   it('does not label an arbitrary authenticated principal as a registered consumer', () => {
     const f = fixture();
     f.req.user = { id: 'external-user-fixture' };

@@ -63,7 +63,17 @@ integration(
         },
       });
       await db.initialize();
+      await db.query(
+        `CREATE TABLE IF NOT EXISTS public.tenants (id UUID PRIMARY KEY,name VARCHAR NOT NULL,email VARCHAR NOT NULL UNIQUE,"planId" VARCHAR NOT NULL,"logPrivacy" JSONB NOT NULL DEFAULT '{"clientIp":"omit","userAgent":"omit"}'::jsonb)`,
+      );
+      await db.query(
+        `ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS "logPrivacy" JSONB NOT NULL DEFAULT '{"clientIp":"omit","userAgent":"omit"}'::jsonb`,
+      );
       for (const tenant of tenants) {
+        await db.query(
+          `INSERT INTO public.tenants (id,name,email,"planId") VALUES ($1,'Analytics fixture',$2,'free')`,
+          [tenant, `${tenant}@example.test`],
+        );
         const s = tenantSchema(tenant);
         await db.query(`CREATE SCHEMA ${s}`);
         await db.query(
@@ -103,6 +113,9 @@ integration(
           await db.query(
             `DROP SCHEMA IF EXISTS ${tenantSchema(tenant)} CASCADE`,
           );
+        await db.query(`DELETE FROM public.tenants WHERE id=ANY($1::uuid[])`, [
+          tenants,
+        ]);
         await db.destroy();
       }
       if (previousSecret === undefined) delete process.env.PLATFORM_JWT_SECRET;
