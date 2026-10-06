@@ -347,6 +347,43 @@ RustFS archives contain all 95 records, including the late log. All three servic
 exit 0 within their shutdown grace, and only fixture-owned infrastructure is removed.
 Issue #69 remains open; successful browser reruns do not establish its root cause.
 
+## Consumer attribution correction — issue #76
+
+A regression reproduces arbitrary signed JWT subjects being copied into the UUID
+consumer column: gateway logging incorrectly emits the principal as `consumerId`,
+and actual PostgreSQL rejects the entire mixed batch. The red evidence is retained
+in `.local-work/issue76-attribution-red-gateway.log` and
+`issue76-attribution-red-ingestion.log`.
+
+The correction preserves authentication identity and captures separate registered
+consumer attribution at authentication time, for configured consumer keys and
+signed subjects matching a configured consumer. Unknown principals remain under
+the existing authentication policy without consumer attribution. Captured IDs
+remain stable through configuration replacement and are canonicalized before
+logging. Control-plane ingestion also normalizes legacy malformed attribution to
+unassigned records, preserving the batch and database-owned receipt behavior.
+
+Targeted green checks pass 16 gateway tests and 66 ingestion/control-plane tests,
+including actual modern/legacy PostgreSQL schemas. All five projects' lint/typecheck
+checks pass. The full regression run passes 1,163 tests (564 gateway, 489 admin,
+100 control plane, 10 dashboard), and all three backend applications build. The
+gateway/control-plane production images have been rebuilt on OrbStack. The packaged
+runtime passes mapped JWTs, unrelated signed principals and an authenticated legacy
+frame containing malformed consumer attribution. Consumer usage reports exactly
+21 requests (20 actual keys plus one mapped JWT), ten server errors and P95 12 ms
+matching PostgreSQL. The unrelated principal stays authenticated with an unassigned
+log; the legacy frame is retained and its forged receipt remains ignored.
+
+Retained metrics, three-format alerts and RustFS automation pass: local firing
+acceptance takes 59.771 seconds and two private archives contain all 97 persisted
+records. All services exit 0 within their shutdown grace; fixture resources are
+removed. Evidence: `issue76-attribution-green-gateway.log`,
+`issue76-attribution-green-ingestion.log`, `issue76-static.log`,
+`issue76-regression-tests.log`, `issue76-backend-builds.log`, `issue76-runtime.log`
+and the preserved `issue76-runtime-evidence.json` in `.local-work/`. No UI behavior
+changes; issue #74 browser evidence remains applicable. High-volume rollups/privacy
+and the full formal campaign remain pending.
+
 ## Remaining work
 
 ### Next: continue phase 4; retain hydration follow-up #69
@@ -362,8 +399,6 @@ Issue #69 remains open; successful browser reruns do not establish its root caus
 
 - Configurable external S3-compatible tenant destinations, webhook NDJSON and Datadog
   exporters, with private credentials, delivery history and redaction/retention controls.
-- Separate registered consumer attribution from arbitrary JWT/provider principals;
-  legacy malformed principal IDs must not cause UUID ingestion to reject whole log batches.
 - High-volume per-consumer rollups, idempotent ingestion/backfill, retention and
   explicit coverage indicators beyond the bounded persisted-log usage view.
 - Formal acceptance for tracing, two-second live metrics, 90-second actual alert delivery,

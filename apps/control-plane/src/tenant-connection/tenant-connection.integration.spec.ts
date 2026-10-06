@@ -199,6 +199,47 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
     else process.env.WS_PORT = previousPort;
   });
 
+  it('stores legacy principal batches on modern and legacy schemas without UUID conversion loss', async () => {
+    const ingestion = new LogIngestionService(ds);
+    const consumer = randomUUID();
+    const logs = [
+      'external-user-fixture',
+      consumer.toUpperCase(),
+      '',
+      undefined,
+    ].map((subject) => ({
+      id: randomUUID(),
+      consumerId: subject,
+      method: 'GET',
+      path: '/legacy-consumer-fixture',
+      statusCode: 200,
+      responseTimeMs: 5,
+      requestId: randomUUID(),
+      clientIp: '127.0.0.1',
+      timestamp: new Date().toISOString(),
+    }));
+    for (const tenant of [tenantId, secondId]) {
+      await expect(ingestion.ingestLogs(tenant, logs)).resolves.toBeUndefined();
+      const stored = await ds.query(
+        `SELECT id,"consumerId" FROM tenant_${tenant.replace(/-/g, '_')}.request_logs WHERE id=ANY($1::uuid[]) ORDER BY id`,
+        [logs.map((log) => log.id)],
+      );
+      expect(stored).toHaveLength(4);
+      expect(
+        stored.find((row: { id: string }) => row.id === logs[1].id).consumerId,
+      ).toBe(consumer);
+      expect(
+        stored.filter(
+          (row: { consumerId: string | null }) => row.consumerId === null,
+        ),
+      ).toHaveLength(3);
+      await ds.query(
+        `DELETE FROM tenant_${tenant.replace(/-/g, '_')}.request_logs WHERE id=ANY($1::uuid[])`,
+        [logs.map((log) => log.id)],
+      );
+    }
+    await ingestion.onModuleDestroy();
+  });
   it('loads persisted services and the database version at authentication', async () => {
     const { message } = await connect(apiKey);
     expect(message.payload.config.services[0]).toMatchObject({

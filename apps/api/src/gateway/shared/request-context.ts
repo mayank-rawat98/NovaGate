@@ -2,6 +2,8 @@ import type { Request, Response } from 'express';
 
 export interface AuthenticatedUser {
   id: string;
+  /** Captured registered consumer attribution at authentication time. */
+  consumerId?: string;
 }
 
 export interface RequestWithUser extends Request {

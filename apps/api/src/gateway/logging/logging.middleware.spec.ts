@@ -48,6 +48,25 @@ describe('HTTP response lifetime observation', () => {
     middleware.use(req, res, next);
     return { middleware, metrics, telemetry, req, res, next };
   }
+  it('does not label an arbitrary authenticated principal as a registered consumer', () => {
+    const f = fixture();
+    f.req.user = { id: 'external-user-fixture' };
+    Object.assign(f.res, { writableFinished: true });
+    f.res.emit('finish');
+    expect(f.telemetry.logRequest.mock.calls[0][0]).not.toHaveProperty(
+      'consumerId',
+    );
+    expect(f.req.user.id).toBe('external-user-fixture');
+  });
+  it('records captured consumer attribution while retaining the original authentication identity', () => {
+    const f = fixture();
+    const id = '56789012-1234-1234-1234-123456789abc';
+    f.req.user = { id: 'external-user-fixture', consumerId: id.toUpperCase() };
+    Object.assign(f.res, { writableFinished: true });
+    f.res.emit('finish');
+    expect(f.telemetry.logRequest.mock.calls[0][0].consumerId).toBe(id);
+    expect(f.req.user.id).toBe('external-user-fixture');
+  });
   it('reports only at completion and retains the original request tenant through replacement', () => {
     let tenant = 'original';
     const f = fixture(() => tenant);

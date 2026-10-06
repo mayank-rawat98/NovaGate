@@ -44,6 +44,7 @@ export async function configureArchiveFixture({ adminUrl, tenant, headers }) {
                 statusCode: 200,
                 responseTimeMs: 1,
                 requestId: 'receipt-runtime-late',
+                consumerId: 'legacy-principal-fixture',
                 clientIp: '',
                 timestamp: '2000-01-01T00:00:00Z',
                 receivedAt: '1999-01-01T00:00:00Z',
@@ -79,10 +80,15 @@ export async function configureArchiveFixture({ adminUrl, tenant, headers }) {
       );
       const late = (
         await db.query(
-          `SELECT timestamp,"receivedAt" FROM ${schema}.request_logs WHERE "requestId"='receipt-runtime-late'`,
+          `SELECT timestamp,"receivedAt","consumerId" FROM ${schema}.request_logs WHERE "requestId"='receipt-runtime-late'`,
         )
       ).rows[0];
       assert.equal(late.timestamp.toISOString(), '2000-01-01T00:00:00.000Z');
+      assert.equal(
+        late.consumerId,
+        null,
+        'Legacy unrelated principals must not reject receipt ingestion',
+      );
       assert.ok(late.receivedAt.getTime() > Date.now() - 150000);
       let jobs;
       await until(

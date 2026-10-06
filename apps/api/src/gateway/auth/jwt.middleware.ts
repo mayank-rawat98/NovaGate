@@ -1,3 +1,4 @@
+import { canonicalConsumerId } from '@api-gateway/shared-types';
 import { Injectable, Logger, NestMiddleware } from '@nestjs/common';
 import type { NextFunction, Request } from 'express';
 import { ConfigService } from '@nestjs/config';
@@ -56,7 +57,17 @@ export class JwtMiddleware implements NestMiddleware {
       const payload = jwt.verify(token, secret) as JwtPayload;
       const userId = payload.sub ?? payload.userId ?? payload.id;
       if (userId) {
-        req.user = { id: userId };
+        const candidate = canonicalConsumerId(userId);
+        const consumerId =
+          candidate &&
+          this.configManager
+            .getConfig()
+            ?.consumers?.some(
+              (consumer) => canonicalConsumerId(consumer.id) === candidate,
+            )
+            ? candidate
+            : undefined;
+        req.user = { id: userId, ...(consumerId ? { consumerId } : {}) };
       }
       next();
     } catch (error) {
@@ -76,7 +87,8 @@ export class JwtMiddleware implements NestMiddleware {
           .getConfig()
           ?.consumers.find((c) => c.keyHash === hash);
         if (consumer) {
-          req.user = { id: consumer.id };
+          const consumerId = canonicalConsumerId(consumer.id);
+          req.user = { id: consumer.id, ...(consumerId ? { consumerId } : {}) };
         }
         // Not a platform JWT and not a consumer key — could be a third-party OIDC
         // token. Pass through and let route plugins (oidc, hmac-auth, etc.) enforce auth.

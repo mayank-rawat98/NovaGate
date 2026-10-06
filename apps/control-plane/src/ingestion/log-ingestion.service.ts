@@ -16,6 +16,7 @@ import {
   HealthSnapshot,
   ErrorEvent,
   validateMetricPayload,
+  canonicalConsumerId,
   type MetricsSnapshot,
 } from '@api-gateway/shared-types';
 
@@ -142,7 +143,7 @@ export class LogIngestionService implements OnModuleInit, OnModuleDestroy {
         throw new Error('Invalid log entry');
       return {
         id: log.id,
-        consumerId: log.consumerId,
+        consumerId: canonicalConsumerId(log.consumerId),
         method: log.method,
         path: log.path,
         statusCode: log.statusCode,
