@@ -9,9 +9,14 @@ import {
   Body,
   Req,
   Res,
+  Header,
 } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { ConfigPushService } from '../config-push/config-push.service';
+import {
+  ConsumerAnalyticsService,
+  consumerIdentity,
+} from './consumer-analytics.service';
 import { tenantSchema } from '../tenants/tenant-schema';
 
 @Controller('tenants/:tenantId')
@@ -20,6 +25,7 @@ export class AnalyticsController {
     private readonly dataSource: DataSource,
     private readonly configPush: ConfigPushService,
     private readonly metricsStream: MetricsStreamService,
+    private readonly consumerAnalytics: ConsumerAnalyticsService,
   ) {}
 
   private async withSchema<T>(
@@ -28,12 +34,15 @@ export class AnalyticsController {
   ): Promise<T> {
     const schema = tenantSchema(tenantId);
     return this.dataSource.transaction(async (manager) => {
-      await manager.query(`SET LOCAL search_path TO ${schema}, public`);
+      await manager.query(
+        `SET LOCAL search_path TO ${schema}, public; SET LOCAL statement_timeout='3s'; SET LOCAL lock_timeout='1s'`,
+      );
       return fn(manager, schema);
     });
   }
 
   @Get('logs')
+  @Header('Cache-Control', 'no-store')
   async getLogs(
     @Param('tenantId') tenantId: string,
     @Query('from') from?: string,
@@ -43,6 +52,7 @@ export class AnalyticsController {
     @Query('consumerId') consumerId?: string,
     @Query('page') page = '1',
   ) {
+    if (consumerId !== undefined) consumerId = consumerIdentity(consumerId);
     return this.withSchema(tenantId, async (manager) => {
       const params: (string | number)[] = [];
       const conditions: string[] = [];
@@ -147,11 +157,40 @@ export class AnalyticsController {
     );
   }
 
+  @Get('consumers/:consumerId/stats')
+  @Header('Cache-Control', 'no-store')
+  getConsumerStats(
+    @Param('tenantId') tenantId: string,
+    @Param('consumerId') consumerId: string,
+    @Query('period') period = '24h',
+  ) {
+    return this.consumerAnalytics.get(tenantId, consumerId, period);
+  }
+
   @Get('metrics')
+  @Header('Cache-Control', 'no-store')
   async getMetrics(
     @Param('tenantId') tenantId: string,
     @Query('period') period = '24h',
+    @Query('consumerId') consumerId?: string,
   ) {
+    if (consumerId !== undefined) {
+      const usage = await this.consumerAnalytics.get(
+        tenantId,
+        consumerId,
+        period,
+      );
+      // Legacy metric snapshots have numeric latency fields. Empty consumer buckets
+      // carry zero rates; missing latency samples use 0. The stats API exposes null.
+      return usage.series.map((b) => ({
+        timestamp: b.timestamp,
+        rps: b.rps,
+        errorRate: b.errorRate,
+        p50Ms: b.p50Ms ?? 0,
+        p95Ms: b.p95Ms ?? 0,
+        p99Ms: b.p99Ms ?? 0,
+      }));
+    }
     return this.metricsStream.history(tenantId, period);
   }
 

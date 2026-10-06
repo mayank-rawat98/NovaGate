@@ -1,3 +1,4 @@
+import { ConsumerAnalyticsService } from '../proxy-config/consumer-analytics.service';
 import { MetricsStreamService } from '../proxy-config/metrics-stream.service';
 import { metricStreamConfiguration } from '../proxy-config/metrics-stream.configuration';
 import { TracesController } from '../proxy-config/traces.controller';
@@ -77,6 +78,7 @@ import { AlertsModule } from '../alerts/alerts.module';
     MigrationService,
     TracesService,
     MetricsStreamService,
+    ConsumerAnalyticsService,
   ],
 })
 export class AppModule {}

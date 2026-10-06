@@ -149,3 +149,12 @@ dialogs and workspace-keyed state cancel mutations when closed/switched; SWR lis
 stay at 30 seconds. The production browser verifier covers failed saves/revisions,
 input preservation, pause/resume, backlog, removal focus/Escape, job retry and
 disabled storage with desktop/mobile accessibility checks.
+
+Issue #74 adds ConsumerUsagePanel through shared consumer usage contracts and
+api-client. Hour/day/week presets report recorded-log counts, window-average RPS,
+server errors, interpolated latency and top paths. Keep missing latency distinct
+from zero, small nonzero rates visible, stale data labelled and workspace selection
+cleared on remount. Use the native dialog, keyboard interval inspection and
+30-second refresh; cancel admitted fetches on unmount. Browser checks must retain
+consumer CRUD/one-time keys and cover retry, empty/stale, mobile/desktop, focus and
+workspace changes. Do not present recorded-log figures as billing accounting.

@@ -78,3 +78,37 @@ export interface PendingConfigUpdateEntity {
   config: any;
   updatedAt: string;
 }
+
+/** Analytics over persisted request logs, not guaranteed gateway traffic metering. */
+export const CONSUMER_ANALYTICS_ROW_LIMIT = 100000;
+export type ConsumerAnalyticsPeriod = '1h' | '24h' | '7d';
+export interface ConsumerUsageCounts {
+  requests: number;
+  serverErrors: number;
+  errorRate: number;
+  rps: number;
+  latencySamples: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  p99Ms: number | null;
+}
+export interface ConsumerUsageBucket extends ConsumerUsageCounts {
+  timestamp: string;
+}
+export interface ConsumerUsagePath extends ConsumerUsageCounts {
+  method: string;
+  /** Query strings removed; paths longer than 512 characters grouped by prefix. */
+  path: string;
+}
+export interface ConsumerUsageStats extends ConsumerUsageCounts {
+  consumer: { id: string; name: string; revokedAt: string | null };
+  period: ConsumerAnalyticsPeriod;
+  from: string;
+  to: string;
+  generatedAt: string;
+  source: 'persisted_request_logs';
+  bucketSeconds: number;
+  rowLimit: number;
+  series: ConsumerUsageBucket[];
+  topPaths: ConsumerUsagePath[];
+}

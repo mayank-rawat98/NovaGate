@@ -290,6 +290,63 @@ preventing background polling from reaching the next fixture. The strict runtime
 gate remains enforced; this does not establish a fix for issue #69. External
 destinations, privacy controls and formal acceptance stay pending.
 
+## Per-consumer usage — issue #74
+
+Issue #74 adds tenant-scoped consumer usage APIs and a modern Consumers → Usage
+panel. It reports exact persisted-log request/server-error counts, window-average
+RPS, interpolated latency percentiles, gap-filled trends and ten method/path groups.
+Hour/day/week presets use half-open UTC request-time windows. Negative or missing
+latency is excluded from samples; empty intervals keep zero rates and null latency.
+Query strings are removed and long path labels are grouped by their 512-character
+prefix. Unknown/foreign consumers remain scoped, revoked history stays queryable,
+and hashes/credentials never appear in stats. Existing logs/metric history support
+consumer filters without changing unfiltered live metrics.
+
+Each query uses a repeatable snapshot and an admin-owned consumer/time/id index.
+Eight actual queries per admin process/two per tenant, three-second statements,
+one-second lock waits and bounded pool admission constrain work. The exact window
+limit is 100,000 logs; excess windows fail with recovery guidance instead of partial
+totals. At most 168 series buckets and ten paths bound responses. Shutdown rejects
+new work and drains admitted queries. High-volume rollups/backfill/coverage remain
+required; recorded logs do not establish billing or complete telemetry accounting.
+
+The accessible ivory/mint/indigo panel provides status/rate/latency cards, request
+trend, keyboard interval inspection, top paths, period selection, manual refresh,
+loading/empty/stale/retry feedback and workspace-safe selection. Native dialogs
+retain keyboard containment, Escape and focus restoration; list refresh stays at
+30 seconds and one-time key/CRUD workflows remain covered.
+
+Development verification: 1,157 retained tests (559 gateway, 489 admin API,
+99 control plane, 10 dashboard). Real PostgreSQL cases cover non-UTC sessions,
+microsecond UTC boundaries, exact percentiles/rates, tenant guards, revoked/empty
+consumers, the exact 100,000-row limit and a 100,001-row rejection, top-path bounds,
+actual slow-statement cancellation, lock timeouts and recovery. Admission/shutdown
+unit checks cover real owned promises and slot release. All five projects' static
+gates and four application builds pass. Production browser checks pass 42 cold
+loads under sixfold CPU throttling, followed by a final seven-load run, with zero
+runtime errors/accessibility findings. They cover desktop/mobile usage, exact
+keyboard interval inspection, failed/empty/stale recovery, tiny nonzero rates,
+workspace changes and retained key/CRUD flows. The first expanded fixture run
+failed on its tenant-ID bookkeeping assertion (zero runtime errors); the fixture
+now extracts the UUID from the tenant path segment correctly. Failure diagnostics
+remain in `.local-work/issue74-first-browser-failure/`; the runtime gate stays strict.
+
+Evidence: `.local-work/issue74-regression-tests.log`, `issue74-final-admin-tests.log`,
+`issue74-final-static.log`, `issue74-final-admin-ui-static.log`,
+`issue74-backend-builds.log`, `issue74-final-admin-build.log`,
+`issue74-final-browser.log`, `issue74-final-default-browser.log`,
+`issue74-final-copy-browser.log`,
+`issue74-six-pass-browser/` and `dashboard-verification/` (metadata, screenshots
+and traces). `.local-work/issue74-runtime.log` and
+`issue74-runtime-evidence.json` verify the packaged admin image on OrbStack: a real
+consumer key produces exactly 20 attributed requests, ten server errors, 60 buckets
+and P95 15.3 ms matching persisted durations. Session/workspace guards and filtered
+metric history pass. Retained live metrics and three-format alert firing/retry/
+recovery pass (local firing acceptance 60.103 seconds); two private automatic
+RustFS archives contain all 95 records, including the late log. All three services
+exit 0 within their shutdown grace, and only fixture-owned infrastructure is removed.
+Issue #69 remains open; successful browser reruns do not establish its root cause.
+
 ## Remaining work
 
 ### Next: continue phase 4; retain hydration follow-up #69
@@ -305,7 +362,10 @@ destinations, privacy controls and formal acceptance stay pending.
 
 - Configurable external S3-compatible tenant destinations, webhook NDJSON and Datadog
   exporters, with private credentials, delivery history and redaction/retention controls.
-- Per-consumer RPS/error/latency/top-path aggregates, tenant-scoped APIs and dashboard UX.
+- Separate registered consumer attribution from arbitrary JWT/provider principals;
+  legacy malformed principal IDs must not cause UUID ingestion to reject whole log batches.
+- High-volume per-consumer rollups, idempotent ingestion/backfill, retention and
+  explicit coverage indicators beyond the bounded persisted-log usage view.
 - Formal acceptance for tracing, two-second live metrics, 90-second actual alert delivery,
   private RustFS export and consumer analytics.
 

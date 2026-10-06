@@ -5,13 +5,21 @@ import useSWR from 'swr';
 import { toast } from 'sonner';
 import { WorkspaceDialog } from '../../../components/workspace-dialog';
 import { DataLoadNotice } from '../../../components/data-load-notice';
-import { Plus, X, Copy, Check, Pencil } from 'lucide-react';
+import {
+  Plus,
+  X,
+  Copy,
+  Check,
+  Pencil,
+  ChartNoAxesCombined,
+} from 'lucide-react';
 import {
   getConsumers,
   createConsumer,
   updateConsumer,
   deleteConsumer,
 } from '../../../lib/api-client';
+import { ConsumerUsagePanel } from '../../../components/consumer-usage-panel';
 import { useTenantId } from '../../../lib/auth';
 import type { Consumer } from '../../../lib/api-client';
 
@@ -41,7 +49,10 @@ function GroupBadges({ groups }: { groups?: string[] }) {
 
 export default function ConsumersPage() {
   const tenantId = useTenantId() ?? '';
+  return <ConsumersWorkspace key={tenantId} tenantId={tenantId} />;
+}
 
+function ConsumersWorkspace({ tenantId }: { tenantId: string }) {
   const {
     data: consumers,
     error: loadError,
@@ -52,6 +63,7 @@ export default function ConsumersPage() {
     { refreshInterval: 30000 },
   );
 
+  const [usageId, setUsageId] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelMode, setPanelMode] = useState<'create' | 'edit'>('create');
   const [editId, setEditId] = useState<string | null>(null);
@@ -241,6 +253,15 @@ export default function ConsumersPage() {
                       )}
                     </td>
                     <td className="px-4 py-3">
+                      <button
+                        type="button"
+                        onClick={() => setUsageId(consumer.id)}
+                        aria-label={`View usage for ${consumer.name}`}
+                        className="mb-1 flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+                      >
+                        <ChartNoAxesCombined className="h-4 w-4" />
+                        Usage
+                      </button>
                       {!revoked && (
                         <div className="flex items-center justify-end gap-1">
                           <button
@@ -287,6 +308,15 @@ export default function ConsumersPage() {
           </tbody>
         </table>
       </div>
+
+      {usageId && (
+        <ConsumerUsagePanel
+          key={`${tenantId}:${usageId}`}
+          tenantId={tenantId}
+          consumerId={usageId}
+          onClose={() => setUsageId(null)}
+        />
+      )}
 
       {/* Add / Edit Consumer slide-over */}
       {panelOpen && (

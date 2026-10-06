@@ -31,6 +31,8 @@ const tenant = randomUUID();
 const schema = `tenant_${tenant.replaceAll('-', '_')}`;
 const secret = 'metric-container-fixture-session-secret-32-characters';
 const apiKey = randomUUID();
+const usageConsumer = randomUUID();
+const usageConsumerKey = `gw_${tenant}_verification-only`;
 const headers = {
   Authorization: `Bearer ${jwt.sign({ sub: tenant }, secret, { expiresIn: '10m' })}`,
 };
@@ -172,6 +174,13 @@ try {
       'Metric fixture',
     ],
   );
+  await db.query(
+    `INSERT INTO ${schema}.consumers (id,name,"keyHash") VALUES ($1,'Runtime usage consumer',$2)`,
+    [
+      usageConsumer,
+      createHash('sha256').update(usageConsumerKey).digest('hex'),
+    ],
+  );
   upstream = createServer((request, response) => {
     request.resume();
     response.writeHead(request.url?.includes('/failure') ? 503 : 200);
@@ -291,7 +300,12 @@ try {
       Array.from({ length: 20 }, (_, index) =>
         fetch(
           `${gatewayUrl}/traffic/${index % 2 ? 'failure' : 'success'}?private=fixture`,
-          { headers: { 'x-private-marker': 'fixture-should-not-export' } },
+          {
+            headers: {
+              'x-private-marker': 'fixture-should-not-export',
+              authorization: `Bearer ${usageConsumerKey}`,
+            },
+          },
         ),
       ),
     );
@@ -370,6 +384,71 @@ try {
     bucket: 'runtime-archives',
     trafficRequests: 20 + alerts.healthyRequests,
   });
+  const usagePath = `${adminUrl}/tenants/${tenant}/consumers/${usageConsumer}/stats?period=1h`;
+  assert.equal((await fetch(usagePath)).status, 401);
+  assert.equal(
+    (
+      await fetch(
+        `${adminUrl}/tenants/${randomUUID()}/consumers/${usageConsumer}/stats`,
+        { headers },
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await fetch(
+        `${adminUrl}/tenants/${tenant}/consumers/${randomUUID()}/stats`,
+        { headers },
+      )
+    ).status,
+    404,
+  );
+  const usageResponse = await fetch(usagePath, { headers });
+  assert.equal(usageResponse.status, 200);
+  assert.equal(usageResponse.headers.get('cache-control'), 'no-store');
+  const usage = await usageResponse.json();
+  assert.equal(usage.source, 'persisted_request_logs');
+  assert.equal(usage.requests, 20);
+  assert.equal(usage.serverErrors, 10);
+  assert.equal(usage.errorRate, 0.5);
+  assert.equal(usage.rps, 20 / 3600);
+  assert.equal(usage.series.length, 60);
+  assert.equal(
+    usage.series.reduce((sum, b) => sum + b.requests, 0),
+    20,
+  );
+  const actualUsage = await db.query(
+    `SELECT COUNT(*)::integer AS requests,percentile_cont(0.95) WITHIN GROUP (ORDER BY "responseTimeMs") AS p95 FROM ${schema}.request_logs WHERE "consumerId"=$1 AND timestamp>=$2::timestamptz AND timestamp<$3::timestamptz`,
+    [usageConsumer, usage.from, usage.to],
+  );
+  assert.equal(actualUsage.rows[0].requests, 20);
+  assert.equal(usage.p95Ms, actualUsage.rows[0].p95);
+  assert.equal(usage.topPaths.length, 1);
+  assert.equal(usage.topPaths[0].path, '/traffic');
+  assert.equal(usage.topPaths[0].requests, 20);
+  assert.ok(!JSON.stringify(usage).includes(usageConsumerKey));
+  assert.ok(!JSON.stringify(usage).includes('keyHash'));
+  const consumerMetricsResponse = await fetch(
+    `${adminUrl}/tenants/${tenant}/metrics?period=1h&consumerId=${usageConsumer}`,
+    { headers },
+  );
+  assert.equal(consumerMetricsResponse.status, 200);
+  const consumerMetrics = await consumerMetricsResponse.json();
+  assert.equal(consumerMetrics.length, 60);
+  assert.ok(consumerMetrics.some((b) => b.rps > 0));
+  const consumerUsage = {
+    requests: usage.requests,
+    serverErrors: usage.serverErrors,
+    p95Ms: usage.p95Ms,
+    seriesBuckets: usage.series.length,
+    checks: [
+      'actual-consumer-key-attribution',
+      'authenticated-isolated-statistics',
+      'exact-persisted-UTC-counts-rates-percentiles',
+      'filtered-metrics-with-private-consumer-metadata',
+    ],
+  };
   const shutdown = [];
   for (const [name, role] of [
     [gateway, 'gateway'],
@@ -409,6 +488,7 @@ try {
         sample,
         alerts,
         archives,
+        consumerUsage,
         checks: [
           'production-gateway-control-plane-PostgreSQL-Redis-admin-SSE-within-two-seconds',
           'authenticated-workspace-isolation',
@@ -417,6 +497,7 @@ try {
           'production-lifecycle-shutdown-without-SIGKILL',
           'private-payload-free-aggregates',
           'automatic-receipt-window-RustFS-archives-with-late-log-and-private-downloads',
+          'authenticated-consumer-key-usage-through-production-gateway-and-persistence',
         ],
       },
       null,

@@ -79,6 +79,9 @@ export class MigrationService implements OnModuleInit {
           `CREATE INDEX IF NOT EXISTS request_logs_receipt_cursor ON ${schema}.request_logs ("receivedAt", id)`,
         );
         await manager.query(
+          `CREATE INDEX IF NOT EXISTS request_logs_consumer_time ON ${schema}.request_logs ("consumerId", timestamp DESC, id DESC) WHERE "consumerId" IS NOT NULL`,
+        );
+        await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "loadBalancing" VARCHAR NOT NULL DEFAULT 'weighted-round-robin' CHECK ("loadBalancing" IN ('weighted-round-robin', 'least-connections'))`,
         );
         await manager.query(

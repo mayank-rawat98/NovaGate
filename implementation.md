@@ -10,6 +10,7 @@ verification evidence and the remaining work at the bottom of that report.
 - Alert delivery/dashboard development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68) / [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), based on dev `653d7a00` / PR #67 foundations after metrics (PR #64) and tracing (PR #62). Phases 0–3 have substantial merged implementations and issue-level verification; formal phase acceptance is pending.
 - Phase 4 includes request lifecycle fixes, tracing, live metrics, manual RustFS archives and the enabled Alerts product: encrypted channels, rule CRUD, bounded evaluation, durable notification delivery and accessible dashboard controls. Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) was merged in PR #67.
 - Scheduled archives in [issue #72](https://github.com/mayank-rawat98/NovaGate/issues/72) extend RustFS with receipt-based automation and retry UX. Current verification passes 1,134 tests, all five projects’ lint/typecheck gates and four application builds. Browser checks pass 42 cold loads under sixfold CPU throttling plus a final seven-load run with zero runtime/accessibility findings. Fresh OrbStack images produce three private automatic archives containing all 94 persisted records, including an authenticated late log; local alert firing acceptance takes 59.111 seconds and all services shut down cleanly. Additional destinations/privacy controls remain pending.
+- Per-consumer usage in [issue #74](https://github.com/mayank-rawat98/NovaGate/issues/74) adds bounded tenant-scoped log-derived statistics, filtered metrics and an accessible usage panel. Current verification passes 1,157 tests, all five static gates, four application builds and 42 cold/CPU-throttled browser loads plus a final seven-load run with zero runtime/accessibility findings. Packaged OrbStack traffic verifies 20 requests attributed to a real consumer key, ten server errors and P95 matching PostgreSQL; retained alerts/metrics, private archives and clean shutdown pass. High-volume rollups/coverage and formal acceptance remain pending.
 - Alerting has 1,093 regression tests, static/application gates, production browser checks and fresh OrbStack runtime evidence for real firing/retry/recovery. External provider/inbox acceptance remains separate.
 - [Issue #69](https://github.com/mayank-rawat98/NovaGate/issues/69) tracks an intermittent browser hydration recovery. Subsequent cold-load/slow-CPU checks pass; no root cause/fix is established, so the follow-up stays open before formal release acceptance.
 - Phases 5–6 and the additional enterprise/operational requirements below remain open.
@@ -836,13 +837,16 @@ Remaining verification and follow-up:
 
 ### 4.5 Per-Consumer Analytics
 
-Currently analytics are per-tenant. Add the consumer dimension.
+`apps/admin-api/src/proxy-config/consumer-analytics.service.ts` and `analytics.controller.ts`:
 
-`apps/admin-api/src/analytics/analytics.controller.ts`:
-
-- Existing endpoints gain optional `?consumerId=` filter (already partially there in logs)
-- New: `GET /tenants/:id/consumers/:cid/stats` — rps, error rate, top paths, P95 latency for a specific consumer
-- Used by Developer Portal in Phase 5
+- Issue #74 implements `GET /tenants/:id/consumers/:cid/stats?period=1h|24h|7d`: persisted-log counts, window-average RPS, server-error rate, interpolated observed P50/P95/P99, gap-filled series and ten method/path groups.
+- Existing logs and non-streaming metric history accept `consumerId`; unfiltered history/live SSE keep their established behavior. Filtered legacy metric snapshots use numeric zero for missing latency; stats retain explicit nulls and sample counts. These are recorded-log figures, not billing or guaranteed traffic coverage.
+- Enforce tenant sessions, consumer existence/scoping, no-store reads and credential-free metadata. Revoked-consumer history remains queryable. UTC request windows are start-inclusive/end-exclusive; valid nonnegative durations determine latency separately from request/error totals.
+- One repeatable snapshot, consumer/time/id index, eight admitted queries per process/two per tenant, three-second statements and one-second lock waits. Cap at 100,000 rows, 168 buckets and ten bounded path labels. Reject excess windows with actionable recovery, rather than returning partial totals. Drain actual work on shutdown.
+- Consumers → Usage exposes hour/day/week presets, request trend with keyboard interval inspection, rate/error/latency cards, top paths, loading/empty/stale/retry states and native dialog focus/Escape. Remount workspace state to clear selections; retain 30-second refresh and typed shared contracts through api-client.
+- Verify real SQL/UTC boundaries, exact/interpolated values, tenant guards, empty/missing latency, revoked consumers, exact/excess row bounds, query/lock cancellation and admission recovery. Production browser checks cover mobile/desktop accessibility, keyboard controls, retry, workspace changes and existing key/CRUD behavior. Packaged OrbStack traffic verifies actual consumer-key attribution and persisted totals.
+- Follow-up attribution correctness: distinguish registered consumers from arbitrary JWT/provider principals at authentication time. Validate/canonicalize legacy consumer attribution before UUID ingestion so a non-UUID subject cannot reject an otherwise valid log batch. Preserve authentication identity and capture consumer attribution before configuration changes. Verify real gateway/ingestion behavior for registered keys, mapped JWTs and unrelated principals.
+- Remaining scalability work: durable per-consumer rollups with idempotent ingestion, bounded legacy backfill, mergeable histograms, retention and explicit coverage/late-data indicators. Benchmark larger windows and high-cardinality consumers before claiming high-volume analytics acceptance. Use these APIs in the phase 5 Developer Portal with scoped self-service authorization.
 
 ---
 
