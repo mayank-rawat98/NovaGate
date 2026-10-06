@@ -1,7 +1,9 @@
 # Tenant alerting — issue #65
 
-Implementation is in progress on the issue-linked branch. Do not register an
-unfinished alert feature in AppModule or describe it as delivered.
+AppModule registers AlertsModule. Startup migrations finish before the evaluator
+and delivery worker bootstrap. Channel creation and external delivery require
+dedicated operator encryption keys; rules without channels retain dashboard history.
+Development verification and formal production/provider acceptance are separate.
 
 Change shared contracts first. Alert rules and channel CRUD must use the existing
 bearer-session workspace guard and canonical tenant schemas. Reject unknown input,
@@ -56,8 +58,8 @@ Tenant/channel IDs, envelope version and key ID are authenticated as associated 
 Metadata edits preserve encrypted values; replacement credentials require a complete
 explicit write of the same channel type. Revisions prevent lost edits. Any channel
 edit/delete cancels queued/processing delivery rows and their public due work inside
-the same transaction; previous delivered history remains. Actual already-started
-network delivery still requires worker fencing and cancellation in the next steps.
+the same transaction; previous delivered history remains. The delivery worker fences and cancels obsolete active work; a receiver side effect
+already accepted cannot be undone.
 
 Operator settings (never tenant fields): ALERT_CHANNEL_KEYS is a JSON object mapping
 up to four key IDs to canonical base64-encoded 32-byte keys. ALERT_CHANNEL_ACTIVE_KEY
@@ -92,8 +94,7 @@ it acquires the tenant lock, then verify its token and read the current locked r
 the tenant transaction. Rule configuration updates invalidate the queue token. Avoid holding a queue row lock while waiting for a tenant
 lock: that reverses CRUD lock order and can deadlock.
 
-The generated AlertsController is attached only to AlertsModule; AppModule still
-omits the unfinished feature. Its real HTTP fixture installs the existing global
+AlertsController is attached to AlertsModule, which AppModule imports. Its real HTTP fixture installs the existing global
 TenantAuthGuard and verifies every route rejects missing/foreign sessions. DELETE
 requests require a JSON body containing only the current numeric revision. History
 returns at most 100 events from 30 days with at most 500 delivery summaries, excluding
@@ -120,10 +121,10 @@ in the same transaction. Idle cleanup also visits at most 64 public tenant IDs p
 minute using a UUID cursor; it shares storage admission, validates schemas, prevents
 overlap and continues after a tenant failure. Keep 30 days and at most 1,000 events
 per tenant, with delivery rows cascading away. Shutdown stops the timer and awaits
-actual evaluation and retention work. None of this enables the incomplete module in
-AppModule or proves the pending network delivery/UX/packaged acceptance checks.
+actual evaluation and retention work. Bootstrap ordering and end-to-end delivery
+are verified with the three-service production-container fixture.
 
-## Secure delivery implementation — 6 October 2026 (not enabled in AppModule)
+## Secure delivery implementation — 6 October 2026
 
 `AlertTransportService` now sends signed JSON webhook POSTs, plain-text Slack blocks
 and Mailtr API email requests. The local Mailtr dev contract was reviewed at
@@ -170,7 +171,36 @@ ID. SQL statements are bounded to three seconds, locks to one second; production
 pool admission is also bounded to three seconds with at most 20 connections.
 
 The bootstrap timer does not overlap batches. Shutdown stops admission/timers, aborts
-live requests and drains actual batch/watch work. The feature remains omitted from
-AppModule until dashboard, packaged-service acceptance and final issue #65 verification
-are complete. Migration runs before control-plane/worker deployment, including the
+live requests and drains actual batch/watch work. Migration runs before
+control-plane/worker deployment, including the
 idempotent addition of leaseStarted to existing delivery schedules.
+
+## Dashboard usage
+
+Open **Observability → Alerts**. Add a notification channel, then create a rule and
+select its channels. Rate thresholds are percentages in the form; latency uses
+milliseconds and throughput uses requests per second. Choose a 1–60 minute window
+and a minimum request count. Leaving the channels empty records dashboard history.
+
+Channel credentials are write-only: reads show only the destination origin or email
+recipient. Metadata edits keep saved credentials. To rotate a webhook URL/signing
+secret, choose **Replace saved credentials** and enter the complete new values.
+Secret inputs are masked, failed saves preserve input, and switching workspaces
+closes dialogs and clears unsaved credentials. Revision conflicts require a refresh
+before retrying. Deleting a channel removes it from rules while preserving history.
+
+**No data** means evidence is insufficient, stale or ambiguous; it never signals
+healthy recovery. The last notified firing state and cooldown remain visible.
+Disabled rules/channels and operator-unavailable delivery have separate feedback.
+Recent activity shows queued, sending, accepted, failed and cancelled deliveries,
+attempt counts and safe failure text. Accepted means the destination acknowledged
+the request; email inbox receipt is a separate provider outcome.
+
+Run `dashboard:ui-smoke` for production browser forms, mobile layouts, keyboard
+focus/Escape and axe WCAG A/AA checks. Run
+`@api-gateway/api:metrics-container-smoke` after rebuilding the gateway, admin and
+control-plane images with OrbStack. It uses disposable PostgreSQL/Redis and local
+receivers to check real measured traffic through firing, a five-second webhook
+retry, all three notification formats, healthy recovery and graceful shutdown.
+It records sanitized timings and image IDs in `.local-work/metrics-container-evidence.json`.
+No real Slack webhook, provider mailbox or production credential is used.

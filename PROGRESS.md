@@ -8,12 +8,10 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
-- Latest merged `dev` checkpoint: **`653d7a00`**, [PR #67](https://github.com/mayank-rawat98/NovaGate/pull/67), including alert storage/evaluation foundations and both roadmap documents.
-- Current issue-linked branch: **`65-feat-alert-delivery-and-dashboard`**, created from that dev checkpoint.
-- Current issue: [#65 — durable tenant alerting](https://github.com/mayank-rawat98/NovaGate/issues/65), still open.
-- Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) is closed. New transport/delivery work under #65 is on the issue-linked branch and unmerged; full alerting remains unfinished.
-- AlertsModule contains the controller/evaluator but is **not imported by AppModule**.
-  Its endpoints and workers therefore are not enabled in the normal application.
+- Alerting development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68), linked to [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), adds durable delivery and the Alerts dashboard.
+- Its issue-linked branch `65-feat-alert-delivery-and-dashboard` was created from `dev` at **653d7a00** / [PR #67](https://github.com/mayank-rawat98/NovaGate/pull/67), which merged the storage/evaluation foundations and roadmap documents. Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) is closed.
+- **AppModule imports AlertsModule**. Authenticated endpoints and workers start after migration; missing dedicated encryption keys disable channel creation/delivery.
+- [Issue #69](https://github.com/mayank-rawat98/NovaGate/issues/69) tracks one intermittent dashboard hydration recovery. Expanded subsequent browser checks pass, but a root cause/fix has not been established. It remains part of the remaining work and formal release acceptance.
 - Work and verification use OrbStack. Nothing here authorizes or represents a main deployment.
 
 ## Implemented and merged into dev
@@ -101,10 +99,11 @@ No whole phase or production release is declared complete by this report.
 - Reviewed Mailtr dev/reference safeguards and cached Medhank code in `examinator`;
   adapted relevant workflow/cache/runtime principles without copying credentials.
 
-## Issue #65: implemented on the current branch
+## Issue #65: alert delivery and dashboard checkpoint
 
-Storage/CRUD/evaluation foundations were merged in PR #67. Transport and delivery below
-are local branch implementation; this is not yet an enabled alert product.
+Storage/CRUD/evaluation foundations were merged in PR #67. Transport, delivery and
+the Alerts dashboard are enabled in the PR #68 checkpoint and verified locally.
+Formal provider/inbox and all-phase production acceptance remain separate.
 
 | Component            | What exists now                                                                                                                                                                |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -120,7 +119,7 @@ are local branch implementation; this is not yet an enabled alert product.
 | States/cooldowns     | Five-minute firing cooldown; verified healthy recovery creates resolution; missing reports preserve the last notified state. Empty channel selection means history only.       |
 | Retention/lifecycle  | 30-day/1,000-event limit, matching due-work cleanup, delivery cascades, bounded idle sweeps, non-overlapping timers and actual-work shutdown draining.                         |
 
-New on the current branch (6 October):
+Delivery implementation (6 October):
 
 - Signed webhook payloads with stable delivery IDs and documented HMAC headers;
   Slack plain-text blocks and Mailtr API email with HTML escaping.
@@ -133,6 +132,16 @@ New on the current branch (6 October):
   crash recovery, shutdown draining and bounded production database pool admission.
 - Real local receiver/replica/rollback/cancellation/timeout/pool-saturation regression
   fixtures. These do not use real Slack/email destinations or production secrets.
+
+The new ivory/mint/indigo Alerts workspace includes CSS clay art, searchable rule
+cards, percent/ms/RPS thresholds, minimum requests, channel selection and history-only
+rules. Channel forms mask write-only credentials, preserve input on failed saves,
+require explicit same-type credential replacement and clear unsaved data on workspace
+changes. Revision-aware deletion preserves history. Coverage, no-data, stale/paused
+evaluation, actual cooldown deadlines and delivery availability have distinct feedback.
+Recent activity exposes queued/sending/accepted/failed/cancelled states and finite attempts.
+The API returns display-safe notification capabilities and persisted last-notified/cooldown
+state; email API acceptance is distinguished from inbox receipt.
 
 Key implementation files are under [apps/admin-api/src/alerts](apps/admin-api/src/alerts)
 and [libs/shared-types/src/lib/alerts.ts](libs/shared-types/src/lib/alerts.ts).
@@ -152,14 +161,32 @@ services. All five projects pass lint and typecheck; all four application builds
 cache results for one test task and some static/build tasks. This is regression
 verification, not the formal all-phase acceptance campaign.
 
-**Current delivery branch (6 October):** the combined Nx regression run passes
-**1,092 tests** (559 gateway, 432 admin, 91 control-plane and 10 dashboard), with
-matching cache results reused for two unchanged test tasks. All five projects pass
-lint/typecheck and all four application builds pass; the final admin/shared recheck
-also passes after sender compatibility changes. Real local HTTP tests cover all
-three delivery formats, HMAC/redaction, safe DNS pinning, private/redirect/TLS denial,
-byte/deadline/admission bounds, crash/replica recovery, finite retries, live cancellation,
-transaction rollback, pool saturation and shutdown. These are not packaged acceptance.
+**Current alert branch (6 October):** the combined Nx regression run passes
+**1,093 tests** (559 gateway, 433 admin, 91 control-plane and 10 dashboard). All five
+projects pass lint/typecheck and all four application builds pass. Real local HTTP
+tests cover the three delivery formats, HMAC/redaction, DNS pinning, private/redirect/
+TLS denial, finite budgets, replica/crash recovery, live cancellation, transaction
+rollback, pool saturation and shutdown. Real PostgreSQL checks also verify public
+channel availability and exact persisted cooldown deadlines.
+
+Fresh OrbStack production images pass the complete gateway → control plane → PostgreSQL
+→ admin evaluator → local notification receiver chain. A firing notification is accepted
+in **59.166 seconds** after measured traffic begins; the webhook's first 503 retries
+after five seconds with the same delivery ID and exact signed body. All three channel
+formats receive both firing and healthy-recovery notifications (six accepted deliveries).
+Revision conflicts, redacted reads, encrypted storage, retained deletion history and
+empty due queues are verified through the actual HTTP/database interfaces. All three
+services exit **0** within the ten-second shutdown grace. The retained packaged
+HTTP/gRPC/WebSocket TLS/auth/config/streaming verifier also passes.
+
+Production dashboard browser checks cover the new forms, revision conflicts,
+secret replacement, missing delivery capability, stale/no-data/cooldown states,
+workspace changes, capacity limits, mobile layouts, keyboard navigation and axe WCAG
+A/AA checks alongside existing pages. One interim run reported React hydration
+recovery; URL/stack diagnostics and additional cold-load coverage were added for
+final verification. The follow-up cold-load and sixfold CPU-throttled runs pass;
+[issue #69](https://github.com/mayank-rawat98/NovaGate/issues/69) retains the unresolved
+root-cause investigation rather than treating green reruns as a fix.
 
 Current tests cover authenticated HTTP routes, credential redaction/encryption/tampering/
 rotation, tenant isolation, concurrent capacity/revision races, atomic rollback under a
@@ -167,7 +194,12 @@ forced database failure, stale/expired leases, cooldown/resolution/no-data and i
 
 Local evidence lives in ignored `.local-work` artifacts, including:
 
-- `issue65-delivery-all-tests-final.log` — 1,092 regression tests.
+- `issue65-ui-all-tests.log` — 1,093 regression tests.
+- `issue65-ui-all-static.log`, `issue65-ui-builds.log` — all-project static/application gates.
+- `issue65-ui-smoke-final-gate.log`, `issue65-ui-smoke-hydration.log`, `issue65-ui-smoke-slow-cpu.log` — browser/accessibility, cold-load and slow-device checks.
+- `metrics-container-evidence.json`, `issue65-alerts-container-smoke.log` — fresh image IDs, actual alert timings and production lifecycle.
+- `issue65-ui-transport-container.log` — retained packaged transport/authentication checks.
+- `issue65-delivery-all-tests-final.log` — earlier 1,092-test transport checkpoint.
 - `issue65-delivery-all-gates.log`, `issue65-delivery-gates-final.log` — application/static gates.
 - `checkpoint-tests.log`, `checkpoint-static.log`, `checkpoint-build.log` — combined checkpoint gates.
 - `issue65-aggregation-tests-recheck.log` — gateway interval foundations.
@@ -176,27 +208,22 @@ Local evidence lives in ignored `.local-work` artifacts, including:
 - `issue65-evaluator-timer-gates.log` — final admin lint/typecheck/build.
 - `issue63-pipeline-shutdown-verified.log` — merged packaged metrics pipeline/shutdown.
 
-Current transport/delivery tests verify actual local HTTP receivers for webhook, Slack
-and email payloads; real provider/inbox acceptance and packaged service/browser checks
-remain pending. The production images/browser evidence from #63 predates #65 and
-does not prove the alert feature.
+Current checks use disposable local receivers for webhook, Slack-format and Mailtr-format
+requests. Real provider deduplication and final inbox acceptance remain pending;
+ambiguous retries are at least once. They are part of later formal/provider acceptance.
 Formal phase exit criteria, comparative Kong benchmarks and production acceptance
 remain unverified. Include sanitized reproducible evidence in each eventual PR.
 
 ## Remaining work
 
-### Next: finish issue #65 / phase 4 alerting
+### Next: resolve dashboard hydration follow-up #69
 
-1. Build accessible Alerts UI for rules, channels, deliberate secret replacement,
-   delivery availability, coverage/no-data/cooldown explanations and recent history.
-2. Enable the module once delivery and UI work. Verify fresh production images,
-   end-to-end delivered alerts, replica/lease recovery, production desktop/mobile
-   browser/accessibility, shutdown and retained gateway/admin/control-plane/storage regressions.
-3. Verify provider acceptance/deduplication semantics without treating API acceptance
-   as final inbox receipt; document at-least-once delivery and receiver deduplication.
-4. Publish sanitized evidence, commit/push on the current issue-linked branch, open a
-   PR against dev with `Closes #65`, merge after verification and close the issue.
-   Continue later work through the same issue → dev branch → tested PR → merge convention.
+- Reproduce the intermittent server/session hydration recovery, identify the DOM/state
+  mismatch and fix its source. Keep strict browser error gates and record a regression
+  that demonstrates the failure before the fix. Successful reruns alone do not close it.
+- Continue later work through the issue → dev branch → tested PR → merge convention.
+- Provider/inbox acceptance and at-least-once receiver/provider deduplication remain
+  explicit formal acceptance requirements, not locally proven provider guarantees.
 
 ### Remaining phase 4 work
 

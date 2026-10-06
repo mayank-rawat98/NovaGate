@@ -98,7 +98,11 @@
           "preview"
         ],
         "options": {
-          "command": "node tools/dashboard-smoke.mjs"
+          "commands": [
+            "eslint tools/dashboard-smoke.mjs tools/alerts-dashboard-smoke.mjs",
+            "node tools/dashboard-smoke.mjs"
+          ],
+          "parallel": false
         }
       }
     }

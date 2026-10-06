@@ -13,6 +13,14 @@ import type {
   TraceListResponse,
   TraceDetailResponse,
   MetricsSnapshot,
+  AlertConfiguration,
+  AlertRule,
+  AlertChannel,
+  AlertEvent,
+  CreateAlertRuleDto,
+  UpdateAlertRuleDto,
+  CreateAlertChannelDto,
+  UpdateAlertChannelDto,
 } from '@api-gateway/shared-types';
 import { getToken, clearToken } from './auth';
 
@@ -435,6 +443,83 @@ export function getTraces(tenantId: string, params: TraceParams = {}) {
 export function getTrace(tenantId: string, traceId: string) {
   return request<TraceDetailResponse>(
     `/tenants/${tenantId}/traces/${encodeURIComponent(traceId)}`,
+  );
+}
+
+// ─── Tenant alerts ───────────────────────────────────────────────────────────
+export function getAlertConfiguration(tenantId: string) {
+  return request<AlertConfiguration>(`/tenants/${tenantId}/alerts`);
+}
+export function getAlertHistory(tenantId: string) {
+  return request<AlertEvent[]>(`/tenants/${tenantId}/alerts/history`);
+}
+export function createAlertRule(
+  tenantId: string,
+  dto: CreateAlertRuleDto,
+  signal?: AbortSignal,
+) {
+  return request<AlertRule>(`/tenants/${tenantId}/alerts/rules`, {
+    method: 'POST',
+    body: JSON.stringify(dto),
+    signal,
+  });
+}
+export function updateAlertRule(
+  tenantId: string,
+  id: string,
+  dto: UpdateAlertRuleDto,
+  signal?: AbortSignal,
+) {
+  return request<AlertRule>(`/tenants/${tenantId}/alerts/rules/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(dto),
+    signal,
+  });
+}
+export function deleteAlertRule(
+  tenantId: string,
+  id: string,
+  revision: number,
+  signal?: AbortSignal,
+) {
+  return request<{ success: true }>(`/tenants/${tenantId}/alerts/rules/${id}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ revision }),
+    signal,
+  });
+}
+export function createAlertChannel(
+  tenantId: string,
+  dto: CreateAlertChannelDto,
+  signal?: AbortSignal,
+) {
+  return request<AlertChannel>(`/tenants/${tenantId}/alerts/channels`, {
+    method: 'POST',
+    body: JSON.stringify(dto),
+    signal,
+  });
+}
+export function updateAlertChannel(
+  tenantId: string,
+  id: string,
+  dto: UpdateAlertChannelDto,
+  signal?: AbortSignal,
+) {
+  return request<AlertChannel>(`/tenants/${tenantId}/alerts/channels/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(dto),
+    signal,
+  });
+}
+export function deleteAlertChannel(
+  tenantId: string,
+  id: string,
+  revision: number,
+  signal?: AbortSignal,
+) {
+  return request<{ success: true }>(
+    `/tenants/${tenantId}/alerts/channels/${id}`,
+    { method: 'DELETE', body: JSON.stringify({ revision }), signal },
   );
 }
 

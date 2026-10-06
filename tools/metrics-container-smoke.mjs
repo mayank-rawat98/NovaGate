@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import pg from 'pg';
 import jwt from 'jsonwebtoken';
+import { startAlertFixture } from './alerts-container-fixture.mjs';
 
 // Production images, disposable infrastructure and fixture credentials only.
 const docker = (...args) =>
@@ -37,6 +38,7 @@ let networkCreated = false;
 let db;
 let upstream;
 let reader;
+let alertFixture;
 function run(name, image, env = [], ports = []) {
   const full = `${network}-${name}`;
   names.push(full);
@@ -180,6 +182,7 @@ try {
     `DATABASE_URL=postgres://metric_fixture:metric-fixture-only@${postgres}:5432/metric_fixture`,
     `REDIS_URL=redis://${redis}:6379`,
   ];
+  alertFixture = await startAlertFixture();
   const admin = run(
     'admin',
     images.admin,
@@ -187,6 +190,7 @@ try {
       ...common,
       `PLATFORM_JWT_SECRET=${secret}`,
       'OBJECT_STORAGE_ENABLED=false',
+      ...alertFixture.environment,
     ],
     [3001],
   );
@@ -194,6 +198,11 @@ try {
   await until(
     async () => (await fetch(`${adminUrl}/health`)).ok,
     'Production admin startup',
+  );
+  const alertConfiguration = await alertFixture.configure(
+    adminUrl,
+    headers,
+    tenant,
   );
   const plane = run(
     'plane',
@@ -313,6 +322,15 @@ try {
   } finally {
     reconnect.abort();
   }
+  const alerts = await alertFixture.verify({
+    configuration: alertConfiguration,
+    gatewayUrl,
+    db,
+    schema,
+    tenant,
+    until,
+    trafficStartedAt: receivedAt,
+  });
   const shutdown = [];
   for (const [name, role] of [
     [gateway, 'gateway'],
@@ -350,6 +368,7 @@ try {
         trafficRequests: 20,
         shutdown,
         sample,
+        alerts,
         checks: [
           'production-gateway-control-plane-PostgreSQL-Redis-admin-SSE-within-two-seconds',
           'authenticated-workspace-isolation',
@@ -392,5 +411,6 @@ try {
   }
   upstream?.closeAllConnections();
   if (upstream) await new Promise((done) => upstream.close(done));
+  await alertFixture?.close();
   if (networkCreated) docker('network', 'rm', network);
 }

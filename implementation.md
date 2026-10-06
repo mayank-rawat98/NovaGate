@@ -7,16 +7,10 @@ Each phase builds on the previous. Track implementation, regression verification
 See [PROGRESS.md](PROGRESS.md) for the consolidated record of completed work,
 verification evidence and the remaining work at the bottom of that report.
 
-- Latest merged development checkpoint: PR #67, commit `653d7a00`, recording alert
-  storage/evaluation foundations after metrics (PR #64) and tracing (PR #62). Phases 0–3 have substantial merged
-  implementations and issue-level verification; formal phase acceptance is pending.
-- Phase 4 has merged request lifecycle fixes, tracing, live metrics and manual RustFS
-  archives. Alerting foundations are recorded in [checkpoint issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66); full delivery remains under
-  [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65).
-- The foundation checkpoint contains verified storage, CRUD, evaluation and retention.
-  Its module is absent from AppModule, so these alert APIs/workers
-  are not enabled in the normal application. Transport and durable delivery are now locally implemented on
-  `65-feat-alert-delivery-and-dashboard`; UI and packaged acceptance remain to build.
+- Alert delivery/dashboard development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68) / [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), based on dev `653d7a00` / PR #67 foundations after metrics (PR #64) and tracing (PR #62). Phases 0–3 have substantial merged implementations and issue-level verification; formal phase acceptance is pending.
+- Phase 4 includes request lifecycle fixes, tracing, live metrics, manual RustFS archives and the enabled Alerts product: encrypted channels, rule CRUD, bounded evaluation, durable notification delivery and accessible dashboard controls. Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) was merged in PR #67.
+- Alerting has 1,093 regression tests, static/application gates, production browser checks and fresh OrbStack runtime evidence for real firing/retry/recovery. External provider/inbox acceptance remains separate.
+- [Issue #69](https://github.com/mayank-rawat98/NovaGate/issues/69) tracks an intermittent browser hydration recovery. Subsequent cold-load/slow-CPU checks pass; no root cause/fix is established, so the follow-up stays open before formal release acceptance.
 - Phases 5–6 and the additional enterprise/operational requirements below remain open.
   Exit checkboxes stay unchecked until the requested formal acceptance campaign.
 - CI runs only as the verification dependency of deployment on a push to `main`.
@@ -72,7 +66,7 @@ The code contains substantial work for phases 0–3, but file presence does not 
 | 1     | Plugin contracts, runner, registry, thirteen first-party plugins, dashboard route plugin forms | Plugin aggregate registration and fail-closed name resolution repaired in issue #27, verified through the real Nest module; broader runtime plugin acceptance remains                                                                                                                                       |
 | 2     | OIDC, client credentials, HMAC, ACL, mTLS implementations and unit tests                       | Verify real providers and TLS handshakes; Tenant-bound REST authorization and groups repaired in #27; provider isolation/bounds verified in #47 and native/proxy mTLS plus live trust rotation in #49. Bounded Stripe/GitHub webhook HMAC verified in #51; external Auth0 and final phase acceptance remain |
 | 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                      | Native gRPC/WebSocket checks exist (#41/#43), bounded AST GraphQL policies are verified (#53), and issue #55 hardens HTTP/2 lifecycle, limits and health-compatible fallback; issue #57 adds verified least-connections; formal protocol acceptance remains                                                 |
-| 4     | RustFS archives (#37), distributed traces (#61), live HTTP metrics (#63)                       | Alert delivery/history, scheduled/external exports, additional privacy controls, consumer aggregates and formal acceptance remain                                                                                                                                                                           |
+| 4     | RustFS archives (#37), traces (#61), live HTTP metrics (#63), alert delivery/dashboard (#65)   | Scheduled/external exports, privacy controls, consumer aggregates, hydration follow-up (#69) and formal acceptance remain                                                                                                                                                                                   |
 | 5     | Existing REST configuration primitives                                                         | Declarative reconciliation, CLI, portal, Terraform, plugin SDK and third-party loading remain to implement                                                                                                                                                                                                  |
 | 6     | No verified implementations                                                                    | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                                                                   |
 
@@ -743,8 +737,8 @@ phase criterion again during formal acceptance.
 
 ### 4.3 Alerting
 
-**In progress under issue #65; foundations merged in PR #67, delivery changes local,
-not enabled in AppModule.** Canonical public
+**Implemented in the PR #68 / issue #65 development checkpoint; foundations merged
+in PR #67. AppModule enables AlertsModule.** Canonical public
 contracts live in `libs/shared-types/src/lib/alerts.ts`. They support all four metrics,
 all four comparisons (`>`, `<`, `>=`, `<=`), request minimums, selected channel IDs,
 revisions, evaluation state and redacted delivery history. Secret credentials appear
@@ -791,14 +785,33 @@ New local transport/delivery implementation (6 October 2026):
   retries after ambiguous acceptance are at least once. No native SMTP transport
   is claimed.
 
-Still required before completing issue #65:
+The Alerts dashboard is implemented with accessible rule/channel CRUD, deliberate
+credential replacement, delivery availability, searchable conditions and redacted
+recent history. Rate thresholds are displayed as percentages; latency/RPS have explicit
+units. Coverage, no-data, stale/paused evaluation, last-notified state and actual cooldown
+deadlines remain distinct. Native dialogs preserve focus/Escape, failures retain input,
+and workspace changes clear unsaved secrets. Revision conflicts and capacity limits
+have explicit feedback.
 
-- Accessible Alerts dashboard: rule/channel CRUD, deliberate credential replacement,
-  disabled-delivery explanations, coverage/no-data/cooldown status and recent history.
-- Enable AlertsModule only after the feature works; verify real local delivery, replica
-  races, restored leases, packaged services and production desktop/mobile browser UX.
-- Run retained regressions, document evidence, commit/push, open a dev PR with
-  `Closes #65`, merge and close the issue. Do not deploy to main as part of this work.
+Development verification: 1,093 regression tests, all five projects' lint/typecheck
+and four application builds; production desktop/mobile form and accessibility checks;
+fresh OrbStack images delivering actual gateway-triggered firing and recovery events
+to local webhook/Slack-format/Mailtr-format receivers. The first firing acceptance
+takes 59.166 seconds in this fixture; webhook 503 retries after five seconds with the
+same signed body/delivery ID. Six notifications are accepted, queues drain, deletion
+preserves history and all services shut down with exit 0. Retained packaged HTTP/gRPC/
+WebSocket TLS/auth/config/streaming checks pass.
+
+Remaining verification and follow-up:
+
+- [Issue #69](https://github.com/mayank-rawat98/NovaGate/issues/69) must investigate
+  intermittent hydration recovery. URL/stack diagnostics, all-page cold loads, three
+  Alerts cold loads and sixfold CPU-throttled browser checks now pass; these results
+  do not establish a root cause/fix. Preserve the strict runtime-error gate.
+- Formal provider/inbox acceptance and deduplication remain part of the later acceptance
+  campaign; local API acknowledgement does not prove external delivery guarantees.
+- Continue later work through issue-linked dev branches and PRs with `Closes #<issue>`.
+  Do not deploy to main as part of this development work.
 
 ---
 
@@ -1251,8 +1264,25 @@ and `issue65-delivery-gates-final.log`. This includes actual local receivers, du
 lease starts, finite retries, expired events, live configuration/lease cancellation,
 crash/finalization rollback recovery, saturated pool admission and shutdown.
 
-Transport and durable delivery now have real local receiver/replica/retry/crash/
-cancellation/rollback tests. No external Slack/email provider delivery was exercised.
-Alerts UI, module enablement, fresh production images, runtime/browser regressions
-and the full feature's dev PR/merge remain outstanding under #65. Existing
-issue #63 image and browser results prove the metrics checkpoint, not alert delivery.
+The enabled PR #68 checkpoint adds the Alerts dashboard, display-safe notification
+capabilities, persisted cooldown/last-notified state and 1,093 passing regression tests
+(559 gateway, 433 admin, 91 control-plane, 10 dashboard). All-project lint/typecheck
+and application builds pass. Production browser/accessibility checks cover CRUD,
+revision conflicts, credential replacement, workspace clearing, delivery states and
+mobile/keyboard behavior. Follow-up cold-load and slow-CPU runs pass; issue #69
+tracks the unexplained interim hydration recovery for investigation before release.
+
+Fresh production images exercise actual gateway completions through control-plane
+storage, evaluator and local webhook/Slack-format/Mailtr-format receivers. Firing
+acceptance takes 59.166 seconds; a webhook 503 retries after five seconds with the same
+ID/body, and all three channels receive firing and healthy recovery. Six deliveries
+are accepted, due queues drain, history survives deletion and all three services exit
+0 during graceful shutdown. The retained HTTP/gRPC/WebSocket TLS/auth/config/streaming
+verifier passes. Evidence: `.local-work/issue65-ui-all-tests.log`, `issue65-ui-all-static.log`,
+`issue65-ui-builds.log`, `issue65-ui-smoke-final-gate.log`, `issue65-ui-smoke-hydration.log`,
+`issue65-ui-smoke-slow-cpu.log`, `metrics-container-evidence.json`,
+`issue65-alerts-container-smoke.log` and `issue65-ui-transport-container.log`.
+
+No real Slack webhook/provider mailbox was used. Formal provider/inbox/deduplication
+acceptance, remaining phase 4 exports/analytics, phases 5–6, enterprise requirements
+and comparative/formal all-phase acceptance remain outstanding.

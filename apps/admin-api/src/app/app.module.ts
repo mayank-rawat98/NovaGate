@@ -27,6 +27,7 @@ import { AuthController } from '../auth/auth.controller';
 import { AuthService } from '../auth/auth.service';
 import { EmailService } from '../email/email.service';
 import { MigrationService } from '../database/migration.service';
+import { AlertsModule } from '../alerts/alerts.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { MigrationService } from '../database/migration.service';
       }),
     }),
     LogExportModule,
+    AlertsModule,
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
