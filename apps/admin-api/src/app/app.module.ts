@@ -1,3 +1,5 @@
+import { LogPrivacyController } from '../log-privacy/log-privacy.controller';
+import { LogPrivacyService } from '../log-privacy/log-privacy.service';
 import { ConsumerAnalyticsService } from '../proxy-config/consumer-analytics.service';
 import { MetricsStreamService } from '../proxy-config/metrics-stream.service';
 import { metricStreamConfiguration } from '../proxy-config/metrics-stream.configuration';
@@ -59,6 +61,7 @@ import { AlertsModule } from '../alerts/alerts.module';
     TypeOrmModule.forFeature([Tenant, ApiKey, PendingConfigUpdate]),
   ],
   controllers: [
+    LogPrivacyController,
     HealthController,
     AuthController,
     TenantsController,
@@ -75,6 +78,7 @@ import { AlertsModule } from '../alerts/alerts.module';
     TenantsService,
     TenantProvisioningService,
     ConfigPushService,
+    LogPrivacyService,
     MigrationService,
     TracesService,
     MetricsStreamService,

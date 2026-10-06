@@ -377,6 +377,31 @@ and correction or an evidence-supported disposition are established.
 
 Browser API calls default to the dashboard's same-origin `/api` rewrite. `NEXT_PUBLIC_ADMIN_API_URL` optionally selects another browser API origin at build time. Set it to `/` for a same-origin verification build when a local production env file already defines an override. `ADMIN_API_URL` selects the server-side rewrite destination. Both settings participate in the Nx build cache key. These fixture checks complement integration tests; they do not establish production or final phase acceptance.
 
+### Tenant log privacy
+
+Settings → **Log privacy** controls client IP and user-agent retention. Both are
+omitted by default. Security rules and authentication still receive the original
+request; consumer IDs, request/trace correlation, route patterns and timings remain
+available. Explicit retention applies to future observations and cannot recover erased
+values. Updated gateways enforce the policy in their local JSON output and telemetry;
+the collector also enforces the saved policy for older gateway frames.
+
+Saving requires the displayed revision. On a conflict, reload the current revision,
+review your retained selections and retry. Changes expire existing archives and start
+private object cleanup; create new archives when needed. Omitted fields disappear from
+log views immediately, then a resumable background sweep erases historical values.
+Wait for cleanup to finish before retaining a previously omitted field. Pending or
+retrying cleanup and unconfirmed gateway updates are shown in Settings. Downloaded
+copies and older gateway output cannot be recalled.
+
+Deploy the admin schema upgrade before the new collector. Legacy archives without a
+proven privacy revision expire during upgrade. New downloads require the current
+revision; in-progress downloads recheck eligibility every second, with bounded query
+waits and a two-minute deadline. Client disconnect and shutdown cancel owned streams.
+Storage outages defer physical object removal while API revocation stays effective.
+This controls two known fields; broader sensitive-field rules and raw-log age retention
+remain roadmap work. Archive TTL remains the operator's existing setting below.
+
 ### Private log archives with RustFS
 
 Settings → **Log archives** queues a private NDJSON copy of a tenant's request logs. Choose a UTC range of up to 31 days, optionally a minimum response status or literal path prefix, then download the completed archive. The API also accepts a consumer filter. Failed reads and downloads offer recovery feedback. The dashboard lists the latest 50 jobs and refreshes every 30 seconds.

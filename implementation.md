@@ -12,6 +12,7 @@ verification evidence and the remaining work at the bottom of that report.
 - Scheduled archives in [issue #72](https://github.com/mayank-rawat98/NovaGate/issues/72) extend RustFS with receipt-based automation and retry UX. Current verification passes 1,134 tests, all five projects’ lint/typecheck gates and four application builds. Browser checks pass 42 cold loads under sixfold CPU throttling plus a final seven-load run with zero runtime/accessibility findings. Fresh OrbStack images produce three private automatic archives containing all 94 persisted records, including an authenticated late log; local alert firing acceptance takes 59.111 seconds and all services shut down cleanly. Additional destinations/privacy controls remain pending.
 - Per-consumer usage in [issue #74](https://github.com/mayank-rawat98/NovaGate/issues/74) adds bounded tenant-scoped log-derived statistics, filtered metrics and an accessible usage panel. Current verification passes 1,157 tests, all five static gates, four application builds and 42 cold/CPU-throttled browser loads plus a final seven-load run with zero runtime/accessibility findings. Packaged OrbStack traffic verifies 20 requests attributed to a real consumer key, ten server errors and P95 matching PostgreSQL; retained alerts/metrics, private archives and clean shutdown pass. High-volume rollups/coverage and formal acceptance remain pending.
 - [Issue #76](https://github.com/mayank-rawat98/NovaGate/issues/76) reproduces and corrects unrelated authentication principals rejecting consumer UUID log ingestion. Separate captured consumer attribution and legacy normalization pass 1,163 retained tests, five static gates, three backend builds and actual packaged OrbStack key/JWT/legacy-frame checks. Consumer totals match PostgreSQL; metrics/alerts, 97 private archived records and clean shutdown also pass.
+- [Issue #78](https://github.com/mayank-rawat98/NovaGate/issues/78) / [PR #79](https://github.com/mayank-rawat98/NovaGate/pull/79) adds tenant request-log privacy: conservative omitted IP/user-agent defaults, revision-aware Settings, gateway/collector enforcement, historical erasure, immutable archive privacy snapshots and archive revocation. Verification passes 1,183 tests, all five static gates, four builds, 42 cold/CPU-throttled browser loads and actual packaged policy ACK/erasure/revocation alongside metrics/alerts/RustFS. Age-based raw-log retention, broader configurable sensitive-field rules and external destination credentials/delivery remain pending.
 - Alerting has 1,093 regression tests, static/application gates, production browser checks and fresh OrbStack runtime evidence for real firing/retry/recovery. External provider/inbox acceptance remains separate.
 - [Issue #69](https://github.com/mayank-rawat98/NovaGate/issues/69) tracks an intermittent browser hydration recovery. Subsequent cold-load/slow-CPU checks pass; no root cause/fix is established, so the follow-up stays open before formal release acceptance.
 - Phases 5–6 and the additional enterprise/operational requirements below remain open.
@@ -27,7 +28,7 @@ The workspace now has responsive grouped navigation, an ivory/mint/indigo palett
 
 RustFS 1.0.1 is pinned by digest in verification/production Compose. Production storage is opt-in with private networking and separate credentials. Tenant session routes create/list durable jobs and stream authorized NDJSON downloads. Workers coordinate replicas with row/tenant locks, fenced leases, bounded keyset reads under a repeatable snapshot, size/record/deadline limits, three attempts and expiry cleanup of objects/multipart uploads. Settings includes accessible archive filters, states and download recovery. Real PostgreSQL/RustFS checks cover tenancy, anonymous denial, streaming/multipart operations, snapshot pagination, failed work and lease recovery; a packaged OrbStack admin container verifies automatic processing. CI runs storage integration and browser checks.
 
-This implements manual private archives, not all phase 4 criteria. Per-tenant external destination configuration, webhook/Datadog exporters, privacy/redaction controls, distributed storage and documented restore drills still require implementation and acceptance evidence. Issue #72 implements scheduling for private RustFS archives; formal phase acceptance remains pending.
+This implements manual private archives, not all phase 4 criteria. Per-tenant external destination configuration, webhook/Datadog exporters, broader sensitive-field rules, age-based raw-log retention, distributed storage and documented restore drills still require implementation and acceptance evidence. Issue #78 implements IP/user-agent privacy controls and historical erasure. Issue #72 implements scheduling for private RustFS archives; formal phase acceptance remains pending.
 
 ## Streaming gRPC implementation — issue #41
 
@@ -69,7 +70,7 @@ The code contains substantial work for phases 0–3, but file presence does not 
 | 1     | Plugin contracts, runner, registry, thirteen first-party plugins, dashboard route plugin forms | Plugin aggregate registration and fail-closed name resolution repaired in issue #27, verified through the real Nest module; broader runtime plugin acceptance remains                                                                                                                                       |
 | 2     | OIDC, client credentials, HMAC, ACL, mTLS implementations and unit tests                       | Verify real providers and TLS handshakes; Tenant-bound REST authorization and groups repaired in #27; provider isolation/bounds verified in #47 and native/proxy mTLS plus live trust rotation in #49. Bounded Stripe/GitHub webhook HMAC verified in #51; external Auth0 and final phase acceptance remain |
 | 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                      | Native gRPC/WebSocket checks exist (#41/#43), bounded AST GraphQL policies are verified (#53), and issue #55 hardens HTTP/2 lifecycle, limits and health-compatible fallback; issue #57 adds verified least-connections; formal protocol acceptance remains                                                 |
-| 4     | RustFS archives (#37), traces (#61), live HTTP metrics (#63), alert delivery/dashboard (#65)   | Scheduled/external exports, privacy controls, consumer aggregates, hydration follow-up (#69) and formal acceptance remain                                                                                                                                                                                   |
+| 4     | RustFS archives (#37), traces (#61), live HTTP metrics (#63), alert delivery/dashboard (#65)   | External exports, broader sensitive-field rules/raw-log retention, scalable consumer rollups, hydration follow-up (#69) and formal acceptance remain                                                                                                                                                        |
 | 5     | Existing REST configuration primitives                                                         | Declarative reconciliation, CLI, portal, Terraform, plugin SDK and third-party loading remain to implement                                                                                                                                                                                                  |
 | 6     | No verified implementations                                                                    | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                                                                   |
 
@@ -830,9 +831,48 @@ Remaining verification and follow-up:
 - Issue #72 adds near-real-time minute and hourly UTC schedules with shared typed contracts, authenticated revision-aware CRUD, database receipt windows, accessible Settings controls and failed-job retry. Start at save time; pause retains the cursor, resume catches up, deletion preserves history, and updates affect waiting windows while queued filters remain immutable.
 - Coordinate scheduling and receipt ingestion through a tenant transaction lock. Window admission, private job insertion and cursor advancement must commit together, including empty-window advancement. Use bounded admission/statement/lock/pool limits, finite fair sweeps and a shared 20-job tenant pending bound; queue pressure must retain windows rather than skip them. Scheduling has no network phase, so the transaction itself owns the claim; archive upload retains the existing durable fenced leases.
 - Admin owns UTC normalization, receipt defaults/indexes and idempotent upgrade paths. Stamp receipt after ingestion admission/lock waits in the database, including JSON-record insertion. Keep receipt metadata out of public logs/NDJSON; preserve request timestamps and microsecond pagination independently of database session timezone. Verify legacy upgrades and live packaged scheduling, replica/CRUD races, rollback, backlog, pause/resume and retries.
-- Remaining destinations: tenant-configurable external S3-compatible buckets, webhook NDJSON and Datadog Logs API. Encrypt tenant credentials with a dedicated rotatable keyring and strict private reads; bound destination validation/egress, retries, delivery identity and retention. Add explicit field redaction/retention controls and per-destination delivery history before claiming complete phase 4.4 coverage.
+- Remaining destinations: tenant-configurable external S3-compatible buckets, webhook NDJSON and Datadog Logs API. Encrypt tenant credentials with a dedicated rotatable keyring and strict private reads; bound destination validation/egress, retries, delivery identity and retention. Add age-based raw-log retention, broader configurable sensitive-field rules and per-destination delivery history before claiming complete phase 4.4 coverage.
 
-`apps/dashboard` — Settings → Automatic log archives / Log archives sections.
+Issue #78 implements tenant request-log privacy through shared contracts and
+`apps/admin-api/src/log-privacy/`:
+
+- Default IP/user-agent policy is `omit`; explicitly retained fields remain available
+  for new logs. Redaction changes observation records, never authentication, ACL,
+  rate-limit or routing inputs. Fields are applied before gateway telemetry/local
+  JSON output; requests spanning policy updates use the stricter start/finish policy.
+  Missing/malformed/offline legacy configuration fails closed.
+- The collector reads persisted policy after taking the receipt lock and enforces it
+  even for older gateways. Public log reads take the same lock and project the current
+  policy before returning historical rows. Consumer/request/trace IDs, route patterns,
+  status and timings remain available; this is not arbitrary-field sanitization.
+- Tenant-session GET/PUT use strict input, UUID revisions, stale-write conflicts,
+  no-store reads and eight admitted operations. Policy, gateway version/outbox,
+  archive revocation and erasure progress commit together. Pending delivery is explicit;
+  a publication failure does not report a committed save as failed. Bounded fair outbox
+  retries run every five seconds, claim at most 16 due rows and retain snapshots until ACK.
+- Historical erasure processes 500 rows per transaction and at most eight pages per
+  two-second sweep, with three-second SQL/one-second lock limits, durable UUID cursors,
+  tenant revision locks compatible with archive foreign-key admission and fair retry status. Do not skip locked log rows. A failed
+  tenant cannot block healthy tenants; restarts resume persisted progress. Previously
+  omitted fields cannot be retained until their erasure completes, and removed values
+  cannot be reconstructed by relaxing the policy later.
+- Manual/scheduled archives snapshot privacy at admission. Any changed policy expires
+  prior jobs, clears leases and starts existing private prefix/multipart cleanup. Legacy
+  archives without a proven revision are expired on upgrade. Fenced workers cannot publish
+  revoked jobs. New downloads require a matching tenant privacy revision; active downloads
+  recheck eligibility every second with bounded SQL, a 120-second deadline, eight global/two
+  tenant admissions, client-disconnect cancellation and owned shutdown. Bytes already sent,
+  downloaded copies and older gateway output cannot be recalled. Physical cleanup retries
+  during storage outages; retention metadata remains visible until normal history expiry.
+- Deploy the admin schema upgrade before the updated collector. Updated gateway binaries
+  are needed for their local-output enforcement; collector enforcement still protects
+  persisted logs from older gateways. Object storage must be available for physical archive
+  removal; revocation blocks new application downloads regardless of storage availability.
+
+`apps/dashboard` — Settings → Log privacy / Automatic log archives / Log archives.
+Keep workspace-keyed state, native Escape/focus/Tab containment, visible labels,
+revision reload preserving selections, failed-save/read recovery and 30-second refresh.
+Show irreversible historical cleanup, gateway confirmation and archive recreation clearly.
 
 ---
 

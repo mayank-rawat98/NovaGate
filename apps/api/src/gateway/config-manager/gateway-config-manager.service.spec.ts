@@ -27,17 +27,26 @@ describe('Gateway configuration recovery', () => {
   });
   it('restores tenant identity and config from the offline cache', async () => {
     const redis = {
-      get: jest
-        .fn()
-        .mockResolvedValue(
-          JSON.stringify({ tenantId: 'tenant', config, version: 7 }),
-        ),
+      get: jest.fn().mockResolvedValue(
+        JSON.stringify({
+          tenantId: 'tenant',
+          config: {
+            ...config,
+            logPrivacy: { clientIp: 'retain', userAgent: 'omit' },
+          },
+          version: 7,
+        }),
+      ),
     };
     const service = new GatewayConfigManagerService(redis as unknown as Redis);
     await service.warmStart();
     expect(service.getTenantId()).toBe('tenant');
     expect(service.configVersion).toBe(7);
     expect(service.configSource).toBe('cache');
+    expect(service.getConfig()?.logPrivacy).toEqual({
+      clientIp: 'retain',
+      userAgent: 'omit',
+    });
   });
   it('rejects invalid versions', async () => {
     const service = new GatewayConfigManagerService({

@@ -17,6 +17,7 @@ import {
   ErrorEvent,
   validateMetricPayload,
   canonicalConsumerId,
+  redactRequestLog,
   type MetricsSnapshot,
 } from '@api-gateway/shared-types';
 
@@ -172,6 +173,14 @@ export class LogIngestionService implements OnModuleInit, OnModuleDestroy {
         `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
         [`log-receipt:${tenantId.toLowerCase()}`],
       );
+      const [tenant] = await manager.query(
+        `SELECT "logPrivacy" FROM public.tenants WHERE id=$1`,
+        [tenantId],
+      );
+      if (!tenant) throw new Error('Tenant not found');
+      const privateJson = JSON.stringify(
+        rows.map((row) => redactRequestLog(row, tenant.logPrivacy)),
+      );
       // Table record conversion ignores new optional correlation fields on legacy schemas.
       // Populate the database-owned receipt explicitly: INSERT SELECT does not
       // apply a column default to missing JSON fields converted to NULL.
@@ -179,7 +188,7 @@ export class LogIngestionService implements OnModuleInit, OnModuleDestroy {
         `INSERT INTO ${schema}.request_logs SELECT * FROM jsonb_populate_recordset(NULL::${schema}.request_logs,
           (SELECT jsonb_agg(value || jsonb_build_object('receivedAt', clock_timestamp())) FROM jsonb_array_elements($1::jsonb)))
           ON CONFLICT (id) DO NOTHING`,
-        [json],
+        [privateJson],
       );
     });
     this.activeLogs.add(work);

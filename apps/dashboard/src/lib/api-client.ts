@@ -9,6 +9,8 @@ import type {
   RequestLog,
   ErrorEvent,
   HealthSnapshot,
+  LogPrivacyState,
+  SaveLogPrivacy,
   LogExportFilter,
   LogExportJob,
   LogExportList,
@@ -667,4 +669,19 @@ export async function streamMetrics(
     await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
+}
+
+export function getLogPrivacy(tenantId: string): Promise<LogPrivacyState> {
+  return request(`/tenants/${tenantId}/log-privacy`);
+}
+export function saveLogPrivacy(
+  tenantId: string,
+  input: SaveLogPrivacy,
+  signal?: AbortSignal,
+): Promise<LogPrivacyState> {
+  return request(`/tenants/${tenantId}/log-privacy`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
 }

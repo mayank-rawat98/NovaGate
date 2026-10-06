@@ -158,3 +158,13 @@ cleared on remount. Use the native dialog, keyboard interval inspection and
 30-second refresh; cancel admitted fetches on unmount. Browser checks must retain
 consumer CRUD/one-time keys and cover retry, empty/stale, mobile/desktop, focus and
 workspace changes. Do not present recorded-log figures as billing accounting.
+
+Issue #78 adds Settings → Log privacy through shared policy/revision contracts and
+api-client. Default IP/user-agent omission must remain explicit; show irreversible
+historical cleanup, retained-field limits, gateway confirmation and archive recreation.
+Use workspace-keyed state and abort admitted mutations on close/switch. Preserve inputs
+on failures and revision reload; invalidate archive views after a changed save. Retain
+30-second SWR refresh, native focus/Escape/Tab behavior and labelled selects. Browser
+checks cover failed reads/saves/revisions, workspace resets, disabled object storage,
+mobile/desktop accessibility and keyboard controls. Broader field sanitization and
+raw-log age retention are not implemented by this panel.

@@ -337,8 +337,8 @@ export class LogExportSchedulerService
       let jobId: string | null = null;
       if (matched.length) {
         const [job]: Array<{ id: string }> = await manager.query(
-          `INSERT INTO public.log_export_jobs (tenant_id,kind,time_basis,schedule_id,window_from,window_to,filter,expires_at)
-           VALUES ($1,'scheduled','receipt',$2,$3,$4,$5,clock_timestamp()+$6*INTERVAL '1 day') RETURNING id`,
+          `INSERT INTO public.log_export_jobs (tenant_id,kind,time_basis,schedule_id,window_from,window_to,filter,expires_at,privacy_policy,privacy_revision)
+           SELECT $1,'scheduled','receipt',$2,$3,$4,$5,clock_timestamp()+$6*INTERVAL '1 day',"logPrivacy","logPrivacyRevision" FROM public.tenants WHERE id=$1 RETURNING id`,
           [
             canonical,
             row.id,

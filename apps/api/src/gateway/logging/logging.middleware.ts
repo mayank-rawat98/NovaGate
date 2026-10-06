@@ -1,4 +1,8 @@
-import { canonicalConsumerId } from '@api-gateway/shared-types';
+import {
+  canonicalConsumerId,
+  redactRequestLog,
+  stricterLogPrivacy,
+} from '@api-gateway/shared-types';
 import { Injectable, Logger, NestMiddleware, Optional } from '@nestjs/common';
 import type { NextFunction } from 'express';
 import { randomUUID } from 'node:crypto';
@@ -50,6 +54,7 @@ export class LoggingMiddleware implements NestMiddleware {
     this.observed.add(response);
     const started = performance.now();
     const requestTenant = this.manager?.getTenantId() ?? null;
+    const requestPrivacy = this.manager?.getConfig()?.logPrivacy;
     const header = request.headers['x-request-id'];
     const requestId =
       typeof header === 'string' && UUID.test(header) ? header : randomUUID();
@@ -116,12 +121,23 @@ export class LoggingMiddleware implements NestMiddleware {
         statusCode,
         responseTimeMs,
         clientIp: request.ips?.[0] ?? request.ip ?? 'unknown',
+        ...(typeof request.headers['user-agent'] === 'string'
+          ? { userAgent: request.headers['user-agent'].slice(0, 512) }
+          : {}),
         downstreamService: response.locals.downstreamService,
         downstreamLatencyMs: response.locals.downstreamLatencyMs,
         ...(consumerId ? { consumerId } : {}),
       };
-      this.observe(() => this.telemetry.logRequest(entry));
-      this.observe(() => this.logger.log(JSON.stringify(entry)));
+      const currentPrivacy =
+        this.manager?.getTenantId() === requestTenant
+          ? this.manager?.getConfig()?.logPrivacy
+          : undefined;
+      const observed = redactRequestLog(
+        entry,
+        stricterLogPrivacy(requestPrivacy, currentPrivacy),
+      );
+      this.observe(() => this.telemetry.logRequest(observed));
+      this.observe(() => this.logger.log(JSON.stringify(observed)));
     };
     response.once('finish', finish);
     response.once('close', finish);

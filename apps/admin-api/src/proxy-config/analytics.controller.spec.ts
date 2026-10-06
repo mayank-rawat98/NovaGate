@@ -47,7 +47,7 @@ describe('AnalyticsController', () => {
       const ds = { transaction: jest.fn(async (fn) => fn(manager)) };
       const { controller } = await build(ds);
       expect(await controller.getLogs(TENANT)).toEqual([
-        { id: 'log-1', path: '/users' },
+        { id: 'log-1', path: '/users', clientIp: '[redacted]' },
       ]);
     });
     it('executes SET LOCAL search_path and queries request_logs', async () => {
@@ -67,8 +67,8 @@ describe('AnalyticsController', () => {
       expect(calls[0][0]).toContain(
         'tenant_aabbccdd_1111_2222_3333_444455556666',
       );
-      expect(calls[1][0]).toContain('request_logs');
-      expect(calls[1][0]).toContain('LIMIT 50');
+      expect(calls[3][0]).toContain('request_logs');
+      expect(calls[3][0]).toContain('LIMIT 50');
     });
 
     it('applies path filter', async () => {
@@ -83,7 +83,7 @@ describe('AnalyticsController', () => {
       const { controller } = await build(ds);
       await controller.getLogs(TENANT, undefined, undefined, '/users');
 
-      const queryCall = manager.query.mock.calls[1];
+      const queryCall = manager.query.mock.calls[3];
       expect(queryCall[0]).toContain('ILIKE');
       expect(queryCall[1]).toContain('%/users%');
     });
@@ -100,7 +100,7 @@ describe('AnalyticsController', () => {
       const { controller } = await build(ds);
       await controller.getLogs(TENANT, undefined, undefined, undefined, '500');
 
-      const queryCall = manager.query.mock.calls[1];
+      const queryCall = manager.query.mock.calls[3];
       expect(queryCall[1]).toContain(500);
     });
   });

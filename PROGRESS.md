@@ -8,6 +8,7 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
+- Latest development work: [PR #79](https://github.com/mayank-rawat98/NovaGate/pull/79), linked to [issue #78](https://github.com/mayank-rawat98/NovaGate/issues/78) adds end-to-end tenant request-log privacy, historical erasure, private archive revocation, durable configuration retries and accessible Settings controls. The issue-linked branch starts from `dev` at **65a6b7c8**. Issue verification passes 1,183 tests, all five static gates, four builds, 42 cold browser loads and actual packaged privacy/metrics/alerts/RustFS checks. Merge details are recorded in its checkpoint below.
 - Alerting development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68), linked to [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), adds durable delivery and the Alerts dashboard.
 - Its issue-linked branch `65-feat-alert-delivery-and-dashboard` was created from `dev` at **653d7a00** / [PR #67](https://github.com/mayank-rawat98/NovaGate/pull/67), which merged the storage/evaluation foundations and roadmap documents. Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) is closed.
 - **AppModule imports AlertsModule**. Authenticated endpoints and workers start after migration; missing dedicated encryption keys disable channel creation/delivery.
@@ -384,6 +385,67 @@ and the preserved `issue76-runtime-evidence.json` in `.local-work/`. No UI behav
 changes; issue #74 browser evidence remains applicable. High-volume rollups/privacy
 and the full formal campaign remain pending.
 
+## Tenant request-log privacy — issue #78
+
+Delivered through [PR #79](https://github.com/mayank-rawat98/NovaGate/pull/79).
+Issue-linked branch `78-tenant-log-privacy` starts from merged `dev` at **65a6b7c8**.
+This checkpoint adds conservative tenant IP/user-agent defaults, explicit retention,
+gateway observation-only redaction, collector enforcement for older frames and current
+historical read projection. Request security inputs and consumer/trace correlation remain
+intact. Shared contracts feed typed API-client methods and a mint/ivory Settings panel.
+
+Authenticated saves require the current UUID revision. Policy changes, durable config
+version/outbox, archive revocation and historical erasure scheduling commit atomically.
+Bounded outbox retries recover a committed update without another edit/reconnect; gateway
+ACK remains the completion signal. Saves survive a failed initial publication without
+misleading failure feedback. Invalid payloads and stale writes are rejected.
+
+Historical cleanup uses persisted 500-row cursors, revision/receipt locks, fair bounded
+sweeps and explicit pending/retrying/complete status. A restarted worker resumes progress;
+a failed tenant does not block healthy cleanup. Retaining an omitted field is blocked until
+erasure completes, and erased values cannot be restored. New manual/scheduled archives
+snapshot privacy, changed policies revoke old leases/jobs and existing private cleanup
+removes their objects. Active downloads have finite admission/deadlines and recheck
+eligibility; disconnect/shutdown cancel owned streams. Old copies cannot be recalled.
+
+Broader sensitive-field rules, raw-log age retention, external destination credentials and
+providers, storage encryption/restore drills and formal acceptance remain outstanding.
+Updated gateway binaries are required for local-output enforcement. Admin migrations must
+precede the new collector; storage outages defer physical removal while download revocation
+remains effective.
+
+Verification: **1,183 tests** (gateway 573, admin 499, control plane 101, dashboard 10),
+all five projects' lint/typecheck gates and all four application builds pass. A real
+PostgreSQL race first reproduces a privacy-save timeout against archive admission;
+`FOR NO KEY UPDATE` fixes it while preserving tenant serialization and expiring the
+admitted archive. The privacy tests also cover 1,201-row historical/NDJSON paging,
+revision/no-op behavior, stalled-download revocation/admission, fair retry and restart.
+A real Redis retry recovers a committed config without another edit/reconnect.
+
+Production browser verification passes **42 cold loads under sixfold CPU throttling**,
+44,587 ms, with zero runtime errors/accessibility findings. It includes failed reads,
+saves/revisions, retained selections, focus/Tab/Escape, workspace resets and privacy
+controls when archive storage is disabled. Issue #69 remains open.
+
+Fresh packaged OrbStack gateway/admin/control-plane images verify explicit retain→omit
+policy updates and gateway ACK, two real consumer-authenticated privacy requests,
+historical erasure and blocked old downloads. Retained metrics reach SSE within two
+seconds; local alert firing acceptance takes **59.191 seconds**, retry/recovery pass,
+and two private scheduled archives contain **96 records** including the older frame.
+Consumer usage reports 21 requests/ten server errors with P95 matching PostgreSQL.
+All three services exit 0 within the shutdown grace; fixture containers/network are
+removed and persistent verification infrastructure is preserved.
+
+Evidence in `.local-work/`: `issue78-ready-static.log`, `issue78-ready-admin-tests.log`,
+`issue78-final-regression.log`, `issue78-ready-builds.log`, `issue78-admission-red.log`,
+`issue78-admission-green.log`, `issue78-expanded-browser.log`, `issue78-browser-run.json`,
+`issue78-final-runtime.log` and the preserved `issue78-runtime-evidence.json`.
+An unchanged alert test hit its five-second Jest limit during simultaneous image builds;
+the final full suite passes without increasing it. Packaged fixture diagnostics also
+retain the intentional gateway-replacement/ephemeral-port failures; the verifier now
+restores its own gateway connection and refreshes the published port before live policy
+checks. Production connection-admission rules are preserved.
+
 ## Remaining work
 
 ### Next: continue phase 4; retain hydration follow-up #69
@@ -398,7 +460,7 @@ and the full formal campaign remain pending.
 ### Remaining phase 4 work
 
 - Configurable external S3-compatible tenant destinations, webhook NDJSON and Datadog
-  exporters, with private credentials, delivery history and redaction/retention controls.
+  exporters, with encrypted rotatable private credentials, delivery history, broader sensitive-field rules and raw-log age retention.
 - High-volume per-consumer rollups, idempotent ingestion/backfill, retention and
   explicit coverage indicators beyond the bounded persisted-log usage view.
 - Formal acceptance for tracing, two-second live metrics, 90-second actual alert delivery,
@@ -429,7 +491,7 @@ and the full formal campaign remain pending.
 - Team RBAC, scoped automation tokens and immutable audit history.
 - Configuration preview/diff/rollback, drift detection, atomic reconciliation and
   verified last-known-good routing during control-plane outages.
-- Complete privacy/redaction and secret-management controls; storage encryption where
+- Extend IP/user-agent privacy to broader sensitive-field rules and raw-log age retention; complete secret-management controls and storage encryption where
   supported, backup/restore drills and documented operational recovery.
 - AI token/cost budgets, provider fallback, sensitive-data handling and MCP policy controls.
 - Continue modern accessible dashboard UX for every new capability; mobile, keyboard,

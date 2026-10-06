@@ -293,6 +293,7 @@ export interface AckMessage extends BaseWsMessage {
 }
 
 export interface TenantConfig {
+  logPrivacy?: import('./log-privacy.ts').LogPrivacyPolicy;
   routes: RouteConfig[];
   services: ServiceConfig[];
   consumers: ConsumerConfig[];

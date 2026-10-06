@@ -190,10 +190,11 @@ export class ObjectStorageService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async download(key: string) {
+  async download(key: string, signal?: AbortSignal): Promise<Readable> {
     if (!this.client) throw new Error('Object storage is disabled');
     const result = await this.client.send(
       new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+      { abortSignal: signal },
     );
     if (!(result.Body instanceof Readable))
       throw new Error('Archive stream is unavailable');
