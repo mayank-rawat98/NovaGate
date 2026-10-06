@@ -30,6 +30,7 @@ export class LogIngestionService implements OnModuleInit, OnModuleDestroy {
 
   private readonly metricSettings: MetricIngestionSettings;
   private activeMetrics = 0;
+  private readonly activeLogs = new Set<Promise<unknown>>();
   constructor(
     private readonly dataSource: DataSource,
     @Optional() config: ConfigService = new ConfigService(),
@@ -61,6 +62,7 @@ export class LogIngestionService implements OnModuleInit, OnModuleDestroy {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     await this.cleanup;
+    await Promise.allSettled([...this.activeLogs]);
   }
   async cleanupExpired(): Promise<void> {
     if (
@@ -124,16 +126,21 @@ export class LogIngestionService implements OnModuleInit, OnModuleDestroy {
     if (!/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(tenantId)) {
       throw new Error('Invalid tenant ID');
     }
-    return `tenant_${tenantId.replace(/-/g, '_')}`;
+    return `tenant_${tenantId.toLowerCase().replace(/-/g, '_')}`;
   }
 
   async ingestLogs(tenantId: string, logs: RequestLog[]) {
+    if (this.stopping) throw new Error('Log ingestion is stopping');
+    const schema = this.tenantSchema(tenantId);
+    if (!Array.isArray(logs) || logs.length > 1000)
+      throw new Error('Invalid log batch');
     if (logs.length === 0) return;
-
-    try {
-      const schema = this.tenantSchema(tenantId);
-
-      const rows = logs.map((log) => ({
+    if (this.activeLogs.size >= 32)
+      throw new Error('Log ingestion capacity exhausted');
+    const rows = logs.map((log) => {
+      if (!log || typeof log !== 'object' || Array.isArray(log))
+        throw new Error('Invalid log entry');
+      return {
         id: log.id,
         consumerId: log.consumerId,
         method: log.method,
@@ -149,18 +156,39 @@ export class LogIngestionService implements OnModuleInit, OnModuleDestroy {
         timestamp: log.timestamp,
         traceId: log.traceId ?? null,
         spanId: log.spanId ?? null,
-      }));
+      };
+    });
+    const json = JSON.stringify(rows);
+    if (Buffer.byteLength(json) > 1024 * 1024)
+      throw new Error('Log batch exceeds byte limit');
+    const work = this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `SELECT set_config('statement_timeout', '3000', true), set_config('lock_timeout', '1000', true)`,
+      );
+      // The scheduler takes this same lock before closing a receipt window.
+      // Stamp after admission/lock waits, and keep the lock through commit.
+      await manager.query(
+        `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+        [`log-receipt:${tenantId.toLowerCase()}`],
+      );
       // Table record conversion ignores new optional correlation fields on legacy schemas.
-      // Tenant selection remains server-owned and schema-qualified.
-      await this.dataSource.query(
-        `INSERT INTO ${schema}.request_logs SELECT * FROM jsonb_populate_recordset(NULL::${schema}.request_logs, $1::jsonb) ON CONFLICT (id) DO NOTHING`,
-        [JSON.stringify(rows)],
+      // Populate the database-owned receipt explicitly: INSERT SELECT does not
+      // apply a column default to missing JSON fields converted to NULL.
+      await manager.query(
+        `INSERT INTO ${schema}.request_logs SELECT * FROM jsonb_populate_recordset(NULL::${schema}.request_logs,
+          (SELECT jsonb_agg(value || jsonb_build_object('receivedAt', clock_timestamp())) FROM jsonb_array_elements($1::jsonb)))
+          ON CONFLICT (id) DO NOTHING`,
+        [json],
       );
+    });
+    this.activeLogs.add(work);
+    try {
+      await work;
     } catch (err) {
-      this.logger.error(
-        `Failed to ingest logs for tenant ${tenantId}: ${(err as Error).message}`,
-      );
+      this.logger.error('Log ingestion failed; the batch was not acknowledged');
       throw err;
+    } finally {
+      this.activeLogs.delete(work);
     }
   }
 

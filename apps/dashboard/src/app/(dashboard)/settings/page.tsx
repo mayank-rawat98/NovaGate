@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import useSWR from 'swr';
 import { LogExportPanel } from '../../../components/log-export-panel';
+import { LogExportSchedulePanel } from '../../../components/log-export-schedule-panel';
 import { DataLoadNotice } from '../../../components/data-load-notice';
 import { toast } from 'sonner';
 import { Copy, Check, Eye, EyeOff, RefreshCw, Shield, X } from 'lucide-react';
@@ -352,7 +353,8 @@ export default function SettingsPage() {
         </pre>
       </div>
 
-      <LogExportPanel tenantId={tenantId} />
+      <LogExportSchedulePanel tenantId={tenantId} />
+      <LogExportPanel key={tenantId} tenantId={tenantId} />
 
       {/* Environment variables */}
       <div

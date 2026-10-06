@@ -7,6 +7,7 @@ import { resolve } from 'node:path';
 import pg from 'pg';
 import jwt from 'jsonwebtoken';
 import { startAlertFixture } from './alerts-container-fixture.mjs';
+import { configureArchiveFixture } from './log-export-container-fixture.mjs';
 
 // Production images, disposable infrastructure and fixture credentials only.
 const docker = (...args) =>
@@ -31,7 +32,7 @@ const schema = `tenant_${tenant.replaceAll('-', '_')}`;
 const secret = 'metric-container-fixture-session-secret-32-characters';
 const apiKey = randomUUID();
 const headers = {
-  Authorization: `Bearer ${jwt.sign({ sub: tenant }, secret, { expiresIn: '5m' })}`,
+  Authorization: `Bearer ${jwt.sign({ sub: tenant }, secret, { expiresIn: '10m' })}`,
 };
 const controller = new AbortController();
 let networkCreated = false;
@@ -109,6 +110,24 @@ try {
     [5432],
   );
   const redis = run('redis', 'redis:7-alpine');
+  const rustfs = run(
+    'rustfs',
+    'rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c',
+    [
+      'RUSTFS_ACCESS_KEY=novagate-verification',
+      'RUSTFS_SECRET_KEY=local-object-storage-verification-only',
+      'RUSTFS_CONSOLE_ENABLE=false',
+      'RUSTFS_REGION=us-east-1',
+    ],
+    [9000],
+  );
+  const storageUrl = `http://127.0.0.1:${port(rustfs, 9000)}`;
+  await until(
+    async () => (await fetch(`${storageUrl}/health/ready`)).ok,
+    'Private RustFS startup',
+    60000,
+  );
+
   await until(
     () =>
       docker(
@@ -189,7 +208,13 @@ try {
     [
       ...common,
       `PLATFORM_JWT_SECRET=${secret}`,
-      'OBJECT_STORAGE_ENABLED=false',
+      'OBJECT_STORAGE_ENABLED=true',
+      `OBJECT_STORAGE_ENDPOINT=http://${rustfs}:9000`,
+      'OBJECT_STORAGE_ACCESS_KEY=novagate-verification',
+      'OBJECT_STORAGE_SECRET_KEY=local-object-storage-verification-only',
+      'OBJECT_STORAGE_BUCKET=runtime-archives',
+      'OBJECT_STORAGE_CREATE_BUCKET=true',
+
       ...alertFixture.environment,
     ],
     [3001],
@@ -204,11 +229,16 @@ try {
     headers,
     tenant,
   );
+  const archiveFixture = await configureArchiveFixture({
+    adminUrl,
+    tenant,
+    headers,
+  });
   const plane = run(
     'plane',
     images.plane,
     [...common, 'PORT=3000', 'WS_PORT=8080'],
-    [3000],
+    [3000, 8080],
   );
   await until(
     async () =>
@@ -331,6 +361,15 @@ try {
     until,
     trafficStartedAt: receivedAt,
   });
+  await archiveFixture.lateLog(`ws://127.0.0.1:${port(plane, 8080)}`, apiKey);
+  const archives = await archiveFixture.verify({
+    db,
+    schema,
+    until,
+    storageUrl,
+    bucket: 'runtime-archives',
+    trafficRequests: 20 + alerts.healthyRequests,
+  });
   const shutdown = [];
   for (const [name, role] of [
     [gateway, 'gateway'],
@@ -369,6 +408,7 @@ try {
         shutdown,
         sample,
         alerts,
+        archives,
         checks: [
           'production-gateway-control-plane-PostgreSQL-Redis-admin-SSE-within-two-seconds',
           'authenticated-workspace-isolation',
@@ -376,6 +416,7 @@ try {
           'fresh-reconnect',
           'production-lifecycle-shutdown-without-SIGKILL',
           'private-payload-free-aggregates',
+          'automatic-receipt-window-RustFS-archives-with-late-log-and-private-downloads',
         ],
       },
       null,

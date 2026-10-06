@@ -1,9 +1,44 @@
-export interface LogExportFilter {
-  from: string;
-  to: string;
+export interface LogExportSelection {
   minStatusCode?: number;
   pathPrefix?: string;
   consumerId?: string;
+}
+export interface LogExportFilter extends LogExportSelection {
+  from: string;
+  to: string;
+}
+
+/** Receipt windows are independent of the gateway's request clock. */
+export type LogExportTimeBasis = 'request' | 'receipt';
+export type LogExportCadence = 'near_real_time' | 'hourly';
+export interface LogExportScheduleConfiguration {
+  enabled: boolean;
+  cadence: LogExportCadence;
+  filter: LogExportSelection;
+}
+export interface LogExportSchedule extends LogExportScheduleConfiguration {
+  id: string;
+  revision: string;
+  startedAt: string;
+  cursor: string;
+  nextWindowAt: string;
+  updatedAt: string;
+  lastCheckedAt?: string;
+  lastJobId?: string;
+  error?: string;
+}
+export interface LogExportScheduleState {
+  available: boolean;
+  schedule: LogExportSchedule | null;
+  settlementSeconds: number;
+  pendingJobs: number;
+  failedJobs: number;
+  backlogSeconds: number;
+  queueLimit: number;
+}
+export interface SaveLogExportSchedule extends LogExportScheduleConfiguration {
+  /** null creates; the last fetched revision updates without overwriting others. */
+  expectedRevision: string | null;
 }
 
 export type LogExportStatus =
@@ -17,12 +52,16 @@ export interface LogExportJob {
   status: LogExportStatus;
   filter: LogExportFilter;
   attempts: number;
+  retryCount: number;
   rowCount: number;
   bytes: number;
   error?: string;
   createdAt: string;
   completedAt?: string;
   expiresAt: string;
+  kind: 'manual' | 'scheduled';
+  timeBasis: LogExportTimeBasis;
+  scheduleId?: string;
 }
 export interface LogExportList {
   enabled: boolean;

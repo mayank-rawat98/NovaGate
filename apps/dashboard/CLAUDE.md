@@ -138,3 +138,14 @@ and healthy states; no-data preserves the last notified state. Show actual coold
 deadlines, operator delivery availability, delivery attempts and accepted-versus-inbox
 semantics. The browser verifier covers real forms/revision errors, capacity limits,
 secret replacement, workspace changes, keyboard navigation and mobile accessibility.
+
+Issue #72 adds Automatic log archives to Settings through shared schedule contracts
+and api-client. Expose minute/hour cadence, receipt-time semantics, start-from-save,
+status/literal-prefix/consumer filters, pause/resume without cursor reset, revision
+conflicts, backlog/failure counts and retained-history removal confirmation. Failed
+unexpired jobs can retry the same immutable window/filter; show requested retry
+count. Keep receipt metadata and storage credentials out of browser records. Native
+dialogs and workspace-keyed state cancel mutations when closed/switched; SWR lists
+stay at 30 seconds. The production browser verifier covers failed saves/revisions,
+input preservation, pause/resume, backlog, removal focus/Escape, job retry and
+disabled storage with desktop/mobile accessibility checks.

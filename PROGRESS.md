@@ -236,6 +236,60 @@ Evidence is in `.local-work/issue69-production-traced-browser.log` and
 No hydration root cause/fix is claimed; issue #69 remains open. The diagnostics
 checkpoint supports continued roadmap work and later formal release acceptance.
 
+## Scheduled RustFS archives — issue #72
+
+Issue #72 extends the manual archive foundation with every-minute and hourly UTC
+schedules, tenant-scoped revision-aware APIs and accessible Settings controls. New
+schedules start at database receipt time. Late gateway requests enter their receipt
+window while NDJSON preserves their original request timestamps. Pausing retains
+waiting windows; resume catches up, updates preserve the cursor and queued filters,
+and deletion preserves archive history. Failed, unexpired jobs can be explicitly
+retried with their original window/filter; requested retry count survives restart.
+
+Window claims use short PostgreSQL transactions, with no external I/O. A shared
+tenant receipt lock coordinates ingestion, and cursor/job insertion commit together.
+Fair sweeps admit at most 16 windows per two-second tick; pending job admission is
+shared across manual/automatic/retry requests and capped at 20 per tenant. Empty
+windows create no files and queue saturation retains the cursor. Log ingestion has
+finite batch/byte/admission/deadline/pool bounds and drains actual writes on shutdown.
+
+Admin upgrades normalize legacy naive log times as UTC and add database-owned receipt
+metadata/indexes. JSON record ingestion explicitly stamps receipt after lock waits,
+ignores caller receipt values, and still supports legacy optional columns. Public
+logs/NDJSON exclude this metadata. Manual/automatic keysets and exported timestamps
+are explicitly UTC with microsecond precision under non-UTC database sessions.
+
+Customer UX exposes active/paused/catching-up states, pending/backlog/failure counts,
+minute/hour cadence, status/literal-prefix/consumer filters, revision/save recovery,
+removal confirmation and retained downloads. Native dialogs retain keyboard focus,
+Escape and restoration. Verification passes 1,134 retained tests (559 gateway, 466 admin API, 99 control plane,
+10 dashboard), all five projects' lint/typecheck gates and all four application
+builds. Archive tests include non-UTC sessions, first-window microseconds, 1,201-row
+RustFS pagination, legacy upgrades, replica/revision/pause races, cursor/job rollback,
+full-queue recovery, receipt/status-read lock deadlines, exhausted-run retry and shutdown drain.
+
+Fresh production images on OrbStack produce three private scheduled archives with 94
+unique records from 20 initial HTTP completions, 73 alert recovery requests and one
+separately authenticated late log. The forged receipt is ignored, the original year
+2000 request time survives NDJSON, exported IDs match persisted records, anonymous
+object access is denied and pause works. Retained metrics and firing/retry/recovery
+also pass: local firing acceptance takes 59.111 seconds and all three service exits
+are 0 without SIGKILL. The fixture removes its own containers/network afterward.
+
+Evidence: `.local-work/issue72-all-tests.log`, `issue72-final-admin-tests.log`,
+`issue72-final-archive-tests.log`, `issue72-final-static.log`,
+`issue72-final-admin-static-build.log`, `issue72-backend-builds.log`,
+`issue72-runtime-final.log` and `metrics-container-evidence.json`. Production browser
+checks pass 42 cold loads under sixfold CPU throttling, followed by a final seven-load
+run, with zero runtime errors or accessibility findings. They cover archive form
+recovery, retry, pause/removal, keyboard/mobile behavior and workspace switching.
+Evidence is retained in `issue72-final-browser.log`, `issue72-default-final-browser.log`,
+`issue72-six-pass-browser/` and `dashboard-verification/` (run metadata, screenshots
+and traces). Alert fixture teardown now unmounts its page before removing mock routes,
+preventing background polling from reaching the next fixture. The strict runtime
+gate remains enforced; this does not establish a fix for issue #69. External
+destinations, privacy controls and formal acceptance stay pending.
+
 ## Remaining work
 
 ### Next: continue phase 4; retain hydration follow-up #69
@@ -249,8 +303,8 @@ checkpoint supports continued roadmap work and later formal release acceptance.
 
 ### Remaining phase 4 work
 
-- Scheduled/per-tenant exports, configurable external S3-compatible destinations,
-  webhook NDJSON and Datadog exporters, with private credentials and redaction controls.
+- Configurable external S3-compatible tenant destinations, webhook NDJSON and Datadog
+  exporters, with private credentials, delivery history and redaction/retention controls.
 - Per-consumer RPS/error/latency/top-path aggregates, tenant-scoped APIs and dashboard UX.
 - Formal acceptance for tracing, two-second live metrics, 90-second actual alert delivery,
   private RustFS export and consumer analytics.

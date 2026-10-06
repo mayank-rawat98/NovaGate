@@ -385,6 +385,14 @@ The API uses tenant session authorization for creation, listing and streaming do
 
 Archives expire after seven days by default (`LOG_EXPORT_RETENTION_DAYS`, 1–90). Expiry immediately prevents API downloads; background cleanup removes attempt objects and abandoned multipart uploads. Cleanup retries after a storage outage, and expired job metadata remains available to explain why a download disappeared. Expired job metadata is kept for 30 more days, then removed only after successful object cleanup. Preserve archive jobs during tenant offboarding until their object prefixes have been deleted.
 
+Settings → **Automatic log archives** schedules private receipt windows every minute or on UTC hour boundaries. Minute batching is near real time; each window waits 15 seconds after closing and then joins the archive queue. Saving starts from the database receipt time, so existing logs are not backfilled automatically. Gateway request timestamps remain intact in the NDJSON; a late-arriving request enters the window in which NovaGate receives it. Manual archives continue to filter by request time.
+
+Choose a minimum status, literal path prefix and optional consumer. Pause retains the receipt cursor and stops new windows; queued jobs finish. Resume catches up without resetting that cursor. Changing cadence/filters applies to waiting windows; queued jobs retain their original filters. Removing a schedule retains job/download history, discards unprocessed scheduling work, and a newly created schedule starts at its new save time. Revision checks reject concurrent edits. The dashboard exposes backlog, pending limits and failed jobs; failed, unexpired archives can be retried with their original window and filters. Each run allows three attempts, and requested retry count remains visible.
+
+The scheduler handles at most 16 windows per two-second sweep with no overlapping sweeps. Transactional row claims and a shared receipt-ingestion lock coordinate replicas; job insertion and cursor advancement commit together. Twenty pending jobs per tenant apply to manual, automatic and requested retries. Empty windows create no objects. Queue saturation retains the cursor for retry rather than skipping logs. Jobs retain the existing one-million-row / 512 MiB / 120-second processing limits and private expiry cleanup. Archive retention starts when a window is queued. Scheduling does not claim exactly-once delivery of gateway telemetry or external providers.
+
+Admin startup upgrades legacy UTC-naive log timestamps to TIMESTAMPTZ and adds database-owned receipt metadata/indexes before the updated control plane starts. Existing rows receive migration-time receipt values, and automatic schedules start after save. These table conversions may rewrite historical log tables; include them in the database maintenance/backup plan for an existing installation. Receipt metadata is excluded from public log records and NDJSON. Explicit UTC comparisons/formatting and microsecond keysets are exercised with a non-UTC PostgreSQL session. See PostgreSQL's [timestamp comparison semantics](https://www.postgresql.org/docs/current/functions-datetime.html) and [transaction-scoped advisory locks](https://www.postgresql.org/docs/current/explicit-locking.html).
+
 OrbStack verification includes RustFS 1.0.1 pinned by digest, persistent verification volumes, a loopback S3 listener on port 19000 and no published console. Run the live integration checks with:
 
 ```sh
@@ -399,7 +407,18 @@ Production storage is disabled until configured. [docker/object-storage.env.exam
 
 Keep RustFS root credentials separate from the application's archive service account. Pre-create a private archive bucket, or use `OBJECT_STORAGE_CREATE_BUCKET=true` once with a provisioning identity and disable it afterward. The application account needs bucket location/list, policy/ACL read and multipart listing permissions, plus object get/put/delete and multipart abort permissions scoped to the archive bucket. It does not need to modify policies or ACLs. Use a TLS endpoint for external storage and restrict credential access. RustFS installation/readiness guidance: [official container documentation](https://docs.rustfs.com/en/installation/container) and [health endpoints](https://docs.rustfs.com/en/operations/status-check).
 
-The bundled single-node storage has no distributed redundancy. Back up PostgreSQL job metadata and RustFS objects together, protect backup credentials and preserve the bucket/object paths. Restore both into an isolated environment first; verify a known archive through the authenticated download endpoint and confirm anonymous access is denied. Expired objects will be removed when the restored worker starts. Distributed storage, restore drills, scheduled exports, redaction controls and additional destinations remain roadmap work; local and CI evidence does not establish final production acceptance.
+The bundled single-node storage has no distributed redundancy. Back up PostgreSQL job metadata and RustFS objects together, protect backup credentials and preserve the bucket/object paths. Restore both into an isolated environment first; verify a known archive through the authenticated download endpoint and confirm anonymous access is denied. Expired objects will be removed when the restored worker starts. Distributed storage, restore drills, configurable external tenant destinations and redaction controls remain roadmap work; local and CI evidence does not establish final production acceptance.
+
+The packaged runtime check verifies actual gateway traffic and a separately authenticated late log through the control plane, automatic scheduling, private RustFS downloads, live metrics/alerting and service shutdown. Rebuild the three verification images before running it:
+
+```sh
+docker build -f docker/Dockerfile.api -t novagate-api:verification .
+docker build -f docker/Dockerfile.admin-api -t novagate-admin:verification .
+docker build -f docker/Dockerfile.control-plane -t novagate-control-plane:verification .
+npm exec -- nx run admin-api:runtime-smoke
+```
+
+This local target requires OrbStack, uses disposable fixture infrastructure and receivers, and records `.local-work/metrics-container-evidence.json`. It does not contact production recipients or deploy anything. CI remains the prerequisite of deployment on pushes to `main`; development/PR pushes do not trigger it.
 
 ### Remote authentication providers
 

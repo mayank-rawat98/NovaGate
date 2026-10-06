@@ -38,6 +38,16 @@ async function build(ds: MockDs, cp = mockConfigPush()) {
 
 describe('AnalyticsController', () => {
   describe('GET logs', () => {
+    it('keeps database receipt metadata out of public request log records', async () => {
+      const manager = mockManager([
+        { id: 'log-1', path: '/users', receivedAt: new Date() },
+      ]);
+      const ds = { transaction: jest.fn(async (fn) => fn(manager)) };
+      const { controller } = await build(ds);
+      expect(await controller.getLogs(TENANT)).toEqual([
+        { id: 'log-1', path: '/users' },
+      ]);
+    });
     it('executes SET LOCAL search_path and queries request_logs', async () => {
       const manager = mockManager([{ id: 'log-1' }]);
       const ds = {

@@ -12,11 +12,7 @@ import {
 } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { ConfigPushService } from '../config-push/config-push.service';
-
-function tenantSchema(tenantId: string): string {
-  if (!/^[0-9a-f-]+$/i.test(tenantId)) throw new Error('Invalid tenantId');
-  return `tenant_${tenantId.replace(/-/g, '_')}`;
-}
+import { tenantSchema } from '../tenants/tenant-schema';
 
 @Controller('tenants/:tenantId')
 export class AnalyticsController {
@@ -78,10 +74,11 @@ export class AnalyticsController {
       const offset = (Math.max(1, Number(page)) - 1) * 50;
       params.push(offset);
 
-      return manager.query(
+      const rows: Array<Record<string, unknown>> = await manager.query(
         `SELECT * FROM request_logs ${where} ORDER BY timestamp DESC LIMIT 50 OFFSET $${params.length}`,
         params,
       );
+      return rows.map(({ receivedAt: _receivedAt, ...row }) => row);
     });
   }
 
