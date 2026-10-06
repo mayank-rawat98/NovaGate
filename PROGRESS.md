@@ -8,7 +8,7 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
-- Latest development work: [issue #78](https://github.com/mayank-rawat98/NovaGate/issues/78) adds end-to-end tenant request-log privacy, historical erasure, private archive revocation, durable configuration retries and accessible Settings controls. The issue-linked branch starts from `dev` at **65a6b7c8**. Issue verification passes 1,183 tests, all five static gates, four builds, 42 cold browser loads and actual packaged privacy/metrics/alerts/RustFS checks. Merge details are recorded in its checkpoint below.
+- Latest development work: [PR #79](https://github.com/mayank-rawat98/NovaGate/pull/79), linked to [issue #78](https://github.com/mayank-rawat98/NovaGate/issues/78) adds end-to-end tenant request-log privacy, historical erasure, private archive revocation, durable configuration retries and accessible Settings controls. The issue-linked branch starts from `dev` at **65a6b7c8**. Issue verification passes 1,183 tests, all five static gates, four builds, 42 cold browser loads and actual packaged privacy/metrics/alerts/RustFS checks. Merge details are recorded in its checkpoint below.
 - Alerting development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68), linked to [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), adds durable delivery and the Alerts dashboard.
 - Its issue-linked branch `65-feat-alert-delivery-and-dashboard` was created from `dev` at **653d7a00** / [PR #67](https://github.com/mayank-rawat98/NovaGate/pull/67), which merged the storage/evaluation foundations and roadmap documents. Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) is closed.
 - **AppModule imports AlertsModule**. Authenticated endpoints and workers start after migration; missing dedicated encryption keys disable channel creation/delivery.
@@ -387,6 +387,7 @@ and the full formal campaign remain pending.
 
 ## Tenant request-log privacy — issue #78
 
+Delivered through [PR #79](https://github.com/mayank-rawat98/NovaGate/pull/79).
 Issue-linked branch `78-tenant-log-privacy` starts from merged `dev` at **65a6b7c8**.
 This checkpoint adds conservative tenant IP/user-agent defaults, explicit retention,
 gateway observation-only redaction, collector enforcement for older frames and current
