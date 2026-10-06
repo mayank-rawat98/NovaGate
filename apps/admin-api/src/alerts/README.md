@@ -1,7 +1,9 @@
 # Tenant alerting — issue #65
 
-Implementation is in progress on the issue-linked branch. Do not register an
-unfinished alert feature in AppModule or describe it as delivered.
+AppModule registers AlertsModule. Startup migrations finish before the evaluator
+and delivery worker bootstrap. Channel creation and external delivery require
+dedicated operator encryption keys; rules without channels retain dashboard history.
+Development verification and formal production/provider acceptance are separate.
 
 Change shared contracts first. Alert rules and channel CRUD must use the existing
 bearer-session workspace guard and canonical tenant schemas. Reject unknown input,
@@ -56,8 +58,8 @@ Tenant/channel IDs, envelope version and key ID are authenticated as associated 
 Metadata edits preserve encrypted values; replacement credentials require a complete
 explicit write of the same channel type. Revisions prevent lost edits. Any channel
 edit/delete cancels queued/processing delivery rows and their public due work inside
-the same transaction; previous delivered history remains. Actual already-started
-network delivery still requires worker fencing and cancellation in the next steps.
+the same transaction; previous delivered history remains. The delivery worker fences and cancels obsolete active work; a receiver side effect
+already accepted cannot be undone.
 
 Operator settings (never tenant fields): ALERT_CHANNEL_KEYS is a JSON object mapping
 up to four key IDs to canonical base64-encoded 32-byte keys. ALERT_CHANNEL_ACTIVE_KEY
@@ -92,13 +94,12 @@ it acquires the tenant lock, then verify its token and read the current locked r
 the tenant transaction. Rule configuration updates invalidate the queue token. Avoid holding a queue row lock while waiting for a tenant
 lock: that reverses CRUD lock order and can deadlock.
 
-The generated AlertsController is attached only to AlertsModule; AppModule still
-omits the unfinished feature. Its real HTTP fixture installs the existing global
+AlertsController is attached to AlertsModule, which AppModule imports. Its real HTTP fixture installs the existing global
 TenantAuthGuard and verifies every route rejects missing/foreign sessions. DELETE
 requests require a JSON body containing only the current numeric revision. History
 returns at most 100 events from 30 days with at most 500 delivery summaries, excluding
-credentials and internal event linkage. Stored event retention and worker delivery
-still need implementation; read-time filtering alone is not a storage retention policy.
+credentials and internal event linkage. Stored event retention and durable delivery now have implementation below;
+read-time filtering alone is not a storage retention policy.
 
 The evaluator now starts on application bootstrap, after schema migrations, with
 one unreferenced, non-overlapping one-second timer. Each batch leases at most 16 due
@@ -120,5 +121,86 @@ in the same transaction. Idle cleanup also visits at most 64 public tenant IDs p
 minute using a UUID cursor; it shares storage admission, validates schemas, prevents
 overlap and continues after a tenant failure. Keep 30 days and at most 1,000 events
 per tenant, with delivery rows cascading away. Shutdown stops the timer and awaits
-actual evaluation and retention work. None of this enables the incomplete module in
-AppModule or proves the pending network delivery/UX/packaged acceptance checks.
+actual evaluation and retention work. Bootstrap ordering and end-to-end delivery
+are verified with the three-service production-container fixture.
+
+## Secure delivery implementation — 6 October 2026
+
+`AlertTransportService` now sends signed JSON webhook POSTs, plain-text Slack blocks
+and Mailtr API email requests. The local Mailtr dev contract was reviewed at
+`819117fb14846216bff6084a7ebbd0f1cdf5dfa0`; the email endpoint accepts from/to/subject/
+html/text and reports API acceptance, not final inbox receipt. No production Slack
+URL, email address or API credential is a test fixture.
+
+Default egress is public HTTPS/443. A dedicated cancellable resolver checks both
+A and AAAA results, admits at most 16 addresses, and refuses any non-public answer.
+The request lookup pins the selected address while retaining the hostname and TLS
+certificate verification. Trusted exact origins explicitly allow private/HTTP
+receivers but never disable TLS certificate checks. No redirects or reused pooled
+connections. The whole DNS/connect/upload/response attempt has a five-second deadline;
+request/response bodies are at most 16 KiB and response headers at most 8 KiB.
+At most eight transport operations are admitted. Abort and shutdown cancel actual
+DNS/socket work and await settlement. Errors contain only static safe descriptions.
+Node API references: https://nodejs.org/api/dns.html#class-dnspromisesresolver and
+https://nodejs.org/api/https.html#httpsrequestoptions-callback.
+
+Webhook headers are X-NovaGate-Delivery-Id, X-NovaGate-Timestamp (Unix seconds), and
+X-NovaGate-Signature (`v1=` followed by a hex HMAC-SHA256 of timestamp + `.` + the exact
+UTF-8 body, keyed by the channel signing secret). The versioned body contains deliveryId,
+tenantId and documented event fields only. Receivers should verify signatures in
+constant time, apply a timestamp tolerance and deduplicate deliveryId. Credentials
+never appear in the payload. Mailtr requests also carry an Idempotency-Key header;
+provider-side deduplication must be verified separately, and Slack offers no equivalent
+exactly-once guarantee. Delivery is at least once after crashes/ambiguous acceptance.
+
+`AlertDeliveryService` commits SKIP LOCKED claims before tenant locking. Batches claim
+at most 16 jobs for 30 seconds and process at most four concurrently. A persisted
+leaseStarted guard permits one start per token even when two replicas are handed the
+same lease. Each attempt increments durably before networking; transient failures
+retry after 5 then 20 seconds, with a hard limit of three total attempts (including
+crash-recovered starts). Permanent policy/validation/HTTP failures stop immediately.
+Missing keys, invalid ciphertext and obsolete references produce safe history.
+
+Before networking and every 250 ms while it is pending, a non-overlapping bounded
+query checks the current lease, channel revision and enabled state. Losing ownership
+or changing/deleting the channel/rule cancels actual pending work; sent bytes or a
+receiver's accepted side effect cannot be undone. Completion/retry compares the current
+token and attempt inside the tenant transaction, and history/public scheduling commit
+atomically. Failed finalization leaves a recoverable lease and the same stable delivery
+ID. SQL statements are bounded to three seconds, locks to one second; production admin
+pool admission is also bounded to three seconds with at most 20 connections.
+
+The bootstrap timer does not overlap batches. Shutdown stops admission/timers, aborts
+live requests and drains actual batch/watch work. Migration runs before
+control-plane/worker deployment, including the
+idempotent addition of leaseStarted to existing delivery schedules.
+
+## Dashboard usage
+
+Open **Observability → Alerts**. Add a notification channel, then create a rule and
+select its channels. Rate thresholds are percentages in the form; latency uses
+milliseconds and throughput uses requests per second. Choose a 1–60 minute window
+and a minimum request count. Leaving the channels empty records dashboard history.
+
+Channel credentials are write-only: reads show only the destination origin or email
+recipient. Metadata edits keep saved credentials. To rotate a webhook URL/signing
+secret, choose **Replace saved credentials** and enter the complete new values.
+Secret inputs are masked, failed saves preserve input, and switching workspaces
+closes dialogs and clears unsaved credentials. Revision conflicts require a refresh
+before retrying. Deleting a channel removes it from rules while preserving history.
+
+**No data** means evidence is insufficient, stale or ambiguous; it never signals
+healthy recovery. The last notified firing state and cooldown remain visible.
+Disabled rules/channels and operator-unavailable delivery have separate feedback.
+Recent activity shows queued, sending, accepted, failed and cancelled deliveries,
+attempt counts and safe failure text. Accepted means the destination acknowledged
+the request; email inbox receipt is a separate provider outcome.
+
+Run `dashboard:ui-smoke` for production browser forms, mobile layouts, keyboard
+focus/Escape and axe WCAG A/AA checks. Run
+`@api-gateway/api:metrics-container-smoke` after rebuilding the gateway, admin and
+control-plane images with OrbStack. It uses disposable PostgreSQL/Redis and local
+receivers to check real measured traffic through firing, a five-second webhook
+retry, all three notification formats, healthy recovery and graceful shutdown.
+It records sanitized timings and image IDs in `.local-work/metrics-container-evidence.json`.
+No real Slack webhook, provider mailbox or production credential is used.

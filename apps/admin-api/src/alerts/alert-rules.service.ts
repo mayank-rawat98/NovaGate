@@ -46,17 +46,22 @@ type StoredChannel = Omit<AlertChannel, 'createdAt' | 'updatedAt'> & {
 };
 const CHANNEL_COLUMNS = `id, name, type, destination, (type <> 'email') AS "hasSecret", enabled, revision, "createdAt", "updatedAt"`;
 
-type StoredRule = Omit<AlertRule, 'createdAt' | 'updatedAt'> & {
+type StoredRule = Omit<
+  AlertRule,
+  'createdAt' | 'updatedAt' | 'cooldownUntil'
+> & {
   createdAt: Date;
   updatedAt: Date;
+  cooldownUntil: Date | null;
 };
 const RULE_COLUMNS = `r.id, r.name, r.metric, r.operator, r.threshold, r."windowMinutes", r."minRequests",
-  r.enabled, r.revision, r.evaluation, r."createdAt", r."updatedAt"`;
+  r.enabled, r.revision, r.evaluation, r."notifiedState", r."cooldownUntil", r."createdAt", r."updatedAt"`;
 
 @Injectable()
 export class AlertRulesService implements OnModuleDestroy {
   readonly credentialCipher: AlertCredentialCipher;
   private readonly trustedOrigins: ReadonlySet<string>;
+  private readonly emailAvailable: boolean;
   private readonly pending = new Set<Promise<unknown>>();
   private stopping = false;
   constructor(
@@ -70,6 +75,8 @@ export class AlertRulesService implements OnModuleDestroy {
     this.trustedOrigins = alertTrustedOrigins(
       config.get('ALERT_HTTP_TRUSTED_ORIGINS'),
     );
+    const mailKey = config.get<unknown>('SMTP_API_KEY');
+    this.emailAvailable = typeof mailKey === 'string' && mailKey.length > 0;
   }
   async onModuleDestroy(): Promise<void> {
     this.stopping = true;
@@ -288,6 +295,9 @@ export class AlertRulesService implements OnModuleDestroy {
       ...row,
       createdAt: new Date(row.createdAt).toISOString(),
       updatedAt: new Date(row.updatedAt).toISOString(),
+      cooldownUntil: row.cooldownUntil
+        ? new Date(row.cooldownUntil).toISOString()
+        : null,
     };
   }
   private async readRule(
@@ -314,6 +324,11 @@ export class AlertRulesService implements OnModuleDestroy {
         rules: rules.map((row) => this.ruleDto(row)),
         channels: channels.map((row) => this.channelDto(row)),
         deliveryEnabled: this.credentialCipher.enabled,
+        deliveryAvailability: {
+          webhook: this.credentialCipher.enabled,
+          slack: this.credentialCipher.enabled,
+          email: this.credentialCipher.enabled && this.emailAvailable,
+        },
       };
     });
   }

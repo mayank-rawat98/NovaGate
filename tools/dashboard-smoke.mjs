@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { verifyAlertsDashboard } from './alerts-dashboard-smoke.mjs';
 import { createServer } from 'node:http';
 import {
   existsSync,
@@ -167,13 +168,16 @@ const violations = [];
 const runtimeErrors = [];
 const apiRequests = [];
 const page = await context.newPage();
-page.on('pageerror', (error) => runtimeErrors.push(error.message));
+page.on('pageerror', (error) =>
+  runtimeErrors.push(`${page.url()}: ${error.message}\n${error.stack ?? ''}`),
+);
 page.on('console', (message) => {
   if (
     message.type() === 'error' &&
     ![
       'Failed to load resource: the server responded with a status of 503 (Service Unavailable)',
       'Failed to load resource: the server responded with a status of 400 (Bad Request)',
+      'Failed to load resource: the server responded with a status of 409 (Conflict)',
     ].includes(message.text())
   )
     runtimeErrors.push(message.text());
@@ -535,6 +539,27 @@ try {
     const response = await page.request.get(base);
     expect(response.ok()).toBeTruthy();
   }).toPass({ timeout: 60000 });
+  // Cold loads exercise the server/session boundary independently of client navigation.
+  const browserSession = await context.newCDPSession(page);
+  await browserSession.send('Emulation.setCPUThrottlingRate', { rate: 6 });
+  for (const path of [
+    '/dashboard',
+    '/services',
+    '/routes',
+    '/consumers',
+    '/logs',
+    '/traces',
+    '/settings',
+  ]) {
+    await page.goto(`${base}${path}`);
+    await expect(
+      page
+        .getByRole('complementary')
+        .getByText('Bluebird Studio', { exact: true }),
+    ).toBeVisible();
+  }
+  await browserSession.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+  await browserSession.detach();
   await page.goto(`${base}/dashboard`);
   await expect(
     page.getByRole('heading', { name: 'Your traffic, at a glance.' }),
@@ -1129,6 +1154,14 @@ try {
     archivePanel.getByRole('button', { name: 'Create archive', exact: true }),
   ).not.toBeVisible();
   await audit('log archives disabled');
+  await verifyAlertsDashboard({
+    page,
+    context,
+    base,
+    tenant,
+    audit,
+    artifacts,
+  });
   writeFileSync(
     resolve(artifacts, 'accessibility.json'),
     JSON.stringify(violations, null, 2),
@@ -1145,7 +1178,7 @@ try {
 } catch (error) {
   await page
     .screenshot({ path: resolve(artifacts, 'failure.png'), fullPage: true })
-    .catch(() => {});
+    .catch(() => undefined);
   writeFileSync(
     resolve(artifacts, 'failure.json'),
     JSON.stringify({ runtimeErrors, apiRequests }, null, 2),

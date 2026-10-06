@@ -42,6 +42,8 @@ export interface AlertRule extends AlertRuleConfig {
   id: string;
   revision: number;
   evaluation: AlertEvaluation | null;
+  notifiedState: 'ok' | 'firing';
+  cooldownUntil: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -109,4 +111,13 @@ export interface AlertConfiguration {
   rules: AlertRule[];
   channels: AlertChannel[];
   deliveryEnabled: boolean;
+  deliveryAvailability: Record<AlertChannelType, boolean>;
+}
+
+/** Stable delivery ID allows receivers to deduplicate retry/recovery deliveries. */
+export interface AlertWebhookPayload {
+  version: 1;
+  deliveryId: string;
+  tenantId: string;
+  event: Omit<AlertEvent, 'deliveries'>;
 }

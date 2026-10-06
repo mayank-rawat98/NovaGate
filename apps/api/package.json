@@ -91,7 +91,7 @@
         "cache": false,
         "options": {
           "commands": [
-            "eslint tools/metrics-container-smoke.mjs",
+            "eslint tools/metrics-container-smoke.mjs tools/alerts-container-fixture.mjs",
             "node tools/metrics-container-smoke.mjs"
           ],
           "parallel": false

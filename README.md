@@ -544,7 +544,27 @@ NX_DAEMON=false NX_NO_CLOUD=true npm exec -- nx run @api-gateway/api:metrics-con
 
 This fixture creates its own database, Redis, network and containers, checks actual
 gateway traffic through persistence and authenticated SSE within two seconds,
-verifies stored history and reconnect, then removes its resources. Evidence is
+verifies stored history and reconnect, then evaluates actual gateway windows and
+delivers firing/recovery alerts to disposable webhook, Slack-format and Mailtr-format
+receivers. It checks webhook signatures, a durable five-second retry with a stable ID,
+credential redaction, revision conflicts and retained history before removing its
+resources. Evidence is
 written inside `.local-work/metrics-container-evidence.json`. Run the retained
 `@api-gateway/api:grpc-container-smoke` transport checks and `dashboard:ui-smoke`
 browser/accessibility checks as well.
+
+### Tenant alerts
+
+Open **Observability → Alerts** to create error-rate, downstream-timeout, p95-latency
+or RPS rules, choose notification channels and follow delivery history. The interface
+shows missing evidence, paused rules/channels, firing cooldowns and verified recovery.
+Rule/channel changes use revision checks; saved secrets remain hidden and rotation
+requires explicit replacement. Empty channel selection records history only.
+
+Operators configure dedicated encryption keys and optional Mailtr credentials using
+[docker/alerting.env.example](docker/alerting.env.example). Default notification egress
+uses validated public HTTPS; intentional private receivers require exact trusted
+origins. Read the [alerting guide](apps/admin-api/src/alerts/README.md) for key rotation,
+webhook signature verification, finite retries and at-least-once delivery semantics.
+API acceptance does not prove final email inbox receipt. Formal provider/phase
+acceptance remains separate from local development checks.

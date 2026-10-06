@@ -27,6 +27,7 @@ import { AuthController } from '../auth/auth.controller';
 import { AuthService } from '../auth/auth.service';
 import { EmailService } from '../email/email.service';
 import { MigrationService } from '../database/migration.service';
+import { AlertsModule } from '../alerts/alerts.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { MigrationService } from '../database/migration.service';
       }),
     }),
     LogExportModule,
+    AlertsModule,
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
@@ -45,6 +47,12 @@ import { MigrationService } from '../database/migration.service';
         url: config.get('DATABASE_URL'),
         entities: [Tenant, ApiKey, PendingConfigUpdate],
         synchronize: false,
+        // Bound pool admission as well as worker SQL/network deadlines.
+        extra: {
+          max: 20,
+          connectionTimeoutMillis: 3000,
+          idleTimeoutMillis: 30000,
+        },
       }),
     }),
     TypeOrmModule.forFeature([Tenant, ApiKey, PendingConfigUpdate]),

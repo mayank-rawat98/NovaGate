@@ -17,6 +17,7 @@ import {
   X,
   Layers3,
   Activity,
+  Bell,
   ArrowUpRight,
 } from 'lucide-react';
 import { containDialogFocus } from './workspace-dialog';
@@ -54,6 +55,12 @@ const NAV_ITEMS = [
     href: '/traces',
     label: 'Traces',
     icon: Activity,
+    group: 'Observability',
+  },
+  {
+    href: '/alerts',
+    label: 'Alerts',
+    icon: Bell,
     group: 'Observability',
   },
   {

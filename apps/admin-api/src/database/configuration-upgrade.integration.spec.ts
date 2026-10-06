@@ -765,6 +765,41 @@ integration('Configuration upgrades and updates on PostgreSQL', () => {
       await alerts.onModuleDestroy();
     }
   });
+  it('reports delivery availability without revealing operator credentials', async () => {
+    const keys = {
+      ALERT_CHANNEL_KEYS: JSON.stringify({
+        fixture: Buffer.alloc(32, 12).toString('base64'),
+      }),
+      ALERT_CHANNEL_ACTIVE_KEY: 'fixture',
+    };
+    const cases = [
+      { config: {}, expected: { webhook: false, slack: false, email: false } },
+      {
+        config: { ...keys, SMTP_API_KEY: '' },
+        expected: { webhook: true, slack: true, email: false },
+      },
+      {
+        config: { ...keys, SMTP_API_KEY: 'local-mail-fixture' },
+        expected: { webhook: true, slack: true, email: true },
+      },
+    ];
+    for (const item of cases) {
+      const alerts = new AlertRulesService(ds, new ConfigService(item.config));
+      try {
+        const configuration = await alerts.configuration(tenant);
+        expect(configuration.deliveryAvailability).toEqual(item.expected);
+        expect(configuration.deliveryEnabled).toBe(item.expected.webhook);
+        expect(JSON.stringify(configuration)).not.toContain(
+          'local-mail-fixture',
+        );
+        expect(JSON.stringify(configuration)).not.toContain(
+          keys.ALERT_CHANNEL_KEYS,
+        );
+      } finally {
+        await alerts.onModuleDestroy();
+      }
+    }
+  });
   it('fences concurrent evaluation leases and atomically persists cooldown, resolution and delivery work', async () => {
     const config = new ConfigService({
       ALERT_CHANNEL_KEYS: JSON.stringify({
@@ -791,6 +826,8 @@ integration('Configuration upgrades and updates on PostgreSQL', () => {
       channelIds: [channel.id],
     };
     const rule = await alerts.createRule(tenant, input);
+    expect(rule.notifiedState).toBe('ok');
+    expect(rule.cooldownUntil).toBeNull();
     async function metrics(errors: number) {
       await ds.query(`TRUNCATE ${schema}.metrics_snapshots`);
       const window = {
@@ -877,6 +914,18 @@ integration('Configuration upgrades and updates on PostgreSQL', () => {
           [tenant],
         ),
       ).toHaveLength(1);
+      const firingRule = (await alerts.configuration(tenant)).rules.find(
+        (row) => row.id === rule.id,
+      );
+      expect(firingRule?.notifiedState).toBe('firing');
+      const storedCooldown = (
+        await ds.query(
+          `SELECT "cooldownUntil" FROM ${schema}.alert_rules WHERE id = $1`,
+          [rule.id],
+        )
+      )[0].cooldownUntil as Date;
+      expect(firingRule?.cooldownUntil).toBe(storedCooldown.toISOString());
+      expect(storedCooldown.getTime()).toBeGreaterThan(Date.now());
       await evaluateDue();
       expect(
         (await alerts.history(tenant)).filter(

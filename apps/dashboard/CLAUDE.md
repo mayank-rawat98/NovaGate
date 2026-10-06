@@ -127,3 +127,14 @@ Service editing persists `loadBalancing` through the typed API client. Legacy se
 Issue #61 adds `/traces`: sampled trace search by bounded time preset, exact trace/request IDs, route and error outcome; keyset pagination; an inline span waterfall with accessible timing text, span attributes and partial/truncated feedback. Refresh at 30 seconds. Use the shared trace responses through api-client, keep workspace identity in SWR keys, and allow log-to-trace links without exposing storage details. Browser verification must cover filter submission, pagination, detail, errors, empty results and mobile accessibility.
 
 Issue #63 adds `src/lib/use-live-metrics.ts`. Load bounded metric history once per stream connection and use authenticated fetch-based SSE through api-client. Keep parsing/frame/history bounds, cancel fetches on workspace changes or unmount, and use bounded reconnect backoff with manual retry. Retain same-workspace samples during reconnect and mark stale data; clear cross-workspace samples synchronously in render. Percentiles are fixed histogram upper estimates for HTTP completions. Unrelated SWR resource lists retain 30-second refresh. Verify streaming, reconnect, malformed/oversized input, cancellation and desktop/mobile accessibility.
+
+Issue #65 adds `/alerts` through shared alert contracts and api-client. Expose rule
+conditions in percent/ms/RPS, request minimums, channel selection and history-only
+rules. Channel reads contain only origin/recipient; metadata writes omit credentials
+and replacement requires an explicit complete same-type credential write. Keep
+secrets masked, retain input on failures and remount workspace state by tenant ID
+to clear unsaved secrets during switches. Distinguish paused, stale, no-data, firing
+and healthy states; no-data preserves the last notified state. Show actual cooldown
+deadlines, operator delivery availability, delivery attempts and accepted-versus-inbox
+semantics. The browser verifier covers real forms/revision errors, capacity limits,
+secret replacement, workspace changes, keyboard navigation and mobile accessibility.
