@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { verifyAlertsDashboard } from './alerts-dashboard-smoke.mjs';
 import { createServer } from 'node:http';
 import {
@@ -164,12 +165,19 @@ let caSaves = 0;
 let archivesEnabled = true;
 let failArchiveCreate = false;
 let failArchiveDownload = false;
+let failArchiveRetry = false;
+let failSchedule = '';
+let scheduleConfiguration = null;
+let scheduleBacklog = false;
 const archives = ['queued', 'processing', 'completed', 'failed', 'expired'].map(
   (status, i) => ({
     id: `3456789${i}-1234-1234-1234-123456789abc`,
     status,
     filter: { from: createdAt, to: createdAt },
     attempts: 1,
+    retryCount: 0,
+    kind: 'manual',
+    timeBasis: 'request',
     rowCount: status === 'completed' ? 1 : 0,
     bytes: 64,
     createdAt,
@@ -380,6 +388,107 @@ const handleApiFixture = async (route) => {
   }
   let body = [];
   let status = 200;
+  if (url.pathname.includes('/log-exports/') && resource === 'schedule') {
+    const method = route.request().method();
+    let status = 200;
+    let problem;
+    if (method === 'PUT' || method === 'DELETE') {
+      const dto = route.request().postDataJSON();
+      if (failSchedule === 'outage') {
+        status = 503;
+        problem = 'Schedule temporarily unavailable';
+      } else if (
+        failSchedule === 'revision' ||
+        dto.expectedRevision !== (scheduleConfiguration?.revision ?? null)
+      ) {
+        status = 409;
+        problem = 'The archive schedule changed. Refresh it before saving.';
+      } else if (method === 'DELETE') {
+        scheduleConfiguration = null;
+      } else {
+        assert.deepEqual(Object.keys(dto).sort(), [
+          'cadence',
+          'enabled',
+          'expectedRevision',
+          'filter',
+        ]);
+        assert.equal(typeof dto.enabled, 'boolean');
+        assert.ok(['near_real_time', 'hourly'].includes(dto.cadence));
+        assert.ok(
+          Object.keys(dto.filter).every((key) =>
+            ['minStatusCode', 'pathPrefix', 'consumerId'].includes(key),
+          ),
+        );
+        if (dto.filter.consumerId)
+          assert.match(dto.filter.consumerId, /^[a-f0-9-]{36}$/);
+        const now = new Date().toISOString();
+        scheduleConfiguration = {
+          id: scheduleConfiguration?.id ?? randomUUID(),
+          revision: randomUUID(),
+          enabled: dto.enabled,
+          cadence: dto.cadence,
+          filter: dto.filter,
+          startedAt: scheduleConfiguration?.startedAt ?? now,
+          cursor: scheduleConfiguration?.cursor ?? now,
+          nextWindowAt: new Date(Date.now() + 60000).toISOString(),
+          updatedAt: now,
+          lastCheckedAt: now,
+        };
+      }
+    } else assert.equal(method, 'GET');
+    await route.fulfill({
+      status,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        problem
+          ? { message: problem }
+          : {
+              available: archivesEnabled,
+              schedule: scheduleConfiguration
+                ? {
+                    ...scheduleConfiguration,
+                    ...(scheduleBacklog
+                      ? {
+                          nextWindowAt: new Date(
+                            Date.now() - 3600000,
+                          ).toISOString(),
+                          error:
+                            'Waiting for pending archives; unprocessed windows are retained',
+                        }
+                      : {}),
+                  }
+                : null,
+              settlementSeconds: 15,
+              pendingJobs: scheduleBacklog ? 20 : 0,
+              failedJobs: scheduleBacklog ? 1 : 0,
+              backlogSeconds: scheduleBacklog ? 3600 : 0,
+              queueLimit: 20,
+            },
+      ),
+    });
+    return;
+  }
+  if (url.pathname.includes('/log-exports/') && resource === 'retry') {
+    assert.equal(route.request().method(), 'POST');
+    const id = url.pathname.split('/').at(-2);
+    const job = archives.find((entry) => entry.id === id);
+    assert.ok(job);
+    assert.equal(job.status, 'failed');
+    if (!failArchiveRetry) {
+      job.status = 'queued';
+      job.attempts = 0;
+      job.retryCount++;
+      delete job.error;
+    }
+    await route.fulfill({
+      status: failArchiveRetry ? 503 : 201,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        failArchiveRetry ? { message: 'Retry temporarily unavailable' } : job,
+      ),
+    });
+    return;
+  }
   if (url.pathname.includes('/log-exports/') && resource === 'download') {
     await route.fulfill({
       status: failArchiveDownload ? 503 : 200,
@@ -466,9 +575,9 @@ const handleApiFixture = async (route) => {
     });
     return;
   }
-  if (resource === tenant)
+  if (url.pathname.split('/').length === 4 && /^[a-f0-9-]{36}$/.test(resource))
     body = {
-      id: tenant,
+      id: resource,
       name: 'Bluebird Studio',
       email: 'demo@example.test',
       planId: 'free',
@@ -522,7 +631,7 @@ const handleApiFixture = async (route) => {
   else if (resource === 'consumers')
     body = [
       {
-        id: 'c1',
+        id: '56789012-1234-1234-1234-123456789abc',
         name: 'Storefront app',
         groups: ['read-only'],
         rateLimitTier: 'authenticated',
@@ -1186,6 +1295,265 @@ try {
     path: resolve(artifacts, 'mobile-archives.png'),
     fullPage: true,
   });
+  const schedulePanel = page.getByRole('region', {
+    name: 'Automatic log archives',
+    exact: true,
+  });
+  await expect(
+    schedulePanel.getByText('Not configured', { exact: true }),
+  ).toBeVisible();
+  await schedulePanel
+    .getByRole('button', { name: 'Set up automatic archives', exact: true })
+    .click();
+  let scheduleDialog = page.getByRole('dialog', {
+    name: 'Set up automatic archives',
+    exact: true,
+  });
+  await scheduleDialog
+    .getByLabel('Archive frequency', { exact: true })
+    .selectOption('near_real_time');
+  await scheduleDialog
+    .getByLabel('Minimum response status (optional)', { exact: true })
+    .fill('500');
+  await scheduleDialog
+    .getByLabel('Scheduled path prefix (optional)', { exact: true })
+    .fill('/v1/');
+  await scheduleDialog
+    .getByLabel('Scheduled consumer', { exact: true })
+    .selectOption('56789012-1234-1234-1234-123456789abc');
+  failSchedule = 'outage';
+  await scheduleDialog
+    .getByRole('button', { name: 'Save archive schedule', exact: true })
+    .click();
+  await expect(scheduleDialog.getByRole('alert')).toContainText(
+    'temporarily unavailable',
+  );
+  await expect(
+    scheduleDialog.getByLabel('Scheduled path prefix (optional)', {
+      exact: true,
+    }),
+  ).toHaveValue('/v1/');
+  failSchedule = 'revision';
+  await scheduleDialog
+    .getByRole('button', { name: 'Save archive schedule', exact: true })
+    .click();
+  await expect(scheduleDialog.getByRole('alert')).toContainText(
+    'schedule changed',
+  );
+  await expect(
+    scheduleDialog.getByLabel('Archive frequency', { exact: true }),
+  ).toHaveValue('near_real_time');
+  await audit('archive schedule save and revision recovery mobile');
+  failSchedule = '';
+  await scheduleDialog
+    .getByRole('button', { name: 'Save archive schedule', exact: true })
+    .click();
+  await expect(scheduleDialog).not.toBeVisible();
+  await expect(
+    schedulePanel.getByText('Active', { exact: true }),
+  ).toBeVisible();
+  assert.equal(
+    scheduleConfiguration.filter.consumerId,
+    '56789012-1234-1234-1234-123456789abc',
+  );
+  const originalCursor = scheduleConfiguration.cursor;
+  await schedulePanel
+    .getByRole('button', { name: 'Edit archive schedule', exact: true })
+    .click();
+  scheduleDialog = page.getByRole('dialog', {
+    name: 'Edit archive schedule',
+    exact: true,
+  });
+  await expect(
+    scheduleDialog.getByLabel('Scheduled consumer', { exact: true }),
+  ).toHaveValue(scheduleConfiguration.filter.consumerId);
+  await scheduleDialog
+    .getByLabel('Archive frequency', { exact: true })
+    .selectOption('hourly');
+  await scheduleDialog
+    .getByLabel('Scheduled path prefix (optional)', { exact: true })
+    .fill('/%_');
+  await scheduleDialog
+    .getByLabel('Run automatic archives', { exact: true })
+    .uncheck();
+  await scheduleDialog
+    .getByRole('button', { name: 'Save archive schedule', exact: true })
+    .click();
+  await expect(
+    schedulePanel.getByText('Paused', { exact: true }),
+  ).toBeVisible();
+  assert.equal(scheduleConfiguration.cursor, originalCursor);
+  assert.equal(scheduleConfiguration.filter.pathPrefix, '/%_');
+  await schedulePanel
+    .getByRole('button', { name: 'Resume automatic archives', exact: true })
+    .click();
+  await expect(
+    schedulePanel.getByText('Active', { exact: true }),
+  ).toBeVisible();
+  await schedulePanel
+    .getByRole('button', { name: 'Pause automatic archives', exact: true })
+    .click();
+  await expect(
+    schedulePanel.getByText('Paused', { exact: true }),
+  ).toBeVisible();
+  failSchedule = 'revision';
+  await schedulePanel
+    .getByRole('button', { name: 'Resume automatic archives', exact: true })
+    .click();
+  await expect(schedulePanel.getByRole('alert')).toContainText(
+    'schedule changed',
+  );
+  await expect(
+    schedulePanel.getByText('Paused', { exact: true }),
+  ).toBeVisible();
+  failSchedule = '';
+  await schedulePanel
+    .getByRole('button', { name: 'Resume automatic archives', exact: true })
+    .click();
+  await expect(
+    schedulePanel.getByText('Active', { exact: true }),
+  ).toBeVisible();
+  scheduleBacklog = true;
+  await schedulePanel
+    .getByRole('button', { name: 'Refresh schedule', exact: true })
+    .click();
+  await expect(
+    schedulePanel.getByText('Catching up', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    schedulePanel.getByText('20 / 20', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    schedulePanel.getByText(
+      'Waiting for pending archives; unprocessed windows are retained',
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await audit('archive schedule backlog and failed jobs mobile');
+  await page.screenshot({
+    path: resolve(artifacts, 'mobile-archive-schedule.png'),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await audit('archive schedule desktop');
+  await page.screenshot({
+    path: resolve(artifacts, 'desktop-archive-schedule.png'),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  const removeSchedule = schedulePanel.getByRole('button', {
+    name: 'Remove archive schedule',
+    exact: true,
+  });
+  await removeSchedule.click();
+  let removalDialog = page.getByRole('dialog', {
+    name: 'Remove archive schedule',
+    exact: true,
+  });
+  await removalDialog
+    .getByRole('button', { name: 'Keep schedule', exact: true })
+    .focus();
+  await page.keyboard.press('Shift+Tab');
+  await expect(
+    removalDialog.getByRole('button', { name: 'Confirm removal', exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(
+    removalDialog.getByRole('button', { name: 'Keep schedule', exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(removalDialog).not.toBeVisible();
+  await expect(removeSchedule).toBeFocused();
+  await removeSchedule.click();
+  removalDialog = page.getByRole('dialog', {
+    name: 'Remove archive schedule',
+    exact: true,
+  });
+  failSchedule = 'revision';
+  await removalDialog
+    .getByRole('button', { name: 'Confirm removal', exact: true })
+    .click();
+  await expect(removalDialog.getByRole('alert')).toContainText(
+    'schedule changed',
+  );
+  failSchedule = '';
+  const retainedJobs = archives.length;
+  await removalDialog
+    .getByRole('button', { name: 'Confirm removal', exact: true })
+    .click();
+  await expect(removalDialog).not.toBeVisible();
+  await expect(
+    schedulePanel.getByText('Not configured', { exact: true }),
+  ).toBeVisible();
+  assert.equal(archives.length, retainedJobs);
+  scheduleBacklog = false;
+  const failedArchive = archives.find((entry) => entry.status === 'failed');
+  const retryButton = archivePanel.getByRole('button', {
+    name: `Retry archive ${failedArchive.id}`,
+    exact: true,
+  });
+  failArchiveRetry = true;
+  await retryButton.click();
+  await expect(archivePanel.getByRole('alert')).toContainText(
+    'Retry temporarily unavailable',
+  );
+  await expect(retryButton).toBeVisible();
+  failArchiveRetry = false;
+  await retryButton.click();
+  await expect(archivePanel.getByRole('status')).toContainText(
+    'original window and filters',
+  );
+  await expect(retryButton).not.toBeVisible();
+  assert.equal(failedArchive.retryCount, 1);
+  await audit('archive removal and failed-job retry mobile');
+  await schedulePanel
+    .getByRole('button', { name: 'Set up automatic archives', exact: true })
+    .click();
+  scheduleDialog = page.getByRole('dialog', {
+    name: 'Set up automatic archives',
+    exact: true,
+  });
+  await scheduleDialog
+    .getByLabel('Scheduled path prefix (optional)', { exact: true })
+    .fill('/unsaved-first-workspace');
+  const otherArchiveWorkspace = '87654321-1234-1234-1234-123456789abc';
+  await page.evaluate((other) => {
+    localStorage.setItem('gw_tenant_id', other);
+    window.dispatchEvent(new Event('storage'));
+  }, otherArchiveWorkspace);
+  await expect(scheduleDialog).not.toBeVisible();
+  await expect(
+    schedulePanel.getByText('Not configured', { exact: true }),
+  ).toBeVisible();
+  await schedulePanel
+    .getByRole('button', { name: 'Set up automatic archives', exact: true })
+    .click();
+  scheduleDialog = page.getByRole('dialog', {
+    name: 'Set up automatic archives',
+    exact: true,
+  });
+  await expect(
+    scheduleDialog.getByLabel('Scheduled path prefix (optional)', {
+      exact: true,
+    }),
+  ).toHaveValue('');
+  await expect(
+    scheduleDialog.getByLabel('Archive frequency', { exact: true }),
+  ).toHaveValue('hourly');
+  await page.keyboard.press('Escape');
+  await page.evaluate((tenant) => {
+    localStorage.setItem('gw_tenant_id', tenant);
+    window.dispatchEvent(new Event('storage'));
+  }, tenant);
+  await expect(
+    schedulePanel.getByText('Not configured', { exact: true }),
+  ).toBeVisible();
+  assert.ok(
+    apiRequests.includes(
+      `/api/tenants/${otherArchiveWorkspace}/log-exports/schedule`,
+    ),
+  );
+  await audit('archive schedule workspace state reset');
   archivesEnabled = false;
   await page
     .getByRole('button', { name: 'Refresh archives', exact: true })
@@ -1199,6 +1567,20 @@ try {
   await expect(
     archivePanel.getByRole('button', { name: 'Create archive', exact: true }),
   ).not.toBeVisible();
+  await schedulePanel
+    .getByRole('button', { name: 'Refresh schedule', exact: true })
+    .click();
+  await expect(
+    schedulePanel.getByText('Automatic archives are unavailable.', {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await expect(
+    schedulePanel.getByRole('button', {
+      name: 'Set up automatic archives',
+      exact: true,
+    }),
+  ).toBeDisabled();
   await audit('log archives disabled');
   await verifyAlertsDashboard({
     page,

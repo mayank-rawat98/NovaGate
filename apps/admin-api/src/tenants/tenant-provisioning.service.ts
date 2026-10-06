@@ -85,12 +85,16 @@ export class TenantProvisioningService {
           "clientIp" VARCHAR,
           "userAgent" VARCHAR,
           "errorCode" VARCHAR,
-          timestamp TIMESTAMPTZ
+          timestamp TIMESTAMPTZ,
+          "receivedAt" TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
         )
       `);
 
       await manager.query(
         `CREATE INDEX IF NOT EXISTS request_logs_export_cursor ON ${schemaName}.request_logs (timestamp, id)`,
+      );
+      await manager.query(
+        `CREATE INDEX IF NOT EXISTS request_logs_receipt_cursor ON ${schemaName}.request_logs ("receivedAt", id)`,
       );
 
       await manager.query(`

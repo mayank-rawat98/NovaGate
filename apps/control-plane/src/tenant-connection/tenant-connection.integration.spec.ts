@@ -124,7 +124,7 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
         id UUID PRIMARY KEY, "consumerId" UUID, method VARCHAR, path VARCHAR, "statusCode" INTEGER,
         "responseTimeMs" INTEGER, "requestId" VARCHAR, "downstreamService" VARCHAR, "downstreamLatencyMs" INTEGER,
         "clientIp" VARCHAR, "userAgent" VARCHAR, "errorCode" VARCHAR, timestamp TIMESTAMP
-        ${id === tenantId ? ', "traceId" VARCHAR(32), "spanId" VARCHAR(16)' : ''})`);
+        ${id === tenantId ? ', "traceId" VARCHAR(32), "spanId" VARCHAR(16), "receivedAt" TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()' : ''})`);
       await ds.query(
         `CREATE TABLE ${schema}.error_events (id UUID PRIMARY KEY, "requestId" TEXT, "errorCode" TEXT, message TEXT, "serviceId" UUID, path TEXT, "statusCode" INTEGER, timestamp TIMESTAMP)`,
       );
@@ -586,6 +586,7 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
         timestamp: new Date().toISOString(),
         traceId: trace().traceId,
         spanId: trace().spanId,
+        receivedAt: '2000-01-01T00:00:00Z',
       };
       await ingestion.ingestLogs(id, [log]);
       const rows = await ds.query(
@@ -593,8 +594,64 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
         [log.id],
       );
       expect(rows[0].responseTimeMs).toBe(2);
-      if (id === tenantId) expect(rows[0].traceId).toBe(log.traceId);
+      if (id === tenantId) {
+        expect(rows[0].traceId).toBe(log.traceId);
+        expect(rows[0].receivedAt.getTime()).toBeGreaterThan(
+          Date.now() - 10000,
+        );
+        const receipt = rows[0].receivedAt;
+        await ingestion.ingestLogs(id, [log]);
+        expect(
+          (
+            await ds.query(
+              `SELECT "receivedAt" FROM tenant_${id.replace(/-/g, '_')}.request_logs WHERE id=$1`,
+              [log.id],
+            )
+          )[0].receivedAt,
+        ).toEqual(receipt);
+      }
     }
+  });
+  it('bounds receipt-lock waits and recovers a rejected log batch after the competing transaction ends', async () => {
+    const ingestion = new LogIngestionService(ds);
+    const runner = ds.createQueryRunner();
+    const log = {
+      id: randomUUID(),
+      method: 'GET',
+      path: '/receipt-deadline',
+      statusCode: 200,
+      responseTimeMs: 1,
+      requestId: randomUUID(),
+      clientIp: '',
+      timestamp: '2000-01-01T00:00:00Z',
+    };
+    await runner.connect();
+    await runner.startTransaction();
+    try {
+      await runner.query(
+        `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,
+        [`log-receipt:${tenantId}`],
+      );
+      await expect(ingestion.ingestLogs(tenantId, [log])).rejects.toThrow(
+        'lock timeout',
+      );
+      expect(
+        await ds.query(
+          `SELECT id FROM tenant_${tenantId.replace(/-/g, '_')}.request_logs WHERE id=$1`,
+          [log.id],
+        ),
+      ).toHaveLength(0);
+    } finally {
+      await runner.rollbackTransaction();
+      await runner.release();
+    }
+    await ingestion.ingestLogs(tenantId, [log]);
+    const [stored] = await ds.query(
+      `SELECT "receivedAt" FROM tenant_${tenantId.replace(/-/g, '_')}.request_logs WHERE id=$1`,
+      [log.id],
+    );
+    expect(stored.receivedAt.getTime()).toBeGreaterThan(Date.now() - 10000);
+    await ingestion.onModuleDestroy();
   });
   it('closes oversized frames and bounded queues instead of accumulating pending trace writes', async () => {
     const large = await connectTraceGateway();

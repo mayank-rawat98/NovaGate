@@ -10,6 +10,8 @@ import type {
   LogExportFilter,
   LogExportJob,
   LogExportList,
+  LogExportScheduleState,
+  SaveLogExportSchedule,
   TraceListResponse,
   TraceDetailResponse,
   MetricsSnapshot,
@@ -394,6 +396,43 @@ export function createLogExport(
   return request(`/tenants/${tenantId}/log-exports`, {
     method: 'POST',
     body: JSON.stringify(filter),
+  });
+}
+export function getLogExportSchedule(
+  tenantId: string,
+): Promise<LogExportScheduleState> {
+  return request(`/tenants/${tenantId}/log-exports/schedule`);
+}
+export function saveLogExportSchedule(
+  tenantId: string,
+  input: SaveLogExportSchedule,
+  signal?: AbortSignal,
+): Promise<LogExportScheduleState> {
+  return request(`/tenants/${tenantId}/log-exports/schedule`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+export function removeLogExportSchedule(
+  tenantId: string,
+  expectedRevision: string,
+  signal?: AbortSignal,
+): Promise<LogExportScheduleState> {
+  return request(`/tenants/${tenantId}/log-exports/schedule`, {
+    method: 'DELETE',
+    body: JSON.stringify({ expectedRevision }),
+    signal,
+  });
+}
+export function retryLogExport(
+  tenantId: string,
+  id: string,
+  signal?: AbortSignal,
+): Promise<LogExportJob> {
+  return request(`/tenants/${tenantId}/log-exports/${id}/retry`, {
+    method: 'POST',
+    signal,
   });
 }
 export async function downloadLogExport(

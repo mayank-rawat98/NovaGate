@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState, useId } from 'react';
+import { useEffect, useState, useId, useRef } from 'react';
 import useSWR from 'swr';
 import { Download, Archive, RefreshCw } from 'lucide-react';
 import {
   getLogExports,
   createLogExport,
   downloadLogExport,
+  retryLogExport,
 } from '../lib/api-client';
 import { DataLoadNotice } from './data-load-notice';
 
@@ -25,6 +26,9 @@ export function LogExportPanel({ tenantId }: { tenantId: string }) {
   const [downloading, setDownloading] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
   const [failure, setFailure] = useState('');
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const pendingRetry = useRef<AbortController | null>(null);
+  useEffect(() => () => pendingRetry.current?.abort(), []);
   useEffect(() => {
     const now = new Date();
     setTo(now.toISOString().slice(0, 16));
@@ -75,6 +79,33 @@ export function LogExportPanel({ tenantId }: { tenantId: string }) {
       );
     } finally {
       setDownloading(null);
+    }
+  }
+  async function retry(jobId: string) {
+    if (pendingRetry.current) return;
+    const controller = new AbortController();
+    pendingRetry.current = controller;
+    setRetrying(jobId);
+    setFailure('');
+    setNotice('');
+    try {
+      await retryLogExport(tenantId, jobId, controller.signal);
+      if (!controller.signal.aborted) {
+        setNotice('Archive queued again with its original window and filters.');
+        await mutate().catch(() => undefined);
+      }
+    } catch (error) {
+      if (!controller.signal.aborted)
+        setFailure(
+          error instanceof Error
+            ? error.message
+            : 'Archive could not be retried. Refresh and try again.',
+        );
+    } finally {
+      if (!controller.signal.aborted) {
+        pendingRetry.current = null;
+        setRetrying(null);
+      }
     }
   }
   return (
@@ -226,7 +257,7 @@ export function LogExportPanel({ tenantId }: { tenantId: string }) {
                   <th className="px-3 py-3 font-medium">Status</th>
                   <th className="px-3 py-3 font-medium">Records / size</th>
                   <th className="px-3 py-3 font-medium">Expires</th>
-                  <th className="px-3 py-3 font-medium">Download</th>
+                  <th className="px-3 py-3 font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -241,6 +272,11 @@ export function LogExportPanel({ tenantId }: { tenantId: string }) {
                     <tr key={job.id} className="border-t border-gray-100">
                       <td className="px-3 py-3 text-xs text-gray-600">
                         {new Date(job.createdAt).toLocaleString()}
+                        <p className="mt-1">
+                          {job.kind === 'scheduled'
+                            ? 'Automatic · receipt window'
+                            : 'Manual · request times'}
+                        </p>
                       </td>
                       <td className="px-3 py-3">
                         <span className="rounded bg-slate-100 px-2 py-1 text-xs capitalize text-slate-800">
@@ -251,6 +287,12 @@ export function LogExportPanel({ tenantId }: { tenantId: string }) {
                             {job.error}
                           </p>
                         )}
+                        <p className="mt-1 text-xs text-gray-600">
+                          {job.attempts} attempt(s)
+                          {job.retryCount
+                            ? ` · ${job.retryCount} requested retry(s)`
+                            : ''}
+                        </p>
                       </td>
                       <td className="px-3 py-3 text-xs text-gray-600">
                         {job.rowCount.toLocaleString()} /{' '}
@@ -273,6 +315,18 @@ export function LogExportPanel({ tenantId }: { tenantId: string }) {
                             {downloading === job.id
                               ? 'Downloading…'
                               : 'Download'}
+                          </button>
+                        ) : job.status === 'failed' &&
+                          data.enabled &&
+                          Date.parse(job.expiresAt) > Date.now() ? (
+                          <button
+                            type="button"
+                            aria-label={`Retry archive ${job.id}`}
+                            disabled={!!retrying}
+                            onClick={() => void retry(job.id)}
+                            className="rounded-md border border-gray-300 px-3 py-2 text-xs text-gray-700 disabled:opacity-50"
+                          >
+                            {retrying === job.id ? 'Queuing…' : 'Retry archive'}
                           </button>
                         ) : (
                           <span className="text-xs text-gray-500">

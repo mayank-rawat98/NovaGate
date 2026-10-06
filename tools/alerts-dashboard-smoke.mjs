@@ -243,8 +243,17 @@ export async function verifyAlertsDashboard({
   };
   const checkedOtherWorkspaceHandler = checkedHandler(otherWorkspaceHandler);
   const checkedAlertHandler = checkedHandler(handler);
+  const idleUrl = `${base}/__verification/idle`;
+  const idleHandler = (route) =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: '<!doctype html><html lang="en"><head><title>Verification finished</title></head><body>Verification finished.</body></html>',
+    });
+  const checkedIdleHandler = checkedHandler(idleHandler);
+  await context.route(idleUrl, checkedIdleHandler);
   await context.route(otherWorkspaceUrl, checkedOtherWorkspaceHandler);
   await context.route('**/api/tenants/*/alerts**', checkedAlertHandler);
+  let completed = false;
   try {
     await page.setViewportSize({ width: 1440, height: 960 });
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -716,8 +725,13 @@ export async function verifyAlertsDashboard({
     await expect(
       page.getByRole('button', { name: 'Add channel', exact: true }),
     ).toBeDisabled();
+    completed = true;
   } finally {
+    // Unmount polling before removing its fixture routes. Keep failed views
+    // available for the parent screenshot and trace when verification throws.
+    if (completed) await page.goto(idleUrl);
     await context.unroute('**/api/tenants/*/alerts**', checkedAlertHandler);
     await context.unroute(otherWorkspaceUrl, checkedOtherWorkspaceHandler);
+    await context.unroute(idleUrl, checkedIdleHandler);
   }
 }

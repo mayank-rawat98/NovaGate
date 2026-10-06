@@ -88,3 +88,13 @@ Admin migrations must add this column before deploying the updated control plane
 Return and publish only the existing canonical summary fields, never private or
 unvalidated metadata. Actual PostgreSQL/WebSocket checks cover authenticated
 attribution, histogram preservation, legacy nulls and unchanged live payloads.
+
+Issue #72 adds database-owned request-log receipt timestamps. Admin migrations own
+column/default/index creation and UTC normalization. Log JSON record insertion must
+override receipt in SQL after admission and the canonical tenant receipt lock; do
+not trust gateway receipt fields or bypass INSERT SELECT defaults. Scheduling shares
+this transaction lock through commit. Keep log batches/bytes/actual transactions
+bounded, with local statement/lock deadlines, finite pool acquisition and shutdown
+drain. Real checks retain legacy optional-column conversion, reject blocked writes
+within the lock deadline, and prove successful retry and receipt preservation on
+replayed IDs.

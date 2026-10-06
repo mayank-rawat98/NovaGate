@@ -80,6 +80,17 @@
         "options": {
           "passWithNoTests": true
         }
+      },
+      "runtime-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/metrics-container-smoke.mjs tools/alerts-container-fixture.mjs tools/log-export-container-fixture.mjs",
+            "node tools/metrics-container-smoke.mjs"
+          ],
+          "parallel": false
+        }
       }
     }
   },

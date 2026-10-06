@@ -1,3 +1,4 @@
+import type { LogExportScheduleState } from '@api-gateway/shared-types';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -26,6 +27,7 @@ import { TenantAuthGuard } from '../auth/tenant-auth.guard';
 import { ObjectStorageService } from './object-storage.service';
 import { LogExportService } from './log-export.service';
 import { LogExportController } from './log-export.controller';
+import { LogExportSchedulerService } from './log-export-scheduler.service';
 
 const integration =
   process.env.TEST_DATABASE_URL && process.env.TEST_OBJECT_STORAGE_ENDPOINT
@@ -36,6 +38,7 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
   let db: DataSource;
   let storage: ObjectStorageService;
   let exports: LogExportService;
+  let schedules: LogExportSchedulerService;
   let app: INestApplication;
   let url: string;
   const tenant = randomUUID();
@@ -81,7 +84,11 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
     await root.query(`CREATE DATABASE ${database}`);
     const databaseUrl = new URL(process.env.TEST_DATABASE_URL as string);
     databaseUrl.pathname = `/${database}`;
-    db = new DataSource({ type: 'postgres', url: databaseUrl.toString() });
+    db = new DataSource({
+      type: 'postgres',
+      url: databaseUrl.toString(),
+      extra: { options: '-c timezone=Asia/Kolkata' },
+    });
     await db.initialize();
     await db.query(
       readFileSync(
@@ -99,7 +106,7 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
     await new MigrationService(db).onModuleInit();
     // Equal microsecond timestamps across pages exercise the UUID tie-breaker.
     await db.query(
-      `INSERT INTO ${tenantSchema(tenant)}.request_logs (id,method,path,"statusCode",timestamp) SELECT gen_random_uuid(),'GET','/products',CASE WHEN i%2=0 THEN 500 ELSE 200 END,$1::timestamp + INTERVAL '0.000123 seconds' FROM generate_series(1,1201) i`,
+      `INSERT INTO ${tenantSchema(tenant)}.request_logs (id,method,path,"statusCode",timestamp) SELECT gen_random_uuid(),'GET','/products',CASE WHEN i%2=0 THEN 500 ELSE 200 END,$1::timestamptz + INTERVAL '0.000123 seconds' FROM generate_series(1,1201) i`,
       [new Date(now.getTime() - 60000).toISOString()],
     );
     await db.query(
@@ -117,6 +124,10 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
       }),
     );
     exports = new LogExportService(db, storage);
+    schedules = new LogExportSchedulerService(db, storage);
+    jest
+      .spyOn(schedules, 'onApplicationBootstrap')
+      .mockImplementation(() => undefined);
     jest
       .spyOn(exports, 'onApplicationBootstrap')
       .mockImplementation(() => undefined);
@@ -125,6 +136,10 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
       providers: [
         { provide: LogExportService, useValue: exports },
         { provide: ObjectStorageService, useValue: storage },
+        {
+          provide: LogExportSchedulerService,
+          useValue: schedules,
+        },
         { provide: APP_GUARD, useClass: TenantAuthGuard },
       ],
     }).compile();
@@ -211,7 +226,17 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
     expect(new Set(lines.map((line) => line.id)).size).toBe(1201);
     expect(
       lines.every(
-        (line) => line.path === '/products' && !('export_cursor' in line),
+        (line) =>
+          line.path === '/products' &&
+          !('export_cursor' in line) &&
+          !('receivedAt' in line),
+      ),
+    ).toBe(true);
+    expect(
+      lines.every(
+        (line) =>
+          line.timestamp ===
+          new Date(now.getTime() - 60000).toISOString().replace('Z', '123Z'),
       ),
     ).toBe(true);
   }, 30000);
@@ -517,6 +542,176 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
     await expect(storage.download(record.object_key)).rejects.toMatchObject({
       name: 'NoSuchKey',
     });
+  }, 30000);
+  it('authenticates scheduled CRUD and downloads late-arriving receipt archives without internal metadata', async () => {
+    const scheduleUrl = `${url}/${other}/log-exports/schedule`;
+    expect((await fetch(scheduleUrl)).status).toBe(401);
+    expect((await fetch(scheduleUrl, { headers: headers() })).status).toBe(403);
+    const configuration = {
+      enabled: true,
+      cadence: 'near_real_time',
+      filter: { pathPrefix: '/scheduled-late', minStatusCode: 500 },
+      expectedRevision: null,
+    };
+    const saved = await fetch(scheduleUrl, {
+      method: 'PUT',
+      headers: headers(other),
+      body: JSON.stringify(configuration),
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.headers.get('cache-control')).toBe('no-store');
+    const state = (await saved.json()) as LogExportScheduleState;
+    const originalSchedule = required(state.schedule ?? undefined);
+    expect(
+      (
+        await fetch(scheduleUrl, {
+          method: 'PUT',
+          headers: headers(other),
+          body: JSON.stringify({
+            ...configuration,
+            expectedRevision: originalSchedule.revision,
+            cursor: '2000-01-01T00:00:00Z',
+          }),
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await fetch(scheduleUrl, {
+          method: 'PUT',
+          headers: headers(other),
+          body: JSON.stringify(configuration),
+        })
+      ).status,
+    ).toBe(409);
+    const from = new Date(Math.floor((Date.now() - 180000) / 60000) * 60000)
+      .toISOString()
+      .replace('.000Z', '.000124Z');
+    await db.query(
+      `UPDATE public.log_export_schedules SET cursor_at=$2,next_due_at=clock_timestamp()-INTERVAL '1 second' WHERE tenant_id=$1`,
+      [other, from],
+    );
+    await db.query(
+      `INSERT INTO ${tenantSchema(other)}.request_logs (id,path,"statusCode",timestamp,"receivedAt") SELECT gen_random_uuid(),'/scheduled-late',500,
+      CASE WHEN i%2=0 THEN '2000-01-01T00:00:00Z'::timestamptz ELSE '2999-01-01T00:00:00Z'::timestamptz END,$1::timestamptz+INTERVAL '0.000001 seconds' FROM generate_series(1,1201) i`,
+      [from],
+    );
+    await db.query(
+      `INSERT INTO ${tenantSchema(other)}.request_logs (id,path,"statusCode",timestamp,"receivedAt") VALUES (gen_random_uuid(),'/scheduled-late',500,'2000-01-01T00:00:00Z',$1::timestamptz-INTERVAL '0.000001 seconds')`,
+      [from],
+    );
+    await schedules.scheduleNext();
+    const claimed = required(await exports.claim());
+    expect(claimed).toMatchObject({
+      tenant_id: other,
+      time_basis: 'receipt',
+      kind: 'scheduled',
+    });
+    const unavailable = jest
+      .spyOn(storage, 'upload')
+      .mockRejectedValue(new Error('Verification storage outage'));
+    await exports.process(claimed);
+    for (let attempt = 0; attempt < 2; attempt++)
+      await exports.process(required(await exports.claim()));
+    unavailable.mockRestore();
+    expect((await exports.list(other)).jobs[0]).toMatchObject({
+      status: 'failed',
+      attempts: 3,
+    });
+    const retryUrl = `${url}/${other}/log-exports/${claimed.id}/retry`;
+    expect((await fetch(retryUrl, { method: 'POST' })).status).toBe(401);
+    expect(
+      (await fetch(retryUrl, { method: 'POST', headers: headers() })).status,
+    ).toBe(403);
+    const retries = await Promise.all([
+      fetch(retryUrl, { method: 'POST', headers: headers(other) }),
+      fetch(retryUrl, { method: 'POST', headers: headers(other) }),
+    ]);
+    expect(retries.map((response) => response.status).sort()).toEqual([
+      201, 409,
+    ]);
+    await expect(exports.retry(tenant, claimed.id)).rejects.toThrow(
+      'not found',
+    );
+    const requeued = required(await exports.claim());
+    expect(requeued.filter).toEqual(claimed.filter);
+    expect(requeued).toMatchObject({
+      id: claimed.id,
+      time_basis: 'receipt',
+      retry_count: 1,
+      attempts: 1,
+    });
+    await exports.process(requeued);
+    const completed = (await exports.list(other)).jobs[0];
+    expect(completed).toMatchObject({
+      id: claimed.id,
+      status: 'completed',
+      rowCount: 1201,
+      kind: 'scheduled',
+      timeBasis: 'receipt',
+    });
+    const downloaded = await fetch(
+      `${url}/${other}/log-exports/${claimed.id}/download`,
+      { headers: headers(other) },
+    );
+    expect(downloaded.status).toBe(200);
+    const rows = (await downloaded.text())
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(rows).toHaveLength(1201);
+    expect(new Set(rows.map((row) => row.id)).size).toBe(1201);
+    expect(
+      rows.every(
+        (row) =>
+          row.path === '/scheduled-late' &&
+          !('receivedAt' in row) &&
+          !('export_cursor' in row),
+      ),
+    ).toBe(true);
+    expect(new Set(rows.map((row) => row.timestamp))).toEqual(
+      new Set(['2000-01-01T00:00:00.000000Z', '2999-01-01T00:00:00.000000Z']),
+    );
+    const paused = await fetch(scheduleUrl, {
+      method: 'PUT',
+      headers: headers(other),
+      body: JSON.stringify({
+        ...configuration,
+        enabled: false,
+        expectedRevision: originalSchedule.revision,
+      }),
+    });
+    expect(paused.status).toBe(200);
+    const pausedState = (await paused.json()) as LogExportScheduleState;
+    const pausedSchedule = required(pausedState.schedule ?? undefined);
+    expect(
+      (
+        await fetch(scheduleUrl, {
+          method: 'DELETE',
+          headers: headers(other),
+          body: JSON.stringify({ expectedRevision: originalSchedule.revision }),
+        })
+      ).status,
+    ).toBe(409);
+    expect(
+      (
+        await fetch(scheduleUrl, {
+          method: 'DELETE',
+          headers: headers(other),
+          body: JSON.stringify({
+            expectedRevision: pausedSchedule.revision,
+          }),
+        })
+      ).status,
+    ).toBe(200);
+    expect((await exports.list(other)).jobs[0].id).toBe(claimed.id);
+    expect(
+      (
+        await fetch(`${url}/${other}/log-exports/${claimed.id}/download`, {
+          headers: headers(other),
+        })
+      ).status,
+    ).toBe(200);
   }, 30000);
   it('enforces per-tenant pending limits atomically', async () => {
     await Promise.all(

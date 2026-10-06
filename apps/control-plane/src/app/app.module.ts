@@ -27,6 +27,11 @@ import { HealthController } from './health.controller';
         // Public schema is initialized by docker/postgres-init.sql and migrated
         // by admin-api. Synchronization here can drop admin-only auth columns.
         synchronize: false,
+        extra: {
+          max: 20,
+          connectionTimeoutMillis: 3000,
+          idleTimeoutMillis: 30000,
+        },
       }),
     }),
     TypeOrmModule.forFeature([Tenant, ApiKey, PendingConfigUpdate]),

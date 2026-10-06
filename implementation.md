@@ -9,6 +9,7 @@ verification evidence and the remaining work at the bottom of that report.
 
 - Alert delivery/dashboard development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68) / [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), based on dev `653d7a00` / PR #67 foundations after metrics (PR #64) and tracing (PR #62). Phases 0–3 have substantial merged implementations and issue-level verification; formal phase acceptance is pending.
 - Phase 4 includes request lifecycle fixes, tracing, live metrics, manual RustFS archives and the enabled Alerts product: encrypted channels, rule CRUD, bounded evaluation, durable notification delivery and accessible dashboard controls. Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) was merged in PR #67.
+- Scheduled archives in [issue #72](https://github.com/mayank-rawat98/NovaGate/issues/72) extend RustFS with receipt-based automation and retry UX. Current verification passes 1,134 tests, all five projects’ lint/typecheck gates and four application builds. Browser checks pass 42 cold loads under sixfold CPU throttling plus a final seven-load run with zero runtime/accessibility findings. Fresh OrbStack images produce three private automatic archives containing all 94 persisted records, including an authenticated late log; local alert firing acceptance takes 59.111 seconds and all services shut down cleanly. Additional destinations/privacy controls remain pending.
 - Alerting has 1,093 regression tests, static/application gates, production browser checks and fresh OrbStack runtime evidence for real firing/retry/recovery. External provider/inbox acceptance remains separate.
 - [Issue #69](https://github.com/mayank-rawat98/NovaGate/issues/69) tracks an intermittent browser hydration recovery. Subsequent cold-load/slow-CPU checks pass; no root cause/fix is established, so the follow-up stays open before formal release acceptance.
 - Phases 5–6 and the additional enterprise/operational requirements below remain open.
@@ -24,7 +25,7 @@ The workspace now has responsive grouped navigation, an ivory/mint/indigo palett
 
 RustFS 1.0.1 is pinned by digest in verification/production Compose. Production storage is opt-in with private networking and separate credentials. Tenant session routes create/list durable jobs and stream authorized NDJSON downloads. Workers coordinate replicas with row/tenant locks, fenced leases, bounded keyset reads under a repeatable snapshot, size/record/deadline limits, three attempts and expiry cleanup of objects/multipart uploads. Settings includes accessible archive filters, states and download recovery. Real PostgreSQL/RustFS checks cover tenancy, anonymous denial, streaming/multipart operations, snapshot pagination, failed work and lease recovery; a packaged OrbStack admin container verifies automatic processing. CI runs storage integration and browser checks.
 
-This implements manual private archives, not all phase 4 criteria. Scheduled/per-tenant destination configuration, webhook/Datadog exporters, privacy/redaction controls, distributed storage and documented restore drills still require implementation and acceptance evidence.
+This implements manual private archives, not all phase 4 criteria. Per-tenant external destination configuration, webhook/Datadog exporters, privacy/redaction controls, distributed storage and documented restore drills still require implementation and acceptance evidence. Issue #72 implements scheduling for private RustFS archives; formal phase acceptance remains pending.
 
 ## Streaming gRPC implementation — issue #41
 
@@ -823,9 +824,13 @@ Remaining verification and follow-up:
 - Destinations: S3-compatible (RustFS by default, AWS S3 and compatible providers), webhook (NDJSON), Datadog Logs API
 - Config per tenant: `{ destination, credentials, filter: { minStatusCode, paths } }`
 - Uses streaming SELECT or bounded keyset pages under a repeatable snapshot to avoid loading all logs into memory
-- Issue #37 implements manual RustFS NDJSON archive jobs, authenticated downloads and expiry cleanup; scheduling and additional destinations remain pending.
+- Issue #37 implements manual RustFS NDJSON archive jobs, authenticated downloads and expiry cleanup.
+- Issue #72 adds near-real-time minute and hourly UTC schedules with shared typed contracts, authenticated revision-aware CRUD, database receipt windows, accessible Settings controls and failed-job retry. Start at save time; pause retains the cursor, resume catches up, deletion preserves history, and updates affect waiting windows while queued filters remain immutable.
+- Coordinate scheduling and receipt ingestion through a tenant transaction lock. Window admission, private job insertion and cursor advancement must commit together, including empty-window advancement. Use bounded admission/statement/lock/pool limits, finite fair sweeps and a shared 20-job tenant pending bound; queue pressure must retain windows rather than skip them. Scheduling has no network phase, so the transaction itself owns the claim; archive upload retains the existing durable fenced leases.
+- Admin owns UTC normalization, receipt defaults/indexes and idempotent upgrade paths. Stamp receipt after ingestion admission/lock waits in the database, including JSON-record insertion. Keep receipt metadata out of public logs/NDJSON; preserve request timestamps and microsecond pagination independently of database session timezone. Verify legacy upgrades and live packaged scheduling, replica/CRUD races, rollback, backlog, pause/resume and retries.
+- Remaining destinations: tenant-configurable external S3-compatible buckets, webhook NDJSON and Datadog Logs API. Encrypt tenant credentials with a dedicated rotatable keyring and strict private reads; bound destination validation/egress, retries, delivery identity and retention. Add explicit field redaction/retention controls and per-destination delivery history before claiming complete phase 4.4 coverage.
 
-`apps/dashboard` — Settings → Log Export tab.
+`apps/dashboard` — Settings → Automatic log archives / Log archives sections.
 
 ---
 

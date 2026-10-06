@@ -62,6 +62,22 @@ export class MigrationService implements OnModuleInit {
         await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.request_logs ADD COLUMN IF NOT EXISTS "traceId" VARCHAR(32), ADD COLUMN IF NOT EXISTS "spanId" VARCHAR(16)`,
         );
+        const logColumns = await manager.query<Array<{ data_type: string }>>(
+          `SELECT data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'request_logs' AND column_name = 'timestamp'`,
+          [schema],
+        );
+        if (logColumns[0]?.data_type === 'timestamp without time zone')
+          await manager.query(
+            `ALTER TABLE ${schema}.request_logs ALTER COLUMN timestamp TYPE TIMESTAMPTZ USING timestamp AT TIME ZONE 'UTC'`,
+          );
+        // Existing rows receive migration time, not a forged request receipt.
+        // Schedules start when saved and never automatically backfill these rows.
+        await manager.query(
+          `ALTER TABLE IF EXISTS ${schema}.request_logs ADD COLUMN IF NOT EXISTS "receivedAt" TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()`,
+        );
+        await manager.query(
+          `CREATE INDEX IF NOT EXISTS request_logs_receipt_cursor ON ${schema}.request_logs ("receivedAt", id)`,
+        );
         await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "loadBalancing" VARCHAR NOT NULL DEFAULT 'weighted-round-robin' CHECK ("loadBalancing" IN ('weighted-round-robin', 'least-connections'))`,
         );

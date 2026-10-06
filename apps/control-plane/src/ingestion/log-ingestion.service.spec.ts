@@ -8,6 +8,70 @@ import {
 const TENANT = 'aabbccdd-1111-2222-3333-444455556666';
 const PAYLOAD = { rps: 1.25, p50: 1, p95: 2, p99: 3, errorRate: 0.25 };
 describe('Telemetry ingestion safety', () => {
+  it('holds finite log admission until real transaction completion and drains it on shutdown', async () => {
+    const pending: Array<(value: unknown) => void> = [];
+    const transaction = jest.fn(
+      () => new Promise((finish) => pending.push(finish)),
+    );
+    const service = new LogIngestionService({
+      transaction,
+    } as unknown as DataSource);
+    const logs = [
+      { id: 'test-log', timestamp: new Date().toISOString() },
+    ] as never;
+    const writes = Array.from({ length: 32 }, () =>
+      service.ingestLogs(TENANT, logs),
+    );
+    await expect(service.ingestLogs(TENANT, logs)).rejects.toThrow('capacity');
+    expect(transaction).toHaveBeenCalledTimes(32);
+    let stopped = false;
+    const shutdown = service.onModuleDestroy().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    await expect(service.ingestLogs(TENANT, logs)).rejects.toThrow('stopping');
+    pending.forEach((finish) => finish(undefined));
+    await Promise.all(writes);
+    await shutdown;
+    expect(stopped).toBe(true);
+  });
+  it.each([
+    null,
+    {},
+    Array(1001).fill({}),
+    [null],
+    [{ path: 'x'.repeat(1024 * 1024 + 1) }],
+  ])(
+    'rejects malformed or oversized log batches before SQL: %#',
+    async (logs) => {
+      const transaction = jest.fn();
+      const service = new LogIngestionService({
+        transaction,
+      } as unknown as DataSource);
+      await expect(service.ingestLogs(TENANT, logs as never)).rejects.toThrow();
+      expect(transaction).not.toHaveBeenCalled();
+    },
+  );
+  it('releases log admission after a failed transaction without recording database error details', async () => {
+    const transaction = jest
+      .fn()
+      .mockRejectedValue(new Error('private database detail'));
+    const service = new LogIngestionService({
+      transaction,
+    } as unknown as DataSource);
+    await Promise.all(
+      Array.from({ length: 40 }, async () => {
+        await expect(
+          service.ingestLogs(TENANT, [{ id: 'test' }] as never),
+        ).rejects.toThrow();
+      }),
+    );
+    await expect(
+      service.ingestLogs(TENANT, [{ id: 'test' }] as never),
+    ).rejects.toThrow('private database detail');
+    expect(transaction).toHaveBeenCalledTimes(33);
+  });
   it('stores a canonical snapshot with local deadlines, locking and retention without changing search path', async () => {
     const timestamp = new Date();
     const query = jest.fn(async (sql: string) =>

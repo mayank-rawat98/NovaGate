@@ -16,6 +16,8 @@ import type {
   LogExportJob,
   LogExportList,
   LogExportStatus,
+  LogExportSelection,
+  LogExportTimeBasis,
 } from '@api-gateway/shared-types';
 import { tenantSchema } from '../tenants/tenant-schema';
 import { ObjectStorageService } from './object-storage.service';
@@ -26,6 +28,7 @@ interface JobRow {
   status: LogExportStatus;
   filter: LogExportFilter;
   attempts: number;
+  retry_count: number;
   lease_id?: string;
   object_key?: string;
   row_count: number;
@@ -34,6 +37,9 @@ interface JobRow {
   created_at: Date;
   completed_at?: Date;
   expires_at: Date;
+  kind: 'manual' | 'scheduled';
+  time_basis: LogExportTimeBasis;
+  schedule_id?: string;
 }
 const MAX_ATTEMPTS = 3;
 const MAX_ROWS = 1_000_000;
@@ -48,12 +54,16 @@ function view(row: JobRow): LogExportJob {
     status: row.status,
     filter: row.filter,
     attempts: row.attempts,
+    retryCount: row.retry_count ?? 0,
     rowCount: row.row_count,
     bytes: Number(row.bytes),
     error: row.error ?? undefined,
     createdAt: row.created_at.toISOString(),
     completedAt: row.completed_at?.toISOString(),
     expiresAt: row.expires_at.toISOString(),
+    kind: row.kind ?? 'manual',
+    timeBasis: row.time_basis ?? 'request',
+    scheduleId: row.schedule_id ?? undefined,
   };
 }
 function jobId(id: string) {
@@ -97,7 +107,22 @@ export function validateExportFilter(body: unknown): LogExportFilter {
     Date.parse(to) > Date.now() + 60000
   )
     throw new BadRequestException('Select a past date range of up to 31 days');
-  const result: LogExportFilter = { from, to };
+  const selection = Object.fromEntries(
+    Object.entries(input).filter(([key]) => key !== 'from' && key !== 'to'),
+  );
+  return { from, to, ...validateExportSelection(selection) };
+}
+export function validateExportSelection(body: unknown): LogExportSelection {
+  if (!body || typeof body !== 'object' || Array.isArray(body))
+    throw new BadRequestException('Archive filters are required');
+  const input = body as Record<string, unknown>;
+  if (
+    Object.keys(input).some(
+      (key) => !['minStatusCode', 'pathPrefix', 'consumerId'].includes(key),
+    )
+  )
+    throw new BadRequestException('Unknown archive filter');
+  const result: LogExportSelection = {};
   if (input.minStatusCode !== undefined) {
     if (
       typeof input.minStatusCode !== 'number' ||
@@ -165,7 +190,7 @@ export class LogExportService
     );
   }
   async list(tenantId: string): Promise<LogExportList> {
-    tenantSchema(tenantId);
+    tenantId = tenantSchema(tenantId).slice(7).replace(/_/g, '-');
     const jobs: JobRow[] = await this.db.query(
       `SELECT * FROM public.log_export_jobs WHERE tenant_id = $1 ORDER BY created_at DESC, id DESC LIMIT 50`,
       [tenantId],
@@ -177,13 +202,16 @@ export class LogExportService
     };
   }
   async create(tenantId: string, input: unknown): Promise<LogExportJob> {
-    tenantSchema(tenantId);
+    tenantId = tenantSchema(tenantId).slice(7).replace(/_/g, '-');
     if (!this.storage.enabled)
       throw new ServiceUnavailableException(
         'Log archives are not enabled for this installation',
       );
     const filter = validateExportFilter(input);
     return this.db.transaction(async (manager) => {
+      await manager.query(
+        `SELECT set_config('statement_timeout', '3000', true), set_config('lock_timeout', '1000', true)`,
+      );
       await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
         `log-export:${tenantId}`,
       ]);
@@ -202,8 +230,50 @@ export class LogExportService
       return view(row);
     });
   }
+  async retry(tenantId: string, id: string): Promise<LogExportJob> {
+    tenantId = tenantSchema(tenantId).slice(7).replace(/_/g, '-');
+    const archiveId = jobId(id);
+    if (!this.storage.enabled)
+      throw new ServiceUnavailableException(
+        'Log archives are not enabled for this installation',
+      );
+    return this.db.transaction(async (manager) => {
+      await manager.query(
+        `SELECT set_config('statement_timeout', '3000', true), set_config('lock_timeout', '1000', true)`,
+      );
+      await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+        `log-export:${tenantId}`,
+      ]);
+      const [row]: JobRow[] = await manager.query(
+        `SELECT * FROM public.log_export_jobs WHERE id=$1 AND tenant_id=$2 FOR UPDATE`,
+        [archiveId, tenantId],
+      );
+      if (!row) throw new NotFoundException('Archive not found');
+      const [{ eligible }]: Array<{ eligible: boolean }> = await manager.query(
+        `SELECT status='failed' AND expires_at>clock_timestamp() AS eligible FROM public.log_export_jobs WHERE id=$1`,
+        [archiveId],
+      );
+      if (!eligible)
+        throw new ConflictException(
+          'Only failed, unexpired archives can be retried',
+        );
+      const [{ pending }]: Array<{ pending: number }> = await manager.query(
+        `SELECT COUNT(*)::integer AS pending FROM public.log_export_jobs WHERE tenant_id=$1 AND status IN ('queued','processing')`,
+        [tenantId],
+      );
+      if (pending >= 20)
+        throw new ConflictException(
+          'Wait for your pending archives before retrying',
+        );
+      const [queued]: JobRow[] = await manager.query(
+        `WITH retried AS (UPDATE public.log_export_jobs SET status='queued',attempts=0,retry_count=retry_count+1,error=NULL,lease_id=NULL,lease_until=NULL WHERE id=$1 RETURNING *) SELECT * FROM retried`,
+        [archiveId],
+      );
+      return view(queued);
+    });
+  }
   async download(tenantId: string, id: string) {
-    tenantSchema(tenantId);
+    tenantId = tenantSchema(tenantId).slice(7).replace(/_/g, '-');
     const [row]: JobRow[] = await this.db.query(
       `SELECT * FROM public.log_export_jobs WHERE id=$1 AND tenant_id=$2 AND status='completed' AND expires_at>NOW()`,
       [jobId(id), tenantId],
@@ -319,9 +389,11 @@ export class LogExportService
       await query.query(`SET LOCAL statement_timeout = '5s'`);
       const schema = tenantSchema(row.tenant_id);
       const params: unknown[] = [row.filter.from, row.filter.to];
+      const timeColumn =
+        row.time_basis === 'receipt' ? '"receivedAt"' : 'timestamp';
       const conditions = [
-        "timestamp >= ($1::timestamptz AT TIME ZONE 'UTC')",
-        "timestamp < ($2::timestamptz AT TIME ZONE 'UTC')",
+        `${timeColumn} >= $1::timestamptz`,
+        `${timeColumn} < $2::timestamptz`,
       ];
       if (row.filter.minStatusCode !== undefined) {
         params.push(row.filter.minStatusCode);
@@ -347,10 +419,10 @@ export class LogExportService
             let cursorCondition = '';
             if (cursor) {
               pageParams.push(cursor.timestamp, cursor.id);
-              cursorCondition = `AND (timestamp,id)>($${pageParams.length - 1}::timestamp,$${pageParams.length}::uuid)`;
+              cursorCondition = `AND (${timeColumn},id)>($${pageParams.length - 1}::timestamptz,$${pageParams.length}::uuid)`;
             }
             const page = (await query.query(
-              `SELECT *, to_char(timestamp, 'YYYY-MM-DD"T"HH24:MI:SS.US') AS export_cursor, to_char(timestamp, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS export_timestamp FROM ${schema}.request_logs WHERE ${conditions.join(' AND ')} ${cursorCondition} ORDER BY timestamp,id LIMIT ${BATCH_ROWS}`,
+              `SELECT *, to_char(${timeColumn} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS export_cursor, to_char(timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS export_timestamp FROM ${schema}.request_logs WHERE ${conditions.join(' AND ')} ${cursorCondition} ORDER BY ${timeColumn},id LIMIT ${BATCH_ROWS}`,
               pageParams,
             )) as Array<Record<string, unknown>>;
             if (!page.length) break;
@@ -362,6 +434,7 @@ export class LogExportService
               log.timestamp = log.export_timestamp;
               delete log.export_timestamp;
               delete log.export_cursor;
+              delete log.receivedAt;
               const line = JSON.stringify(log) + '\n';
               rows++;
               bytes += Buffer.byteLength(line);
