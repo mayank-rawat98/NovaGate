@@ -8,7 +8,7 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
-- Latest verified development work: [PR #87](https://github.com/mayank-rawat98/NovaGate/pull/87), linked to [issue #85](https://github.com/mayank-rawat98/NovaGate/issues/85), fixes non-rejecting storage timeouts and shutdown/resource cleanup. Its branch starts from `dev` at **2affcb71** / merged [PR #86](https://github.com/mayank-rawat98/NovaGate/pull/86), which implements six-field stored-metadata privacy. The final affected-project run passes 567 admin tests, including eleven actual stalled-network checks and a real multipart RustFS round trip; backend static/build gates and fresh packaged OrbStack/RustFS/metrics/alerts/privacy/retention verification pass. The unchanged gateway/collector/dashboard retain issue #84's 1,263-test and 42-plus-seven-load browser checkpoint. Formal phase acceptance remains pending.
+- Latest verified development work: [PR #87](https://github.com/mayank-rawat98/NovaGate/pull/87), linked to [issue #85](https://github.com/mayank-rawat98/NovaGate/issues/85), fixes non-rejecting storage timeouts and shutdown/resource cleanup. Its branch starts from `dev` at **2affcb71** / merged [PR #86](https://github.com/mayank-rawat98/NovaGate/pull/86), which implements six-field stored-metadata privacy. The final affected-project run passes 568 admin tests, including twelve actual stalled-network checks and a real multipart RustFS round trip; backend static/build gates and fresh packaged OrbStack/RustFS/metrics/alerts/privacy/retention verification pass. The unchanged gateway/collector/dashboard retain issue #84's 1,263-test and 42-plus-seven-load browser checkpoint. Formal phase acceptance remains pending.
 - Alerting development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68), linked to [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), adds durable delivery and the Alerts dashboard.
 - Its issue-linked branch `65-feat-alert-delivery-and-dashboard` was created from `dev` at **653d7a00** / [PR #67](https://github.com/mayank-rawat98/NovaGate/pull/67), which merged the storage/evaluation foundations and roadmap documents. Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) is closed.
 - **AppModule imports AlertsModule**. Authenticated endpoints and workers start after migration; missing dedicated encryption keys disable channel creation/delivery.
@@ -631,8 +631,8 @@ worker cleanup before waiting. Failed deletion keeps durable retry state. Fixtur
 teardown attempts app/client/database release after storage errors and preserves all
 failures instead of skipping later cleanup.
 
-All **567 admin tests** pass in the final required affected-project run. Preceding
-backend regressions also pass. Eleven new actual HTTP/SDK checks cover the rejecting deadline,
+All **568 admin tests** pass in the final required affected-project run. Preceding
+backend regressions also pass. Twelve new actual HTTP/SDK checks cover rejecting deadlines before headers and during metadata body decoding,
 five operation shutdown paths, actual multipart sockets without background retries,
 worker and caller cleanup cancellation, owned response streams and rejection of work
 after shutdown. Twenty real archive tests include an object larger than 5 MiB, exact
@@ -663,7 +663,9 @@ Ignored evidence: `issue85-deadline-red.log`, `issue85-storage-green.log`,
 `issue85-transfer-final-tests.log`, `issue85-transfer-final-gates.log`,
 `issue85-roundtrip-green.log`, `issue85-roundtrip-final-static.log`,
 `issue85-complete-affected-tests.log`, `issue85-transfer-docker-admin.log`,
-`issue85-transfer-runtime.log` and `issue85-final-runtime-evidence.json`. This closes the identified storage deadline defect,
+`issue85-transfer-runtime.log`, `issue85-final-runtime-evidence.json`,
+`issue85-response-body-green.log`, `issue85-body-final-static.log` and
+`issue85-body-complete-affected.log`. This closes the identified storage deadline defect,
 not phase 4 or full-roadmap acceptance. External destination delivery, scalable
 rollups, later phases and formal acceptance remain open below.
 
