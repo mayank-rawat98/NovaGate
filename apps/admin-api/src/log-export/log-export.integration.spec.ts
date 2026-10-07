@@ -12,7 +12,7 @@ import type {
   LogExportJob,
   LogExportScheduleState,
 } from '@api-gateway/shared-types';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Readable } from 'node:stream';
@@ -243,6 +243,39 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
       )[0].count,
     ).toBe(0);
   });
+  it('round-trips an actual multipart private RustFS object through bounded SDK sends', async () => {
+    const key = `tenants/${tenant}/log-exports/multipart-fixture-${randomUUID()}.ndjson`;
+    const line = '{"fixture":"multipart"}\n';
+    const payload = Buffer.from(
+      line.repeat(Math.ceil((5 * 1024 * 1024 + 1) / Buffer.byteLength(line))),
+    );
+    expect(payload.length).toBeGreaterThan(5 * 1024 * 1024);
+    await storage.upload(
+      key,
+      Readable.from([payload]),
+      new AbortController().signal,
+    );
+    const stream = await storage.download(key);
+    const hash = createHash('sha256');
+    let bytes = 0;
+    for await (const chunk of stream) {
+      bytes += chunk.length;
+      hash.update(chunk);
+    }
+    expect(bytes).toBe(payload.length);
+    expect(hash.digest('hex')).toBe(
+      createHash('sha256').update(payload).digest('hex'),
+    );
+    const uploads = await client.send(
+      new ListMultipartUploadsCommand({ Bucket: bucket, Prefix: key }),
+    );
+    expect(uploads.Uploads ?? []).toEqual([]);
+    await storage.remove(key);
+    await expect(storage.download(key)).rejects.toMatchObject({
+      name: 'NoSuchKey',
+    });
+  }, 15000);
+
   it('claims a durable job only once across concurrent workers and streams every row without duplicates', async () => {
     const created = await fetch(`${url}/${tenant}/log-exports`, {
       method: 'POST',
