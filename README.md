@@ -431,8 +431,9 @@ Storage commands and download admission have a 15-second absolute budget coverin
 connection acquisition, SDK retries and backoff. The handler also rejects requests
 that exceed its transport timeout; connection timeout remains three seconds and
 fast transient failures can still retry up to three attempts within the budget.
-Uploads retain the archive worker's two-minute deadline and cancellation, with
-rejecting request deadlines for individual SDK transfers. A whole private-prefix
+Uploads retain the archive worker's two-minute deadline and cancellation. Single
+and multipart SDK transfers, completion and abort cleanup use the same absolute
+command budget; cancelling the upload also cancels its actual network requests. A whole private-prefix
 object/multipart cleanup has a two-minute budget. Shutdown cancels admitted storage
 requests and uploads, destroys owned download streams, and cancels worker cleanup
 before waiting for it. Failed or cancelled deletion retains durable retry metadata.

@@ -853,6 +853,10 @@ Remaining verification and follow-up:
   command/admission budget across connection acquisition, signing, retries and backoff.
   Keep three bounded attempts for fast transient failures, the existing two-minute
   export deadline and a two-minute whole-prefix object/multipart cleanup budget.
+  Route every SDK upload-helper send through the same bounded wrapper, including
+  single/multipart transfer, completion and abort cleanup; its abort controller alone
+  does not cancel internal client sends. Verify an actual upload larger than 5 MiB
+  leaves no sockets or background retries after shutdown.
   Shutdown cancels storage requests/uploads and owned download streams; the worker
   cancels cleanup before waiting for it. Failed deletion keeps durable retry state.
   Integration teardown must release app/client/database resources even when object

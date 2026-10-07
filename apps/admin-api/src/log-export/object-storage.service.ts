@@ -223,8 +223,22 @@ export class ObjectStorageService implements OnModuleInit, OnModuleDestroy {
       body.destroy();
       throw new Error('Archive upload cancelled');
     }
+    // The SDK upload helper does not forward its abort controller to client.send.
+    // Decorate its promise-based calls, including multipart completion/cleanup.
+    const client = new Proxy(this.client, {
+      get: (target, property, receiver) => {
+        if (property !== 'send') return Reflect.get(target, property, receiver);
+        return (command: Parameters<S3Client['send']>[0]) =>
+          this.request(
+            (source, abortSignal) => source.send(command, { abortSignal }),
+            // Best-effort multipart cleanup remains possible after caller cancellation;
+            // application shutdown still cancels it through the global signal.
+            command instanceof AbortMultipartUploadCommand ? undefined : signal,
+          );
+      },
+    });
     const upload = new Upload({
-      client: this.client,
+      client,
       params: {
         Bucket: this.bucket,
         Key: key,

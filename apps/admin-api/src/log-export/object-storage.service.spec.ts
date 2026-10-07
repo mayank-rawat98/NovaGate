@@ -7,7 +7,7 @@ import { ObjectStorageService } from './object-storage.service';
 import { LogExportService } from './log-export.service';
 import type { DataSource } from 'typeorm';
 
-async function stalledStorage(streamBody = false) {
+async function stalledStorage(streamBody: boolean | 'multipart' = false) {
   let requests = 0;
   const sockets = new Set<Socket>();
   let observed!: () => void;
@@ -16,8 +16,21 @@ async function stalledStorage(streamBody = false) {
   });
   const server = createServer((_request, response) => {
     requests++;
+    if (
+      streamBody === 'multipart' &&
+      _request.method === 'POST' &&
+      new URL(_request.url ?? '/', 'http://fixture.test').searchParams.has(
+        'uploads',
+      )
+    ) {
+      response.writeHead(200, { 'content-type': 'application/xml' });
+      response.end(
+        '<InitiateMultipartUploadResult><Bucket>novagate-deadline-fixture</Bucket><Key>private-fixture.ndjson</Key><UploadId>fixture-upload</UploadId></InitiateMultipartUploadResult>',
+      );
+      return;
+    }
     observed();
-    if (streamBody) {
+    if (streamBody === true) {
       response.writeHead(200, { 'content-type': 'application/x-ndjson' });
       response.write('{"partial":true}\n');
     }
@@ -41,6 +54,9 @@ async function stalledStorage(streamBody = false) {
     requested,
     get requests() {
       return requests;
+    },
+    get connections() {
+      return sockets.size;
     },
     async close() {
       storage.onModuleDestroy();
@@ -84,6 +100,29 @@ describe('Private object storage on real stalled HTTP transport', () => {
     },
     5000,
   );
+
+  it('cancels actual multipart SDK requests without background retries or sockets', async () => {
+    const fixture = await stalledStorage('multipart');
+    const upload = fixture.storage.upload(
+      'private-fixture.ndjson',
+      Readable.from([Buffer.alloc(5 * 1024 * 1024 + 1)]),
+      new AbortController().signal,
+    );
+    const rejected = expect(upload).rejects.toThrow();
+    try {
+      await fixture.requested;
+      expect(fixture.requests).toBeGreaterThanOrEqual(2);
+      const admitted = fixture.requests;
+      fixture.storage.onModuleDestroy();
+      await rejected;
+      // Cover the installed SDK's bounded retry backoff after socket destruction.
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      expect(fixture.requests).toBe(admitted);
+      expect(fixture.connections).toBe(0);
+    } finally {
+      await fixture.close();
+    }
+  });
 
   it('cancels worker cleanup before waiting for storage and preserves retry state', async () => {
     const fixture = await stalledStorage();
