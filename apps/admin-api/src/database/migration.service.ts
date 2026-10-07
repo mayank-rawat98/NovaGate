@@ -1,3 +1,4 @@
+import { LOG_RETENTION_SCHEMA } from '../log-retention/log-retention-schema';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { LOG_PRIVACY_SCHEMA } from '../log-privacy/log-privacy-schema';
@@ -36,6 +37,7 @@ export class MigrationService implements OnModuleInit {
         ON public.pending_config_updates ("tenantId")`);
       await manager.query(LOG_EXPORT_SCHEMA);
       await manager.query(LOG_PRIVACY_SCHEMA);
+      await manager.query(LOG_RETENTION_SCHEMA);
       await manager.query(ALERT_SCHEDULE_SCHEMA);
       const tenants = await manager.query<Array<{ id: string }>>(
         `SELECT id FROM public.tenants`,

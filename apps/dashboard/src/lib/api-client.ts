@@ -10,6 +10,8 @@ import type {
   ErrorEvent,
   HealthSnapshot,
   LogPrivacyState,
+  LogRetentionState,
+  SaveLogRetention,
   SaveLogPrivacy,
   LogExportFilter,
   LogExportJob,
@@ -680,6 +682,21 @@ export function saveLogPrivacy(
   signal?: AbortSignal,
 ): Promise<LogPrivacyState> {
   return request(`/tenants/${tenantId}/log-privacy`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+
+export function getLogRetention(tenantId: string): Promise<LogRetentionState> {
+  return request('/tenants/' + tenantId + '/log-retention');
+}
+export function saveLogRetention(
+  tenantId: string,
+  input: SaveLogRetention,
+  signal?: AbortSignal,
+): Promise<LogRetentionState> {
+  return request('/tenants/' + tenantId + '/log-retention', {
     method: 'PUT',
     body: JSON.stringify(input),
     signal,

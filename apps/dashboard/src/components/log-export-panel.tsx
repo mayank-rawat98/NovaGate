@@ -151,9 +151,10 @@ export function LogExportPanel({ tenantId }: { tenantId: string }) {
         {data?.enabled && (
           <>
             <p className="mb-4 text-xs text-gray-500">
-              Dates use UTC. Each archive covers up to 31 days and is kept for{' '}
-              {data.retentionDays} days. Downloads contain one JSON record per
-              line (NDJSON).
+              Dates use UTC. Each archive selects up to 31 days of retained logs
+              and is kept for {data.retentionDays} days. Downloads contain one
+              JSON record per line (NDJSON). The archive download lifetime is
+              separate from raw-log retention.
             </p>
             <form onSubmit={create} className="grid gap-4 sm:grid-cols-2">
               <div className="flex min-w-0 flex-col gap-1">
@@ -282,6 +283,19 @@ export function LogExportPanel({ tenantId }: { tenantId: string }) {
                         <span className="rounded bg-slate-100 px-2 py-1 text-xs capitalize text-slate-800">
                           {job.status}
                         </span>
+                        {job.retention && (
+                          <p className="mt-2 max-w-xs text-xs text-gray-600">
+                            {job.retention.days}-day raw-log lifetime · receipts
+                            from{' '}
+                            {new Date(
+                              job.retention.receivedFrom,
+                            ).toLocaleString()}
+                            .
+                            {job.status === 'queued'
+                              ? ' The cutoff may advance while queued.'
+                              : ''}
+                          </p>
+                        )}
                         {job.error && (
                           <p className="mt-2 max-w-xs text-xs text-red-800">
                             {job.error}

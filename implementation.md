@@ -2,7 +2,7 @@
 
 Each phase builds on the previous. Track implementation, regression verification, and production acceptance separately. A phase is complete only after its acceptance criteria have evidence. Run feature and regression checks after each issue; perform the formal end-to-end acceptance campaign after all phases are implemented. Production deployment is a separate release gate.
 
-## Current checkpoint — 6 October 2026
+## Current checkpoint — 7 October 2026
 
 See [PROGRESS.md](PROGRESS.md) for the consolidated record of completed work,
 verification evidence and the remaining work at the bottom of that report.
@@ -12,7 +12,7 @@ verification evidence and the remaining work at the bottom of that report.
 - Scheduled archives in [issue #72](https://github.com/mayank-rawat98/NovaGate/issues/72) extend RustFS with receipt-based automation and retry UX. Current verification passes 1,134 tests, all five projects’ lint/typecheck gates and four application builds. Browser checks pass 42 cold loads under sixfold CPU throttling plus a final seven-load run with zero runtime/accessibility findings. Fresh OrbStack images produce three private automatic archives containing all 94 persisted records, including an authenticated late log; local alert firing acceptance takes 59.111 seconds and all services shut down cleanly. Additional destinations/privacy controls remain pending.
 - Per-consumer usage in [issue #74](https://github.com/mayank-rawat98/NovaGate/issues/74) adds bounded tenant-scoped log-derived statistics, filtered metrics and an accessible usage panel. Current verification passes 1,157 tests, all five static gates, four application builds and 42 cold/CPU-throttled browser loads plus a final seven-load run with zero runtime/accessibility findings. Packaged OrbStack traffic verifies 20 requests attributed to a real consumer key, ten server errors and P95 matching PostgreSQL; retained alerts/metrics, private archives and clean shutdown pass. High-volume rollups/coverage and formal acceptance remain pending.
 - [Issue #76](https://github.com/mayank-rawat98/NovaGate/issues/76) reproduces and corrects unrelated authentication principals rejecting consumer UUID log ingestion. Separate captured consumer attribution and legacy normalization pass 1,163 retained tests, five static gates, three backend builds and actual packaged OrbStack key/JWT/legacy-frame checks. Consumer totals match PostgreSQL; metrics/alerts, 97 private archived records and clean shutdown also pass.
-- [Issue #78](https://github.com/mayank-rawat98/NovaGate/issues/78) / [PR #79](https://github.com/mayank-rawat98/NovaGate/pull/79) adds tenant request-log privacy: conservative omitted IP/user-agent defaults, revision-aware Settings, gateway/collector enforcement, historical erasure, immutable archive privacy snapshots and archive revocation. Verification passes 1,183 tests, all five static gates, four builds, 42 cold/CPU-throttled browser loads and actual packaged policy ACK/erasure/revocation alongside metrics/alerts/RustFS. Age-based raw-log retention, broader configurable sensitive-field rules and external destination credentials/delivery remain pending.
+- [Issue #78](https://github.com/mayank-rawat98/NovaGate/issues/78) / [PR #79](https://github.com/mayank-rawat98/NovaGate/pull/79) adds tenant request-log privacy: conservative omitted IP/user-agent defaults, revision-aware Settings, gateway/collector enforcement, historical erasure, immutable archive privacy snapshots and archive revocation. Verification passes 1,183 tests, all five static gates, four builds, 42 cold/CPU-throttled browser loads and actual packaged policy ACK/erasure/revocation alongside metrics/alerts/RustFS. Raw-log retention is being added in issue #80; broader configurable sensitive-field rules and external destination credentials/delivery remain pending.
 - Alerting has 1,093 regression tests, static/application gates, production browser checks and fresh OrbStack runtime evidence for real firing/retry/recovery. External provider/inbox acceptance remains separate.
 - [Issue #69](https://github.com/mayank-rawat98/NovaGate/issues/69) tracks an intermittent browser hydration recovery. Subsequent cold-load/slow-CPU checks pass; no root cause/fix is established, so the follow-up stays open before formal release acceptance.
 - Phases 5–6 and the additional enterprise/operational requirements below remain open.
@@ -70,7 +70,7 @@ The code contains substantial work for phases 0–3, but file presence does not 
 | 1     | Plugin contracts, runner, registry, thirteen first-party plugins, dashboard route plugin forms | Plugin aggregate registration and fail-closed name resolution repaired in issue #27, verified through the real Nest module; broader runtime plugin acceptance remains                                                                                                                                       |
 | 2     | OIDC, client credentials, HMAC, ACL, mTLS implementations and unit tests                       | Verify real providers and TLS handshakes; Tenant-bound REST authorization and groups repaired in #27; provider isolation/bounds verified in #47 and native/proxy mTLS plus live trust rotation in #49. Bounded Stripe/GitHub webhook HMAC verified in #51; external Auth0 and final phase acceptance remain |
 | 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                      | Native gRPC/WebSocket checks exist (#41/#43), bounded AST GraphQL policies are verified (#53), and issue #55 hardens HTTP/2 lifecycle, limits and health-compatible fallback; issue #57 adds verified least-connections; formal protocol acceptance remains                                                 |
-| 4     | RustFS archives (#37), traces (#61), live HTTP metrics (#63), alert delivery/dashboard (#65)   | External exports, broader sensitive-field rules/raw-log retention, scalable consumer rollups, hydration follow-up (#69) and formal acceptance remain                                                                                                                                                        |
+| 4     | RustFS archives (#37), traces (#61), live HTTP metrics (#63), alert delivery/dashboard (#65)   | External exports, broader sensitive-field rules, scalable consumer rollups, hydration follow-up (#69) and formal acceptance remain                                                                                                                                                                          |
 | 5     | Existing REST configuration primitives                                                         | Declarative reconciliation, CLI, portal, Terraform, plugin SDK and third-party loading remain to implement                                                                                                                                                                                                  |
 | 6     | No verified implementations                                                                    | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                                                                   |
 
@@ -831,7 +831,7 @@ Remaining verification and follow-up:
 - Issue #72 adds near-real-time minute and hourly UTC schedules with shared typed contracts, authenticated revision-aware CRUD, database receipt windows, accessible Settings controls and failed-job retry. Start at save time; pause retains the cursor, resume catches up, deletion preserves history, and updates affect waiting windows while queued filters remain immutable.
 - Coordinate scheduling and receipt ingestion through a tenant transaction lock. Window admission, private job insertion and cursor advancement must commit together, including empty-window advancement. Use bounded admission/statement/lock/pool limits, finite fair sweeps and a shared 20-job tenant pending bound; queue pressure must retain windows rather than skip them. Scheduling has no network phase, so the transaction itself owns the claim; archive upload retains the existing durable fenced leases.
 - Admin owns UTC normalization, receipt defaults/indexes and idempotent upgrade paths. Stamp receipt after ingestion admission/lock waits in the database, including JSON-record insertion. Keep receipt metadata out of public logs/NDJSON; preserve request timestamps and microsecond pagination independently of database session timezone. Verify legacy upgrades and live packaged scheduling, replica/CRUD races, rollback, backlog, pause/resume and retries.
-- Remaining destinations: tenant-configurable external S3-compatible buckets, webhook NDJSON and Datadog Logs API. Encrypt tenant credentials with a dedicated rotatable keyring and strict private reads; bound destination validation/egress, retries, delivery identity and retention. Add age-based raw-log retention, broader configurable sensitive-field rules and per-destination delivery history before claiming complete phase 4.4 coverage.
+- Remaining destinations: tenant-configurable external S3-compatible buckets, webhook NDJSON and Datadog Logs API. Encrypt tenant credentials with a dedicated rotatable keyring and strict private reads; bound destination validation/egress, retries, delivery identity and retention. Issue #80 adds raw-log age retention; add broader configurable sensitive-field rules and per-destination delivery history before claiming complete phase 4.4 coverage.
 
 Issue #78 implements tenant request-log privacy through shared contracts and
 `apps/admin-api/src/log-privacy/`:
@@ -869,7 +869,51 @@ Issue #78 implements tenant request-log privacy through shared contracts and
   persisted logs from older gateways. Object storage must be available for physical archive
   removal; revocation blocks new application downloads regardless of storage availability.
 
-`apps/dashboard` — Settings → Log privacy / Automatic log archives / Log archives.
+Issue #80 adds tenant raw-log retention through shared contracts and
+`apps/admin-api/src/log-retention/` (implementation and verification in progress):
+
+- Default database request-log lifetime is 30 days, configurable to 1–90 whole days.
+  Age by trusted database receipt using fixed 24-hour days, preserving original gateway request timestamps.
+  Use the inclusive UTC cutoff with database microseconds in log, consumer usage and
+  manual/automatic archive source queries. A recent receipt with an old request time
+  remains available; caller-supplied receipt timestamps never decide retention.
+- Persist a monotonic deletion floor. On changed saves preserve both previous and
+  new effective cutoffs before advancing the revision. Increasing the lifetime cannot
+  resurrect expired rows even while deletion is delayed. No-op saves preserve revisions
+  and archives; strict session-authenticated GET/PUT, no-store responses, stale revision
+  conflicts and eight owned operations bound settings admission.
+- Cleanup deletes at most 500 expired rows per transaction and eight pages per
+  non-overlapping two-second sweep. Fair tenant selection, durable pending/retry/checked
+  state, a receipt lock, three-second statement/one-second lock limits, replica coordination
+  and actual shutdown drain support failure recovery. Do not skip locked log rows and
+  then declare cleanup finished. Idle tenants are checked at most once per minute.
+- Snapshot archive retention revision/days/cutoff at admission and the actual cutoff
+  again when queued work starts. Source queries exclude expired receipts; record that
+  effective coverage. Policy changes expire old jobs, clear leases, fence publication,
+  revoke downloads and invoke existing private RustFS prefix/multipart cleanup.
+  Unknown legacy archive retention expires once on upgrade. Completed archives have
+  a separate operator-configured download lifetime; natural database log expiry does
+  not rewrite an already completed archive.
+- Schedules fast-forward wholly expired backlog in one bounded write, preserve the
+  first partial window, filter its retained receipts and report cumulative windows
+  outside retained coverage. Never represent missing windows as complete archives.
+  Queue saturation preserves windows that still fall within the raw-log lifetime.
+- Consumer usage remains exact within its bounded snapshot and includes receipt
+  coverage. Recheck the tenant revision outside the snapshot before returning results;
+  a concurrent policy change requires retry instead of publishing outdated totals.
+  Figures remain recorded-log observations, not billing or guaranteed traffic coverage.
+- Settings → Log retention uses workspace-keyed native dialogs, labelled inputs,
+  revision reload preserving selections, failed-read/save recovery and 30-second SWR.
+  Explain irreversible expiry, separate archive TTL, pending/retrying cleanup and
+  skipped-window coverage. Gateway output, downloaded copies, backups, traces, metric
+  snapshots and error-event tables have separate policies.
+- Verify authenticated HTTP, microsecond and daylight-saving boundaries under non-UTC sessions, immediate
+  filtering, shrink/increase non-resurrection, real archive/download revocation,
+  delayed queued work, fair failed cleanup, durable restart and admission lock races.
+  Run production browser/accessibility and actual packaged OrbStack gateway/collector/
+  PostgreSQL/RustFS regressions before merging. This is issue evidence, not phase acceptance.
+
+`apps/dashboard` — Settings → Log privacy / Log retention / Automatic log archives / Log archives.
 Keep workspace-keyed state, native Escape/focus/Tab containment, visible labels,
 revision reload preserving selections, failed-save/read recovery and 30-second refresh.
 Show irreversible historical cleanup, gateway confirmation and archive recreation clearly.
@@ -882,12 +926,12 @@ Show irreversible historical cleanup, gateway confirmation and archive recreatio
 
 - Issue #74 implements `GET /tenants/:id/consumers/:cid/stats?period=1h|24h|7d`: persisted-log counts, window-average RPS, server-error rate, interpolated observed P50/P95/P99, gap-filled series and ten method/path groups.
 - Existing logs and non-streaming metric history accept `consumerId`; unfiltered history/live SSE keep their established behavior. Filtered legacy metric snapshots use numeric zero for missing latency; stats retain explicit nulls and sample counts. These are recorded-log figures, not billing or guaranteed traffic coverage.
-- Enforce tenant sessions, consumer existence/scoping, no-store reads and credential-free metadata. Revoked-consumer history remains queryable. UTC request windows are start-inclusive/end-exclusive; valid nonnegative durations determine latency separately from request/error totals.
+- Enforce tenant sessions, consumer existence/scoping, no-store reads and credential-free metadata. Revoked-consumer retained history remains queryable. UTC request windows are start-inclusive/end-exclusive; valid nonnegative durations determine latency separately from request/error totals.
 - One repeatable snapshot, consumer/time/id index, eight admitted queries per process/two per tenant, three-second statements and one-second lock waits. Cap at 100,000 rows, 168 buckets and ten bounded path labels. Reject excess windows with actionable recovery, rather than returning partial totals. Drain actual work on shutdown.
 - Consumers → Usage exposes hour/day/week presets, request trend with keyboard interval inspection, rate/error/latency cards, top paths, loading/empty/stale/retry states and native dialog focus/Escape. Remount workspace state to clear selections; retain 30-second refresh and typed shared contracts through api-client.
 - Verify real SQL/UTC boundaries, exact/interpolated values, tenant guards, empty/missing latency, revoked consumers, exact/excess row bounds, query/lock cancellation and admission recovery. Production browser checks cover mobile/desktop accessibility, keyboard controls, retry, workspace changes and existing key/CRUD behavior. Packaged OrbStack traffic verifies actual consumer-key attribution and persisted totals.
 - Issue #76 attribution correction: distinguish registered consumers from arbitrary JWT/provider principals at authentication time. Validate/canonicalize legacy consumer attribution before UUID ingestion so a non-UUID subject cannot reject an otherwise valid log batch. Preserve authentication identity and capture consumer attribution before configuration changes. Verify real gateway/ingestion behavior for registered keys, mapped JWTs and unrelated principals.
-- Remaining scalability work: durable per-consumer rollups with idempotent ingestion, bounded legacy backfill, mergeable histograms, retention and explicit coverage/late-data indicators. Benchmark larger windows and high-cardinality consumers before claiming high-volume analytics acceptance. Use these APIs in the phase 5 Developer Portal with scoped self-service authorization.
+- Remaining scalability work: durable per-consumer rollups with idempotent ingestion, bounded legacy backfill, mergeable histograms, rollup retention and explicit complete/partial/late-data coverage indicators. Raw-log receipt coverage is added by issue #80. Benchmark larger windows and high-cardinality consumers before claiming high-volume analytics acceptance. Use these APIs in the phase 5 Developer Portal with scoped self-service authorization.
 
 ---
 

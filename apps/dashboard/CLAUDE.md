@@ -166,5 +166,14 @@ Use workspace-keyed state and abort admitted mutations on close/switch. Preserve
 on failures and revision reload; invalidate archive views after a changed save. Retain
 30-second SWR refresh, native focus/Escape/Tab behavior and labelled selects. Browser
 checks cover failed reads/saves/revisions, workspace resets, disabled object storage,
-mobile/desktop accessibility and keyboard controls. Broader field sanitization and
-raw-log age retention are not implemented by this panel.
+mobile/desktop accessibility and keyboard controls. Broader field sanitization remains separate; raw-log age retention is handled by issue #80.
+
+Issue #80 adds Settings → Log retention through shared retention/coverage/revision
+contracts and api-client. Default database request-log lifetime is 30 days, selectable
+1–90. Explain receipt-time aging, irreversible expiry, separate archive download TTL,
+cleanup retry/pending state and windows outside retained coverage. Preserve selection
+on save/revision failures, remount workspace state, cancel admitted mutations on close
+or switch and retain 30-second SWR. Use native dialog focus/Escape/Tab behavior and a
+labelled bounded numeric input. Browser verification covers mobile/desktop, failed
+reads/saves/revisions, workspace resets, disabled object storage and archive/usage
+coverage. Recorded-log analytics and archives must not promise complete traffic history.

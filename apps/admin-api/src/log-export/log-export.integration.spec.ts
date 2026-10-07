@@ -1,3 +1,4 @@
+import { LogRetentionService } from '../log-retention/log-retention.service';
 import { LogPrivacyService } from '../log-privacy/log-privacy.service';
 import { LogPrivacyController } from '../log-privacy/log-privacy.controller';
 import { ConfigPushService } from '../config-push/config-push.service';
@@ -6,6 +7,7 @@ import { MetricsStreamService } from '../proxy-config/metrics-stream.service';
 import { ConsumerAnalyticsService } from '../proxy-config/consumer-analytics.service';
 import type {
   LogPrivacyState,
+  LogExportJob,
   LogExportScheduleState,
 } from '@api-gateway/shared-types';
 import { randomUUID } from 'node:crypto';
@@ -21,6 +23,7 @@ import { sign } from 'jsonwebtoken';
 import { DataSource } from 'typeorm';
 import {
   S3Client,
+  ListObjectsV2Command,
   DeleteBucketCommand,
   PutBucketPolicyCommand,
   PutBucketAclCommand,
@@ -648,6 +651,7 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
       status: 'failed',
       attempts: 3,
     });
+    const retainedCoverage = (await exports.list(other)).jobs[0].retention;
     const retryUrl = `${url}/${other}/log-exports/${claimed.id}/retry`;
     expect((await fetch(retryUrl, { method: 'POST' })).status).toBe(401);
     expect(
@@ -660,6 +664,12 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
     expect(retries.map((response) => response.status).sort()).toEqual([
       201, 409,
     ]);
+    const accepted = required(
+      retries.find((response) => response.status === 201),
+    );
+    const retriedJob = (await accepted.json()) as LogExportJob;
+    expect(retriedJob.retention).toEqual(retainedCoverage);
+    expect(retriedJob.retention?.receivedFrom).toMatch(/\.\d{6}Z$/);
     await expect(exports.retry(tenant, claimed.id)).rejects.toThrow(
       'not found',
     );
@@ -1010,4 +1020,77 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
       await admission.release();
     }
   }, 10000);
+  it('uses the processing receipt cutoff for queued archives and revokes downloads on retention changes', async () => {
+    const id = randomUUID(),
+      schema = tenantSchema(id);
+    await db.query(
+      `INSERT INTO public.tenants (id,name,email,"planId") VALUES ($1,'Archive retention fixture',$2,'free')`,
+      [id, id + '@example.test'],
+    );
+    await new TenantProvisioningService(db).provisionTenant(id);
+    // This test owns its isolated database; older pending fixture jobs must not precede this claim.
+    await db.query(
+      `UPDATE public.log_export_jobs SET status='expired',lease_id=NULL,lease_until=NULL WHERE status IN ('queued','processing')`,
+    );
+    await db.query(
+      `INSERT INTO ${schema}.request_logs (id,path,timestamp,"receivedAt") VALUES
+      (gen_random_uuid(),'/too-old-at-processing',$1,clock_timestamp()-INTERVAL '2 days'),
+      (gen_random_uuid(),'/retained',$1,clock_timestamp())`,
+      [new Date(now.getTime() - 30000).toISOString()],
+    );
+    const job = await exports.create(id, filter);
+    expect(job.retention).toMatchObject({ days: 30, timeBasis: 'receipt' });
+    await db.query(
+      `UPDATE public.tenants SET "logRetentionFloor"=clock_timestamp()-INTERVAL '1 day' WHERE id=$1`,
+      [id],
+    );
+    const claimed = required(await exports.claim());
+    expect(claimed.id).toBe(job.id);
+    await exports.process(claimed);
+    const completed = required(
+      (await exports.list(id)).jobs.find((j) => j.id === job.id),
+    );
+    expect(completed.status).toBe('completed');
+    expect(completed.rowCount).toBe(1);
+    expect(
+      Date.parse(completed.retention?.receivedFrom as string),
+    ).toBeGreaterThan(Date.parse(job.retention?.receivedFrom as string));
+    const body = await exports.download(id, job.id),
+      chunks: Buffer[] = [];
+    for await (const chunk of body) chunks.push(Buffer.from(chunk));
+    expect(JSON.parse(Buffer.concat(chunks).toString().trim()).path).toBe(
+      '/retained',
+    );
+    const slowSource = new Readable({
+      read() {
+        /* A live stream held for the policy race. */
+      },
+    });
+    const spy = jest
+      .spyOn(storage, 'download')
+      .mockResolvedValueOnce(slowSource);
+    const ongoing = await exports.download(id, job.id);
+    const iterator = ongoing[Symbol.asyncIterator]();
+    const rejected = expect(iterator.next()).rejects.toThrow('revoked');
+    const retention = new LogRetentionService(db);
+    try {
+      const current = await retention.get(id);
+      await retention.save(id, { days: 7, expectedRevision: current.revision });
+      await rejected;
+      expect(slowSource.destroyed).toBe(true);
+      await expect(exports.download(id, job.id)).rejects.toThrow('expired');
+      await exports.cleanupExpired();
+      const listing = await client.send(
+        new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: 'tenants/' + id + '/log-exports/' + job.id + '/',
+        }),
+      );
+      expect(listing.Contents ?? []).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+      ongoing.destroy();
+      await retention.onModuleDestroy();
+    }
+  }, 15000);
 });

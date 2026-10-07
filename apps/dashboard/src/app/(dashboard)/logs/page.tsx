@@ -114,6 +114,15 @@ export default function LogsPage() {
       )}
       <h1 className="mb-6 text-2xl font-semibold text-gray-900">Logs</h1>
 
+      <p className="mb-5 rounded-2xl border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-950">
+        Results include retained request logs only. Their lifetime starts when
+        the database receives them, even when a request timestamp is older.{' '}
+        <Link href="/settings" className="font-medium underline">
+          Manage log retention in Settings
+        </Link>
+        .
+      </p>
+
       {/* Filter bar */}
       <form
         onSubmit={handleSearch}

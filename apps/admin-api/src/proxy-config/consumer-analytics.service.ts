@@ -1,4 +1,8 @@
 import {
+  retentionCoverage,
+  retentionProfile,
+} from '../log-retention/log-retention.policy';
+import {
   BadRequestException,
   Injectable,
   Logger,
@@ -94,22 +98,28 @@ export class ConsumerAnalyticsService implements OnModuleDestroy {
       percentile_cont(0.95) WITHIN GROUP (ORDER BY "responseTimeMs") AS "p95Ms",
       percentile_cont(0.99) WITHIN GROUP (ORDER BY "responseTimeMs") AS "p99Ms"`;
     try {
-      return await this.db.transaction('REPEATABLE READ', async (manager) => {
-        await manager.query(
-          `SELECT set_config('statement_timeout','3000',true),set_config('lock_timeout','1000',true),set_config('work_mem','4MB',true)`,
-        );
-        const [consumer] = await manager.query(
-          `SELECT id,LEFT(name,256) AS name,to_char("revokedAt",'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "revokedAt" FROM ${schema}.consumers WHERE id=$1`,
-          [consumerId],
-        );
-        if (!consumer)
-          throw new NotFoundException('Consumer not found in this workspace');
-        const [row] = await manager.query(
-          `WITH selected AS MATERIALIZED (
+      const result: ConsumerUsageStats = await this.db.transaction(
+        'REPEATABLE READ',
+        async (manager) => {
+          await manager.query(
+            `SELECT set_config('statement_timeout','3000',true),set_config('lock_timeout','1000',true),set_config('work_mem','4MB',true)`,
+          );
+          const [consumer] = await manager.query(
+            `SELECT id,LEFT(name,256) AS name,to_char("revokedAt",'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "revokedAt" FROM ${schema}.consumers WHERE id=$1`,
+            [consumerId],
+          );
+          if (!consumer)
+            throw new NotFoundException('Consumer not found in this workspace');
+          const profile = await retentionProfile(
+            manager,
+            schema.slice(7).replace(/_/g, '-'),
+          );
+          const [row] = await manager.query(
+            `WITH selected AS MATERIALIZED (
           SELECT timestamp,LEFT(COALESCE(method,'UNKNOWN'),16) AS method,
             LEFT(split_part(COALESCE(path,'/'), '?', 1),512) AS path,"statusCode",
             CASE WHEN "responseTimeMs">=0 THEN "responseTimeMs" END AS "responseTimeMs"
-          FROM ${schema}.request_logs WHERE "consumerId"=$1 AND timestamp>=$2::timestamptz AND timestamp<$3::timestamptz
+          FROM ${schema}.request_logs WHERE "consumerId"=$1 AND timestamp>=$2::timestamptz AND timestamp<$3::timestamptz AND "receivedAt">=$7::timestamptz
           ORDER BY timestamp DESC,id DESC LIMIT $4
         ), cardinality AS (SELECT COUNT(*)::integer AS matched FROM selected),
         supported AS MATERIALIZED (SELECT * FROM selected WHERE (SELECT matched FROM cardinality)<$4),
@@ -128,37 +138,56 @@ export class ConsumerAnalyticsService implements OnModuleDestroy {
           (SELECT COALESCE(jsonb_agg(series ORDER BY timestamp),'[]'::jsonb) FROM series) AS series,
           (SELECT COALESCE(jsonb_agg(paths ORDER BY requests DESC,method,path),'[]'::jsonb) FROM paths) AS paths
         FROM cardinality CROSS JOIN totals`,
-          [
-            consumerId,
+            [
+              consumerId,
+              from,
+              to,
+              CONSUMER_ANALYTICS_ROW_LIMIT + 1,
+              seconds,
+              bucket,
+              profile.cutoff,
+            ],
+          );
+          if (row.matched > CONSUMER_ANALYTICS_ROW_LIMIT)
+            throw new ServiceUnavailableException(
+              'This window exceeds the consumer usage limit. Choose a shorter period.',
+            );
+          return {
+            ...row.totals,
+            retention: retentionCoverage(profile),
+            consumer: {
+              id: consumer.id,
+              name: consumer.name,
+              revokedAt: consumer.revokedAt ?? null,
+            },
+            period,
             from,
             to,
-            CONSUMER_ANALYTICS_ROW_LIMIT + 1,
-            seconds,
-            bucket,
-          ],
+            generatedAt: new Date(Date.now()).toISOString(),
+            source: 'persisted_request_logs',
+            bucketSeconds: bucket,
+            rowLimit: CONSUMER_ANALYTICS_ROW_LIMIT,
+            series: row.series,
+            topPaths: row.paths,
+          };
+        },
+      );
+      // A policy change during a long snapshot must not publish stale retained-data counts.
+      const valid = await this.db.transaction(async (manager) => {
+        await manager.query(
+          "SET LOCAL statement_timeout='3s'; SET LOCAL lock_timeout='1s'",
         );
-        if (row.matched > CONSUMER_ANALYTICS_ROW_LIMIT)
-          throw new ServiceUnavailableException(
-            'This window exceeds the consumer usage limit. Choose a shorter period.',
-          );
-        return {
-          ...row.totals,
-          consumer: {
-            id: consumer.id,
-            name: consumer.name,
-            revokedAt: consumer.revokedAt ?? null,
-          },
-          period,
-          from,
-          to,
-          generatedAt: new Date(Date.now()).toISOString(),
-          source: 'persisted_request_logs',
-          bucketSeconds: bucket,
-          rowLimit: CONSUMER_ANALYTICS_ROW_LIMIT,
-          series: row.series,
-          topPaths: row.paths,
-        };
+        const [row] = await manager.query(
+          'SELECT "logRetentionRevision"=$2::uuid AS valid FROM public.tenants WHERE id=$1',
+          [schema.slice(7).replace(/_/g, '-'), result.retention?.revision],
+        );
+        return row?.valid;
       });
+      if (!valid)
+        throw new ServiceUnavailableException(
+          'Log retention changed. Retry consumer usage.',
+        );
+      return result;
     } catch (error) {
       if (
         error instanceof NotFoundException ||

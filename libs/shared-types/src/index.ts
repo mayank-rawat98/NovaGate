@@ -4,4 +4,5 @@ export * from './lib/entities.ts';
 export * from './lib/plugin.ts';
 export * from './lib/log-export.ts';
 export * from './lib/log-privacy.ts';
+export * from './lib/log-retention.ts';
 export * from './lib/alerts.ts';

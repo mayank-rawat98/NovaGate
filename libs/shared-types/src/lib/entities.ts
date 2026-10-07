@@ -101,6 +101,7 @@ export interface ConsumerUsagePath extends ConsumerUsageCounts {
   path: string;
 }
 export interface ConsumerUsageStats extends ConsumerUsageCounts {
+  retention?: import('./log-retention.ts').LogRetentionCoverage;
   consumer: { id: string; name: string; revokedAt: string | null };
   period: ConsumerAnalyticsPeriod;
   from: string;

@@ -203,6 +203,16 @@ function ScheduleWorkspace({ tenantId }: { tenantId: string }) {
                 </div>
               </dl>
             )}
+            {!!schedule?.retentionSkippedWindows && (
+              <p
+                role="status"
+                className="rounded-xl bg-amber-50 p-3 text-sm text-amber-950"
+              >
+                {schedule.retentionSkippedWindows.toLocaleString()} receipt
+                window(s) fell partly or wholly outside retained coverage before
+                selection. Expired records cannot be restored.
+              </p>
+            )}
             {schedule?.error && (
               <p
                 role="status"
