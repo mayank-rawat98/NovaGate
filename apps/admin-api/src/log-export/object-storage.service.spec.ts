@@ -7,7 +7,9 @@ import { ObjectStorageService } from './object-storage.service';
 import { LogExportService } from './log-export.service';
 import type { DataSource } from 'typeorm';
 
-async function stalledStorage(streamBody: boolean | 'multipart' = false) {
+async function stalledStorage(
+  streamBody: boolean | 'multipart' | 'metadata' = false,
+) {
   let requests = 0;
   const sockets = new Set<Socket>();
   let observed!: () => void;
@@ -16,6 +18,11 @@ async function stalledStorage(streamBody: boolean | 'multipart' = false) {
   });
   const server = createServer((_request, response) => {
     requests++;
+    if (streamBody === 'metadata' && _request.method === 'HEAD') {
+      response.writeHead(200);
+      response.end();
+      return;
+    }
     if (
       streamBody === 'multipart' &&
       _request.method === 'POST' &&
@@ -30,6 +37,10 @@ async function stalledStorage(streamBody: boolean | 'multipart' = false) {
       return;
     }
     observed();
+    if (streamBody === 'metadata') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.write('{"Statement":[');
+    }
     if (streamBody === true) {
       response.writeHead(200, { 'content-type': 'application/x-ndjson' });
       response.write('{"partial":true}\n');
@@ -199,6 +210,29 @@ describe('Private object storage on real stalled HTTP transport', () => {
       await fixture.close();
     }
   });
+
+  it('rejects a metadata body stalled after response headers within the command budget', async () => {
+    const fixture = await stalledStorage('metadata');
+    const operation = fixture.storage.onModuleInit().then(
+      () => 'accepted',
+      () => 'rejected',
+    );
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await fixture.requested;
+      const outcome = await Promise.race([
+        operation,
+        new Promise<string>((resolve) => {
+          timer = setTimeout(() => resolve('still-open'), 18000);
+        }),
+      ]);
+      expect(outcome).toBe('rejected');
+    } finally {
+      clearTimeout(timer);
+      await fixture.close();
+      await operation;
+    }
+  }, 25000);
 
   it('rejects a stalled startup request within its existing transport budget', async () => {
     const fixture = await stalledStorage();
