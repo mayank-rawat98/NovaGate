@@ -8,7 +8,7 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
-- Latest verified development work: [PR #81](https://github.com/mayank-rawat98/NovaGate/pull/81), linked to [issue #80](https://github.com/mayank-rawat98/NovaGate/issues/80), adds tenant receipt-based raw-log retention, irreversible expiry, durable cleanup, archive revocation/coverage and accessible Settings. The linked branch starts from `dev` at **c40a7692**. Verification passes 1,207 tests, all five static gates, four builds, 42 cold browser loads and fresh packaged OrbStack gateway/collector/PostgreSQL/RustFS checks. Merged into `dev` as **ccb91854**; formal phase acceptance remains pending.
+- Latest verified development work: [PR #83](https://github.com/mayank-rawat98/NovaGate/pull/83), linked to [issue #82](https://github.com/mayank-rawat98/NovaGate/issues/82), aligns trace/metric/alert/archive SQL lifetimes with fixed elapsed 24-hour days. Its branch starts from `dev` at **ccb91854** / merged retention [PR #81](https://github.com/mayank-rawat98/NovaGate/pull/81). Verification passes 1,249 tests, affected backend static/build gates and fresh packaged OrbStack gateway/collector/PostgreSQL/RustFS checks. Formal phase acceptance remains pending.
 - Alerting development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68), linked to [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), adds durable delivery and the Alerts dashboard.
 - Its issue-linked branch `65-feat-alert-delivery-and-dashboard` was created from `dev` at **653d7a00** / [PR #67](https://github.com/mayank-rawat98/NovaGate/pull/67), which merged the storage/evaluation foundations and roadmap documents. Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) is closed.
 - **AppModule imports AlertsModule**. Authenticated endpoints and workers start after migration; missing dedicated encryption keys disable channel creation/delivery.
@@ -504,8 +504,9 @@ relaxing its gates. Issue #69 remains open, and no formal phase acceptance is cl
 
 ## Elapsed-day telemetry lifetimes — issue #82
 
-[Issue #82](https://github.com/mayank-rawat98/NovaGate/issues/82) is linked to
-`82-elapsed-utc-retention`, from merged dev **ccb91854**. PostgreSQL calendar-day
+[PR #83](https://github.com/mayank-rawat98/NovaGate/pull/83) delivers
+[issue #82](https://github.com/mayank-rawat98/NovaGate/issues/82) on the linked
+`82-elapsed-utc-retention` branch, from merged dev **ccb91854**. PostgreSQL calendar-day
 intervals previously shifted trace/metric retention, alert history/delivery cutoffs
 and archive lifetimes by an hour at daylight-saving transitions. Their SQL now uses
 fixed elapsed 24-hour days, matching JavaScript validation and raw-log retention.
@@ -522,10 +523,26 @@ before transport, queue/history cleanup and exact seven-day archive lifetimes.
 Captured pre-fix evidence has **14 daylight-saving failures** and 28 passes; the
 fixed feature suite passes all 42. Full regression passes **1,249 tests** (gateway
 573, admin 553, control plane 113, dashboard 10). Affected admin/control-plane
-lint/typecheck/build gates pass. Fresh packaged OrbStack verification is pending.
+lint/typecheck/build gates pass. Fresh packaged OrbStack verification also passes:
+real gateway completions, PostgreSQL persistence, tenant authorization, Redis/SSE
+delivery/reconnect, local alert retry/recovery, scheduled private RustFS exports,
+consumer attribution, privacy policy ACK/erasure/revocation and irreversible raw-log
+expiry/cleanup. Two private automatic archives contain 96 rows including a late
+request; usage matches PostgreSQL at 21 requests, ten server errors and P95 22 ms.
+Local alert firing acceptance takes 59.419 seconds. All three services stop with
+exit 0 and disposable runtime resources are removed. Packaged images: gateway
+`d41f3815614a`, admin `13a3ec346ba5`, control plane `7bb64fc085fd`; full hashes
+and measurements remain in the runtime artifact.
+
+The initial extra affected-project run passed all assertions but exceeded the new
+fixture’s five-second database-drop hook during concurrent container startup.
+The failure is preserved; the separate final affected-project run passes all
+666 backend tests without increasing any timeout or weakening service gates.
 
 Ignored evidence: `issue82-dst-red.log`, `issue82-dst-green.log`,
-`issue82-regression.log` and `issue82-affected-gates.log`. Formal phase acceptance
+`issue82-regression.log`, `issue82-affected-gates.log`, `issue82-affected-tests.log`,
+`issue82-affected-tests-final.log`, `issue82-runtime.log` and
+`issue82-runtime-evidence.json`. Formal phase acceptance
 and the full remaining roadmap stay open.
 
 ## Remaining work
