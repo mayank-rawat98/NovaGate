@@ -107,7 +107,7 @@ export class LogIngestionService implements OnModuleInit, OnModuleDestroy {
               [`metric-ingestion:${tenantId}`],
             );
             await manager.query(
-              `DELETE FROM ${schema}.metrics_snapshots WHERE timestamp < NOW() - make_interval(days => $1)`,
+              `DELETE FROM ${schema}.metrics_snapshots WHERE timestamp < NOW() - make_interval(secs => $1::integer * 86400)`,
               [this.metricSettings.retentionDays],
             );
           });
@@ -282,7 +282,7 @@ export class LogIngestionService implements OnModuleInit, OnModuleDestroy {
           [`metric-ingestion:${tenantId.toLowerCase()}`],
         );
         await manager.query(
-          `DELETE FROM ${schema}.metrics_snapshots WHERE timestamp < NOW() - make_interval(days => $1)`,
+          `DELETE FROM ${schema}.metrics_snapshots WHERE timestamp < NOW() - make_interval(secs => $1::integer * 86400)`,
           [this.metricSettings.retentionDays],
         );
         const [stored] = await manager.query<

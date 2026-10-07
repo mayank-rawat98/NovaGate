@@ -509,7 +509,7 @@ export class AlertRulesService implements OnModuleDestroy {
       const events = await manager.query<
         StoredEvent[]
       >(`SELECT id, "ruleId", "ruleName", metric, operator, threshold, "windowMinutes", state, value, "createdAt"
-        FROM ${schema}.alert_events WHERE "createdAt" >= NOW() - INTERVAL '30 days' ORDER BY "createdAt" DESC, id DESC LIMIT 100`);
+        FROM ${schema}.alert_events WHERE "createdAt" >= NOW() - INTERVAL '720 hours' ORDER BY "createdAt" DESC, id DESC LIMIT 100`);
       if (!events.length) return [];
       const deliveries = await manager.query<StoredDelivery[]>(
         `SELECT id, "eventId", "channelId", "channelName", type, status, attempts, "lastError", "nextAttemptAt", "completedAt"

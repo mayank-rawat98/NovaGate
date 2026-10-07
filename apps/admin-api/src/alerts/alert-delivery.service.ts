@@ -174,7 +174,7 @@ export class AlertDeliveryService
         if (!owned) return null;
         const [row] = await manager.query<StoredJob[]>(
           `SELECT e.id, e."ruleId", e."ruleName", e.metric, e.operator, e.threshold,
-        (e."createdAt" < clock_timestamp() - INTERVAL '30 days') AS expired,
+        (e."createdAt" < clock_timestamp() - INTERVAL '720 hours') AS expired,
         e."windowMinutes", e.state, e.value, e."createdAt", d.attempts, d.type, d."channelId", d."channelRevision",
         c.type AS "channelType", c.revision AS "currentRevision", c.enabled AS "channelEnabled", c.credentials
         FROM ${schema}.alert_deliveries d JOIN ${schema}.alert_events e ON e.id=d."eventId"

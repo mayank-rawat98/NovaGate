@@ -254,7 +254,7 @@ export class LogExportService
           'Wait for your pending archives before requesting more',
         );
       const [row]: JobRow[] = await manager.query(
-        `INSERT INTO public.log_export_jobs (tenant_id, filter, expires_at,privacy_policy,privacy_revision,retention_revision,retention_days,retention_from) SELECT $1,$2,NOW() + $3 * INTERVAL '1 day',"logPrivacy","logPrivacyRevision","logRetentionRevision","logRetentionDays",${RETENTION_CUTOFF_SQL} FROM public.tenants WHERE id=$1 RETURNING *,to_char(retention_from AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS retention_cutoff`,
+        `INSERT INTO public.log_export_jobs (tenant_id, filter, expires_at,privacy_policy,privacy_revision,retention_revision,retention_days,retention_from) SELECT $1,$2,NOW() + make_interval(secs => $3::integer * 86400),"logPrivacy","logPrivacyRevision","logRetentionRevision","logRetentionDays",${RETENTION_CUTOFF_SQL} FROM public.tenants WHERE id=$1 RETURNING *,to_char(retention_from AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS retention_cutoff`,
         [tenantId, JSON.stringify(filter), this.storage.retentionDays],
       );
       return view(row);
@@ -623,7 +623,7 @@ export class LogExportService
           `tenants/${row.tenant_id}/log-exports/${row.id}/`,
         );
         await this.db.query(
-          `DELETE FROM public.log_export_jobs WHERE id=$1 AND status='expired' AND expires_at<NOW()-INTERVAL '30 days'`,
+          `DELETE FROM public.log_export_jobs WHERE id=$1 AND status='expired' AND expires_at<NOW()-INTERVAL '720 hours'`,
           [row.id],
         );
       } catch {
