@@ -8,7 +8,7 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
-- Latest verified development work: [PR #83](https://github.com/mayank-rawat98/NovaGate/pull/83), linked to [issue #82](https://github.com/mayank-rawat98/NovaGate/issues/82), aligns trace/metric/alert/archive SQL lifetimes with fixed elapsed 24-hour days. Its branch starts from `dev` at **ccb91854** / merged retention [PR #81](https://github.com/mayank-rawat98/NovaGate/pull/81). Verification passes 1,249 tests, affected backend static/build gates and fresh packaged OrbStack gateway/collector/PostgreSQL/RustFS checks. Formal phase acceptance remains pending.
+- Latest verified development work: [PR #86](https://github.com/mayank-rawat98/NovaGate/pull/86), linked to [issue #84](https://github.com/mayank-rawat98/NovaGate/issues/84), adds six configurable stored request-log metadata fields with immediate privacy-projected views/usage/filters and irreversible bounded erasure. Its branch starts from `dev` at **7047b247** / merged [PR #83](https://github.com/mayank-rawat98/NovaGate/pull/83). The required final affected-project run passes 1,263 tests; all static/build gates, production browser checks and fresh packaged OrbStack/RustFS verification pass. [Issue #85](https://github.com/mayank-rawat98/NovaGate/issues/85) tracks the separately observed non-rejecting storage timeout. Formal phase acceptance remains pending.
 - Alerting development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68), linked to [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), adds durable delivery and the Alerts dashboard.
 - Its issue-linked branch `65-feat-alert-delivery-and-dashboard` was created from `dev` at **653d7a00** / [PR #67](https://github.com/mayank-rawat98/NovaGate/pull/67), which merged the storage/evaluation foundations and roadmap documents. Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) is closed.
 - **AppModule imports AlertsModule**. Authenticated endpoints and workers start after migration; missing dedicated encryption keys disable channel creation/delivery.
@@ -545,11 +545,11 @@ Ignored evidence: `issue82-dst-red.log`, `issue82-dst-green.log`,
 `issue82-runtime-evidence.json`. Formal phase acceptance
 and the full remaining roadmap stay open.
 
-## Sensitive request-log metadata — issue #84
+## Sensitive request-log metadata — issue #84 / PR #86
 
 [Issue #84](https://github.com/mayank-rawat98/NovaGate/issues/84) extends the existing
 privacy policy to paths, service names, request IDs, consumer attribution, trace IDs
-and span IDs. Its linked branch starts from `dev` at **7047b247** / merged PR #83.
+and span IDs through [PR #86](https://github.com/mayank-rawat98/NovaGate/pull/86). Its linked branch starts from `dev` at **7047b247** / merged PR #83.
 Legacy two-field policies and empty selections remain compatible; strict validation
 canonicalizes selections, while malformed explicit selections fail closed. Primary
 log identity, receipts, method, status, timings and live security/wire inputs remain
@@ -567,7 +567,7 @@ paths, revocation, durable erasure and non-resurrection after later relaxation.
 Settings adds six labelled checkboxes with native mobile dialogs, failed-save and
 revision-input preservation, workspace reset and clear consequences for correlation.
 
-Verification passes **1,263 regression tests** (gateway 584, admin 555, control plane
+The required final affected-project verification passes **1,263 regression tests** (gateway 584, admin 555, control plane
 114, dashboard 10). All five projects' lint/typecheck gates and four application
 builds pass after correcting new integration response typings. Final focused real
 PostgreSQL/RustFS archive checks pass **19 tests** with unchanged deadlines.
@@ -597,7 +597,8 @@ the prior failure as flaky. [Issue #85](https://github.com/mayank-rawat98/NovaGa
 tracks actual rejecting storage deadlines and guaranteed failure-path resource cleanup.
 No storage reliability fix or full phase acceptance is claimed by #84.
 
-Ignored evidence: `issue84-full-tests.log`, `issue84-full-gates.log`,
+Ignored evidence: `issue84-full-tests.log`, `issue84-affected-tests-final.log`,
+`issue84-full-gates.log`,
 `issue84-admin-gates-final.log`, `issue84-admin-final-static.log`,
 `issue84-archive-schedule-final.log`, `issue84-archive-schedule-green.log`,
 `issue84-cleanup.log`, `issue84-browser.log`, `issue84-browser-run.json`,
