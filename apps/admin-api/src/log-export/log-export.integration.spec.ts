@@ -12,7 +12,7 @@ import type {
   LogExportJob,
   LogExportScheduleState,
 } from '@api-gateway/shared-types';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Readable } from 'node:stream';
@@ -71,6 +71,12 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
     forcePathStyle: true,
     region: 'us-east-1',
     credentials: { accessKeyId, secretAccessKey },
+    maxAttempts: 1,
+    requestHandler: {
+      connectionTimeout: 3000,
+      requestTimeout: 5000,
+      throwOnRequestTimeout: true,
+    },
   });
   const secret = 'archive-integration-secret-at-least-32-characters';
   const oldSecret = process.env.PLATFORM_JWT_SECRET;
@@ -184,19 +190,37 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
     url = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}/api/tenants`;
   }, 30000);
   afterAll(async () => {
-    if (storage?.enabled) {
-      await storage.cleanup('tenants/');
-      await client.send(new DeleteBucketCommand({ Bucket: bucket }));
-    }
-    await app?.close();
-    client.destroy();
-    if (db?.isInitialized) await db.destroy();
+    const failures: unknown[] = [];
+    const release = async (action: () => Promise<unknown> | void) => {
+      try {
+        await action();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    await release(async () => {
+      if (storage?.enabled) {
+        await storage.cleanup('tenants/');
+        await client.send(new DeleteBucketCommand({ Bucket: bucket }));
+      }
+    });
+    // Storage failure must not skip application/client/database cleanup.
+    await release(() => app?.close());
+    await release(() => client.destroy());
+    if (db?.isInitialized) await release(() => db.destroy());
     if (root?.isInitialized) {
-      await root.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
-      await root.destroy();
+      await release(() =>
+        root.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`),
+      );
+      await release(() => root.destroy());
     }
     if (oldSecret === undefined) delete process.env.PLATFORM_JWT_SECRET;
     else process.env.PLATFORM_JWT_SECRET = oldSecret;
+    if (failures.length)
+      throw new AggregateError(
+        failures,
+        'Private archive fixture cleanup failed',
+      );
   }, 30000);
 
   it('requires a matching tenant session and validates ranges before persisting jobs', async () => {
@@ -219,6 +243,39 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
       )[0].count,
     ).toBe(0);
   });
+  it('round-trips an actual multipart private RustFS object through bounded SDK sends', async () => {
+    const key = `tenants/${tenant}/log-exports/multipart-fixture-${randomUUID()}.ndjson`;
+    const line = '{"fixture":"multipart"}\n';
+    const payload = Buffer.from(
+      line.repeat(Math.ceil((5 * 1024 * 1024 + 1) / Buffer.byteLength(line))),
+    );
+    expect(payload.length).toBeGreaterThan(5 * 1024 * 1024);
+    await storage.upload(
+      key,
+      Readable.from([payload]),
+      new AbortController().signal,
+    );
+    const stream = await storage.download(key);
+    const hash = createHash('sha256');
+    let bytes = 0;
+    for await (const chunk of stream) {
+      bytes += chunk.length;
+      hash.update(chunk);
+    }
+    expect(bytes).toBe(payload.length);
+    expect(hash.digest('hex')).toBe(
+      createHash('sha256').update(payload).digest('hex'),
+    );
+    const uploads = await client.send(
+      new ListMultipartUploadsCommand({ Bucket: bucket, Prefix: key }),
+    );
+    expect(uploads.Uploads ?? []).toEqual([]);
+    await storage.remove(key);
+    await expect(storage.download(key)).rejects.toMatchObject({
+      name: 'NoSuchKey',
+    });
+  }, 15000);
+
   it('claims a durable job only once across concurrent workers and streams every row without duplicates', async () => {
     const created = await fetch(`${url}/${tenant}/log-exports`, {
       method: 'POST',

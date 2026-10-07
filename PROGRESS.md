@@ -8,7 +8,7 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
-- Latest verified development work: [PR #86](https://github.com/mayank-rawat98/NovaGate/pull/86), linked to [issue #84](https://github.com/mayank-rawat98/NovaGate/issues/84), adds six configurable stored request-log metadata fields with immediate privacy-projected views/usage/filters and irreversible bounded erasure. Its branch starts from `dev` at **7047b247** / merged [PR #83](https://github.com/mayank-rawat98/NovaGate/pull/83). The required final affected-project run passes 1,263 tests; all static/build gates, production browser checks and fresh packaged OrbStack/RustFS verification pass. [Issue #85](https://github.com/mayank-rawat98/NovaGate/issues/85) tracks the separately observed non-rejecting storage timeout. Formal phase acceptance remains pending.
+- Latest verified development work: [PR #87](https://github.com/mayank-rawat98/NovaGate/pull/87), linked to [issue #85](https://github.com/mayank-rawat98/NovaGate/issues/85), fixes non-rejecting storage timeouts and shutdown/resource cleanup. Its branch starts from `dev` at **2affcb71** / merged [PR #86](https://github.com/mayank-rawat98/NovaGate/pull/86), which implements six-field stored-metadata privacy. The final affected-project run passes 568 admin tests, including twelve actual stalled-network checks and a real multipart RustFS round trip; backend static/build gates and fresh packaged OrbStack/RustFS/metrics/alerts/privacy/retention verification pass. The unchanged gateway/collector/dashboard retain issue #84's 1,263-test and 42-plus-seven-load browser checkpoint. Formal phase acceptance remains pending.
 - Alerting development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68), linked to [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), adds durable delivery and the Alerts dashboard.
 - Its issue-linked branch `65-feat-alert-delivery-and-dashboard` was created from `dev` at **653d7a00** / [PR #67](https://github.com/mayank-rawat98/NovaGate/pull/67), which merged the storage/evaluation foundations and roadmap documents. Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) is closed.
 - **AppModule imports AlertsModule**. Authenticated endpoints and workers start after migration; missing dedicated encryption keys disable channel creation/delivery.
@@ -594,8 +594,8 @@ without rejecting the request. The failed process was explicitly stopped, its ex
 fixture database removed and the verification storage confirmed empty. The separate
 final archive run passes all 19 tests without increasing deadlines; Nx still reports
 the prior failure as flaky. [Issue #85](https://github.com/mayank-rawat98/NovaGate/issues/85)
-tracks actual rejecting storage deadlines and guaranteed failure-path resource cleanup.
-No storage reliability fix or full phase acceptance is claimed by #84.
+addresses rejecting storage deadlines and failure-path resource cleanup in the
+checkpoint below. No storage reliability fix or full phase acceptance is claimed by #84.
 
 Ignored evidence: `issue84-full-tests.log`, `issue84-affected-tests-final.log`,
 `issue84-full-gates.log`,
@@ -607,6 +607,67 @@ Ignored evidence: `issue84-full-tests.log`, `issue84-affected-tests-final.log`,
 `issue84-runtime-evidence.json`. Evidence supports this issue's implementation;
 external destination delivery, scalable rollups, phases 5–6 and formal acceptance
 remain open below.
+
+## Storage deadlines and shutdown — issue #85 / PR #87
+
+[Issue #85](https://github.com/mayank-rawat98/NovaGate/issues/85) /
+[PR #87](https://github.com/mayank-rawat98/NovaGate/pull/87) fixes the stalled request
+observed during #84. Its linked branch starts from `dev` at **2affcb71**.
+The installed SDK's configured request timeout warned without rejecting. A new real
+local HTTP fixture reproduces the original defect: startup remained open after
+18 seconds, and the pre-fix test fails with `still-open` rather than `rejected`.
+
+Storage commands and download admission now have a 15-second absolute budget across
+signing, connection acquisition, SDK attempts and backoff. The upload helper does not
+forward its abort controller to internal sends; its single/multipart transfer,
+completion and abort cleanup now also use the bounded wrapper. Best-effort abort
+cleanup remains possible after caller cancellation, while application shutdown
+cancels all sends. The underlying handler
+also rejects transport timeouts; fast transient failures can still use three
+attempts. Uploads retain the worker's existing two-minute deadline/cancellation and
+rejecting per-request limits. Whole-prefix object/multipart cleanup has a two-minute
+budget. Shutdown aborts storage work, destroys owned response streams and cancels
+worker cleanup before waiting. Failed deletion keeps durable retry state. Fixture
+teardown attempts app/client/database release after storage errors and preserves all
+failures instead of skipping later cleanup.
+
+All **568 admin tests** pass in the final required affected-project run. Preceding
+backend regressions also pass. Twelve new actual HTTP/SDK checks cover rejecting deadlines before headers and during metadata body decoding,
+five operation shutdown paths, actual multipart sockets without background retries,
+worker and caller cleanup cancellation, owned response streams and rejection of work
+after shutdown. Twenty real archive tests include an object larger than 5 MiB, exact
+streamed SHA-256 integrity, no remaining multipart upload and successful deletion. The worker-coordination test
+uses controlled SQL responses; real PostgreSQL/RustFS archive regressions retain
+coverage of policy/ACL refusal, durable deletion retry, metadata redaction,
+revocation, receipt scheduling and retention. Admin lint/typecheck/build pass.
+No production timeout or existing test deadline was increased. No new environment
+setting, dependency, schema or dashboard source change is needed.
+
+Fresh OrbStack production verification with rebuilt admin image `2107e8a81633`
+passes metrics/SSE/reconnect, consumer/JWT/legacy attribution, signed local alert
+retry/recovery, automatic private archives, metadata privacy and irreversible raw-log
+retention. Two automatic archives contain **96 rows** including a late request;
+the later metadata-redacted download contains **103 records**. Before metadata
+erasure, usage matches PostgreSQL at 21 requests, ten server errors and P95 16 ms.
+Local alert firing acceptance takes **59.638 seconds**, with six accepted deliveries.
+Gateway, collector and admin all stop with exit 0; disposable runtime resources are
+removed. Unchanged gateway `477927fc9327` and collector `e1451f66e048` images retain
+the #84 source checkpoint; full hashes are in the runtime artifact. Existing #84
+production browser evidence remains applicable to the unchanged dashboard.
+
+Ignored evidence: `issue85-deadline-red.log`, `issue85-storage-green.log`,
+`issue85-admin-regression.log`, `issue85-affected-tests-final.log`,
+`issue85-first-gates.log`, `issue85-expanded-static.log`, `issue85-final-static.log`,
+`issue85-docker-admin.log`, `issue85-runtime.log` and
+`issue85-runtime-evidence.json`, `issue85-multipart-green.log`,
+`issue85-transfer-final-tests.log`, `issue85-transfer-final-gates.log`,
+`issue85-roundtrip-green.log`, `issue85-roundtrip-final-static.log`,
+`issue85-complete-affected-tests.log`, `issue85-transfer-docker-admin.log`,
+`issue85-transfer-runtime.log`, `issue85-final-runtime-evidence.json`,
+`issue85-response-body-green.log`, `issue85-body-final-static.log` and
+`issue85-body-complete-affected.log`. This closes the identified storage deadline defect,
+not phase 4 or full-roadmap acceptance. External destination delivery, scalable
+rollups, later phases and formal acceptance remain open below.
 
 ## Remaining work
 
@@ -621,9 +682,6 @@ remain open below.
 
 ### Remaining phase 4 work
 
-- Fix storage transport deadlines and guaranteed fixture/resource cleanup in
-  [issue #85](https://github.com/mayank-rawat98/NovaGate/issues/85). A configured
-  SDK request timeout currently warns without rejecting a stalled request.
 - Configurable external S3-compatible tenant destinations, webhook NDJSON and Datadog
   exporters, with encrypted rotatable private credentials, destination payload policies
   and delivery history. Issue #84 implements stored-metadata field selection.

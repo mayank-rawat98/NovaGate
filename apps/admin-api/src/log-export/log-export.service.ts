@@ -187,6 +187,7 @@ export class LogExportService
   private ticking = false;
   private tickDone?: Promise<void>;
   private closing = false;
+  private readonly cleanupAbort = new AbortController();
   private readonly active = new Map<
     string,
     { promise: Promise<void>; abort: AbortController }
@@ -209,6 +210,7 @@ export class LogExportService
   }
   async onModuleDestroy() {
     this.closing = true;
+    this.cleanupAbort.abort();
     clearInterval(this.timer);
     for (const download of this.downloads) download.abort.abort();
     for (const work of this.active.values()) work.abort.abort();
@@ -623,6 +625,7 @@ export class LogExportService
       try {
         await this.storage.cleanup(
           `tenants/${row.tenant_id}/log-exports/${row.id}/`,
+          this.cleanupAbort.signal,
         );
         await this.db.query(
           `DELETE FROM public.log_export_jobs WHERE id=$1 AND status='expired' AND expires_at<NOW()-INTERVAL '720 hours'`,
