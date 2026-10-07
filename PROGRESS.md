@@ -8,22 +8,12 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
-- Latest development work: [PR #79](https://github.com/mayank-rawat98/NovaGate/pull/79), linked to [issue #78](https://github.com/mayank-rawat98/NovaGate/issues/78) adds end-to-end tenant request-log privacy, historical erasure, private archive revocation, durable configuration retries and accessible Settings controls. The issue-linked branch starts from `dev` at **65a6b7c8**. Issue verification passes 1,183 tests, all five static gates, four builds, 42 cold browser loads and actual packaged privacy/metrics/alerts/RustFS checks. Merge details are recorded in its checkpoint below.
+- Latest verified development work: [PR #81](https://github.com/mayank-rawat98/NovaGate/pull/81), linked to [issue #80](https://github.com/mayank-rawat98/NovaGate/issues/80), adds tenant receipt-based raw-log retention, irreversible expiry, durable cleanup, archive revocation/coverage and accessible Settings. The linked branch starts from `dev` at **c40a7692**. Verification passes 1,207 tests, all five static gates, four builds, 42 cold browser loads and fresh packaged OrbStack gateway/collector/PostgreSQL/RustFS checks. Delivery targets `dev`; formal phase acceptance remains pending.
 - Alerting development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68), linked to [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), adds durable delivery and the Alerts dashboard.
 - Its issue-linked branch `65-feat-alert-delivery-and-dashboard` was created from `dev` at **653d7a00** / [PR #67](https://github.com/mayank-rawat98/NovaGate/pull/67), which merged the storage/evaluation foundations and roadmap documents. Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) is closed.
 - **AppModule imports AlertsModule**. Authenticated endpoints and workers start after migration; missing dedicated encryption keys disable channel creation/delivery.
 - [Issue #69](https://github.com/mayank-rawat98/NovaGate/issues/69) tracks one intermittent dashboard hydration recovery. Expanded subsequent browser checks pass, but a root cause/fix has not been established. It remains part of the remaining work and formal release acceptance.
 - Work and verification use OrbStack. Nothing here authorizes or represents a main deployment.
-
-## Active implementation — issue #80
-
-[Issue #80](https://github.com/mayank-rawat98/NovaGate/issues/80) is on the linked
-`80-tenant-log-retention` branch from dev `c40a7692`. It adds trusted receipt-based
-tenant retention, immediate filtering, irreversible cutoffs, bounded fair deletion,
-archive coverage/revocation, expired schedule-window reporting and accessible Settings.
-The expanded PostgreSQL/RustFS feature suite passes 126 tests and admin/dashboard
-lint/typecheck pass. Full regression, production browser and packaged runtime checks
-are in progress; this checkpoint does not yet claim a merge or formal phase acceptance.
 
 ## Implemented and merged into dev
 
@@ -458,7 +448,8 @@ checks. Production connection-admission rules are preserved.
 
 ## Tenant raw-log retention — issue #80
 
-Implementation is on `80-tenant-log-retention`, linked to
+[PR #81](https://github.com/mayank-rawat98/NovaGate/pull/81) delivers
+`80-tenant-log-retention`, linked to
 [issue #80](https://github.com/mayank-rawat98/NovaGate/issues/80), from dev **c40a7692**.
 The default database request-log lifetime is 30 days, tenant-selectable from 1–90.
 Trusted database receipt and fixed 24-hour days determine age independently of session
@@ -492,12 +483,21 @@ retention cases. All five static gates and four application builds pass.
 The production browser run passes 42 cold loads with sixfold CPU throttling in 45,301 ms
 with zero runtime or accessibility findings. Its additional retention checks cover
 read/save/revision recovery, input preservation, focus/Tab/Escape, workspace reset and
-disabled storage. Packaged runtime verification and delivery are still in progress.
+disabled storage. Fresh packaged OrbStack verification also passes: immediate filtering,
+shrink/increase non-resurrection, private archive revocation, fresh receipt preservation
+for late request timestamps and durable removal of two expired receipts. Cleanup returns
+healthy. Retained consumer usage matches 21 requests, ten server errors and P95 11 ms;
+two private scheduled archives contain 96 rows including a late request. Local alert
+firing acceptance takes 59.603 seconds, and all three services shut down with exit 0.
+
+Verified packaged images: gateway `d41f3815614a`, admin `abda96f1876e`,
+control plane `ee34c2bc7cdc`; full hashes and measurements remain in the runtime artifact.
 
 Ignored evidence: `issue80-expanded-tests.log`, `issue80-regression.log`,
-`issue80-utc-tests.log`, `issue80-all-static.log`,
-`issue80-all-builds.log`, `issue80-browser-second.log` and
-`issue80-browser-run.json`. The first browser run preserves an outdated schedule
+`issue80-utc-tests.log`, `issue80-precision-final-tests.log`, `issue80-final-static.log`,
+`issue80-ready-admin-gates.log`, `issue80-all-builds.log`, `issue80-browser-second.log`,
+`issue80-browser-run.json`, `issue80-runtime-final.log` and
+`issue80-runtime-evidence.json`. The first browser run preserves an outdated schedule
 wording assertion; the corrected verifier checks retained-coverage warnings without
 relaxing its gates. Issue #69 remains open, and no formal phase acceptance is claimed.
 

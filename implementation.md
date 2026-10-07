@@ -12,7 +12,8 @@ verification evidence and the remaining work at the bottom of that report.
 - Scheduled archives in [issue #72](https://github.com/mayank-rawat98/NovaGate/issues/72) extend RustFS with receipt-based automation and retry UX. Current verification passes 1,134 tests, all five projects’ lint/typecheck gates and four application builds. Browser checks pass 42 cold loads under sixfold CPU throttling plus a final seven-load run with zero runtime/accessibility findings. Fresh OrbStack images produce three private automatic archives containing all 94 persisted records, including an authenticated late log; local alert firing acceptance takes 59.111 seconds and all services shut down cleanly. Additional destinations/privacy controls remain pending.
 - Per-consumer usage in [issue #74](https://github.com/mayank-rawat98/NovaGate/issues/74) adds bounded tenant-scoped log-derived statistics, filtered metrics and an accessible usage panel. Current verification passes 1,157 tests, all five static gates, four application builds and 42 cold/CPU-throttled browser loads plus a final seven-load run with zero runtime/accessibility findings. Packaged OrbStack traffic verifies 20 requests attributed to a real consumer key, ten server errors and P95 matching PostgreSQL; retained alerts/metrics, private archives and clean shutdown pass. High-volume rollups/coverage and formal acceptance remain pending.
 - [Issue #76](https://github.com/mayank-rawat98/NovaGate/issues/76) reproduces and corrects unrelated authentication principals rejecting consumer UUID log ingestion. Separate captured consumer attribution and legacy normalization pass 1,163 retained tests, five static gates, three backend builds and actual packaged OrbStack key/JWT/legacy-frame checks. Consumer totals match PostgreSQL; metrics/alerts, 97 private archived records and clean shutdown also pass.
-- [Issue #78](https://github.com/mayank-rawat98/NovaGate/issues/78) / [PR #79](https://github.com/mayank-rawat98/NovaGate/pull/79) adds tenant request-log privacy: conservative omitted IP/user-agent defaults, revision-aware Settings, gateway/collector enforcement, historical erasure, immutable archive privacy snapshots and archive revocation. Verification passes 1,183 tests, all five static gates, four builds, 42 cold/CPU-throttled browser loads and actual packaged policy ACK/erasure/revocation alongside metrics/alerts/RustFS. Raw-log retention is being added in issue #80; broader configurable sensitive-field rules and external destination credentials/delivery remain pending.
+- [Issue #78](https://github.com/mayank-rawat98/NovaGate/issues/78) / [PR #79](https://github.com/mayank-rawat98/NovaGate/pull/79) adds tenant request-log privacy: conservative omitted IP/user-agent defaults, revision-aware Settings, gateway/collector enforcement, historical erasure, immutable archive privacy snapshots and archive revocation. Verification passes 1,183 tests, all five static gates, four builds, 42 cold/CPU-throttled browser loads and actual packaged policy ACK/erasure/revocation alongside metrics/alerts/RustFS. Raw-log retention is implemented in issue #80; broader configurable sensitive-field rules and external destination credentials/delivery remain pending.
+- [Issue #80](https://github.com/mayank-rawat98/NovaGate/issues/80) / [PR #81](https://github.com/mayank-rawat98/NovaGate/pull/81) implements default 30-day tenant raw-log retention, configurable from 1–90 fixed 24-hour days using trusted database receipts. Irreversible floors, immediate read/usage/export filtering, durable fair cleanup, archive revision revocation, skipped-window coverage and accessible Settings pass 1,207 tests, all five static gates, four builds and 42 production cold/CPU-throttled browser loads with no runtime/accessibility findings. Fresh packaged OrbStack checks prove shrink/increase non-resurrection, retained late requests, private archive revocation and removal of two expired receipts; consumer usage, scheduled RustFS archives, alerts and clean shutdown also pass. Align existing trace/metric retention with fixed elapsed UTC days next; broader redaction/export destinations and scalable rollups remain pending.
 - Alerting has 1,093 regression tests, static/application gates, production browser checks and fresh OrbStack runtime evidence for real firing/retry/recovery. External provider/inbox acceptance remains separate.
 - [Issue #69](https://github.com/mayank-rawat98/NovaGate/issues/69) tracks an intermittent browser hydration recovery. Subsequent cold-load/slow-CPU checks pass; no root cause/fix is established, so the follow-up stays open before formal release acceptance.
 - Phases 5–6 and the additional enterprise/operational requirements below remain open.
@@ -870,7 +871,8 @@ Issue #78 implements tenant request-log privacy through shared contracts and
   removal; revocation blocks new application downloads regardless of storage availability.
 
 Issue #80 adds tenant raw-log retention through shared contracts and
-`apps/admin-api/src/log-retention/` (implementation and verification in progress):
+`apps/admin-api/src/log-retention/`, verified in
+[PR #81](https://github.com/mayank-rawat98/NovaGate/pull/81):
 
 - Default database request-log lifetime is 30 days, configurable to 1–90 whole days.
   Age by trusted database receipt using fixed 24-hour days, preserving original gateway request timestamps.
@@ -910,8 +912,9 @@ Issue #80 adds tenant raw-log retention through shared contracts and
 - Verify authenticated HTTP, microsecond and daylight-saving boundaries under non-UTC sessions, immediate
   filtering, shrink/increase non-resurrection, real archive/download revocation,
   delayed queued work, fair failed cleanup, durable restart and admission lock races.
-  Run production browser/accessibility and actual packaged OrbStack gateway/collector/
-  PostgreSQL/RustFS regressions before merging. This is issue evidence, not phase acceptance.
+  Production browser/accessibility and actual packaged OrbStack gateway/collector/
+  PostgreSQL/RustFS regressions pass. See PROGRESS.md for measurements and artifacts.
+  This is issue evidence, not phase acceptance.
 
 `apps/dashboard` — Settings → Log privacy / Log retention / Automatic log archives / Log archives.
 Keep workspace-keyed state, native Escape/focus/Tab containment, visible labels,
