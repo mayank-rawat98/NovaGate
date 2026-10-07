@@ -20,6 +20,12 @@ CREATE TABLE IF NOT EXISTS public.tenants (
   "logPrivacyScrubDone" BOOLEAN NOT NULL DEFAULT false,
   "logPrivacyScrubError" BOOLEAN NOT NULL DEFAULT false,
   "logPrivacyScrubCheckedAt" TIMESTAMPTZ,
+  "logRetentionDays" SMALLINT NOT NULL DEFAULT 30 CHECK ("logRetentionDays" BETWEEN 1 AND 90),
+  "logRetentionRevision" UUID NOT NULL DEFAULT gen_random_uuid(),
+  "logRetentionFloor" TIMESTAMPTZ NOT NULL DEFAULT (clock_timestamp()-INTERVAL '720 hours'),
+  "logRetentionPending" BOOLEAN NOT NULL DEFAULT true,
+  "logRetentionError" BOOLEAN NOT NULL DEFAULT false,
+  "logRetentionCheckedAt" TIMESTAMPTZ,
   "createdAt" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 

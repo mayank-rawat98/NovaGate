@@ -69,6 +69,13 @@ integration(
       await db.query(
         `ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS "logPrivacy" JSONB NOT NULL DEFAULT '{"clientIp":"omit","userAgent":"omit"}'::jsonb`,
       );
+      await db.query(`ALTER TABLE public.tenants
+        ADD COLUMN IF NOT EXISTS "logRetentionDays" SMALLINT NOT NULL DEFAULT 30,
+        ADD COLUMN IF NOT EXISTS "logRetentionRevision" UUID NOT NULL DEFAULT gen_random_uuid(),
+        ADD COLUMN IF NOT EXISTS "logRetentionFloor" TIMESTAMPTZ NOT NULL DEFAULT (clock_timestamp()-INTERVAL '30 days'),
+        ADD COLUMN IF NOT EXISTS "logRetentionPending" BOOLEAN NOT NULL DEFAULT true,
+        ADD COLUMN IF NOT EXISTS "logRetentionError" BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS "logRetentionCheckedAt" TIMESTAMPTZ`);
       for (const tenant of tenants) {
         await db.query(
           `INSERT INTO public.tenants (id,name,email,"planId") VALUES ($1,'Analytics fixture',$2,'free')`,
@@ -80,7 +87,7 @@ integration(
           `CREATE TABLE ${s}.consumers (id UUID PRIMARY KEY,name TEXT,"revokedAt" TIMESTAMP,"keyHash" TEXT)`,
         );
         await db.query(
-          `CREATE TABLE ${s}.request_logs (id UUID PRIMARY KEY,"consumerId" UUID,method TEXT,path TEXT,"statusCode" INTEGER,"responseTimeMs" INTEGER,timestamp TIMESTAMPTZ)`,
+          `CREATE TABLE ${s}.request_logs (id UUID PRIMARY KEY,"consumerId" UUID,method TEXT,path TEXT,"statusCode" INTEGER,"responseTimeMs" INTEGER,timestamp TIMESTAMPTZ,"receivedAt" TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp())`,
         );
         await db.query(
           `CREATE INDEX request_logs_consumer_time ON ${s}.request_logs ("consumerId",timestamp DESC,id DESC) WHERE "consumerId" IS NOT NULL`,
@@ -305,6 +312,27 @@ integration(
         requests: 30,
       });
     }, 10000);
+    it('reports receipt retention and excludes expired receipts with recent request timestamps', async () => {
+      const retainedConsumer = randomUUID();
+      await db.query(
+        `INSERT INTO ${schema}.consumers (id,name) VALUES ($1,'Retained only')`,
+        [retainedConsumer],
+      );
+      await db.query(
+        `INSERT INTO ${schema}.request_logs (id,"consumerId",method,path,"statusCode","responseTimeMs",timestamp,"receivedAt")
+        VALUES (gen_random_uuid(),$1,'GET','/expired',500,900,'2026-10-06T11:30:00Z',clock_timestamp()-INTERVAL '40 days'),
+        (gen_random_uuid(),$1,'GET','/retained',200,10,'2026-10-06T11:30:00Z',clock_timestamp())`,
+        [retainedConsumer],
+      );
+      const response = await get(retainedConsumer);
+      expect(response.status).toBe(200);
+      const stats = (await response.json()) as ConsumerUsageStats;
+      expect(stats.requests).toBe(1);
+      expect(stats.serverErrors).toBe(0);
+      expect(stats.topPaths.map((p) => p.path)).toEqual(['/retained']);
+      expect(stats.retention).toMatchObject({ days: 30, timeBasis: 'receipt' });
+      expect(stats.retention?.receivedFrom).toMatch(/\.\d{6}Z$/);
+    });
     it('cancels an actual slow SQL statement and recovers cleanly', async () => {
       await db.query(
         `ALTER TABLE ${schema}.request_logs RENAME TO slow_source`,

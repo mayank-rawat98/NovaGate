@@ -1,3 +1,7 @@
+import {
+  retentionProfile,
+  RETENTION_CUTOFF_SQL,
+} from '../log-retention/log-retention.policy';
 import { redactRequestLog } from '@api-gateway/shared-types';
 import {
   Injectable,
@@ -43,6 +47,10 @@ interface JobRow {
   schedule_id?: string;
   privacy_policy?: unknown;
   privacy_revision?: string;
+  retention_revision?: string;
+  retention_days?: number;
+  retention_from?: Date;
+  retention_cutoff?: string;
 }
 const MAX_ATTEMPTS = 3;
 const MAX_ROWS = 1_000_000;
@@ -53,6 +61,18 @@ const BATCH_ROWS = 500;
 
 function view(row: JobRow): LogExportJob {
   return {
+    retention:
+      row.retention_revision &&
+      row.retention_from &&
+      row.retention_days !== undefined
+        ? {
+            days: row.retention_days,
+            revision: row.retention_revision,
+            receivedFrom:
+              row.retention_cutoff ?? row.retention_from.toISOString(),
+            timeBasis: 'receipt',
+          }
+        : undefined,
     id: row.id,
     status: row.status,
     filter: row.filter,
@@ -202,7 +222,7 @@ export class LogExportService
   async list(tenantId: string): Promise<LogExportList> {
     tenantId = tenantSchema(tenantId).slice(7).replace(/_/g, '-');
     const jobs: JobRow[] = await this.db.query(
-      `SELECT * FROM public.log_export_jobs WHERE tenant_id = $1 ORDER BY created_at DESC, id DESC LIMIT 50`,
+      `SELECT *,to_char(retention_from AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS retention_cutoff FROM public.log_export_jobs WHERE tenant_id = $1 ORDER BY created_at DESC, id DESC LIMIT 50`,
       [tenantId],
     );
     return {
@@ -234,7 +254,7 @@ export class LogExportService
           'Wait for your pending archives before requesting more',
         );
       const [row]: JobRow[] = await manager.query(
-        `INSERT INTO public.log_export_jobs (tenant_id, filter, expires_at,privacy_policy,privacy_revision) SELECT $1,$2,NOW() + $3 * INTERVAL '1 day',"logPrivacy","logPrivacyRevision" FROM public.tenants WHERE id=$1 RETURNING *`,
+        `INSERT INTO public.log_export_jobs (tenant_id, filter, expires_at,privacy_policy,privacy_revision,retention_revision,retention_days,retention_from) SELECT $1,$2,NOW() + $3 * INTERVAL '1 day',"logPrivacy","logPrivacyRevision","logRetentionRevision","logRetentionDays",${RETENTION_CUTOFF_SQL} FROM public.tenants WHERE id=$1 RETURNING *,to_char(retention_from AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS retention_cutoff`,
         [tenantId, JSON.stringify(filter), this.storage.retentionDays],
       );
       return view(row);
@@ -276,7 +296,7 @@ export class LogExportService
           'Wait for your pending archives before retrying',
         );
       const [queued]: JobRow[] = await manager.query(
-        `WITH retried AS (UPDATE public.log_export_jobs SET status='queued',attempts=0,retry_count=retry_count+1,error=NULL,lease_id=NULL,lease_until=NULL WHERE id=$1 RETURNING *) SELECT * FROM retried`,
+        `WITH retried AS (UPDATE public.log_export_jobs SET status='queued',attempts=0,retry_count=retry_count+1,error=NULL,lease_id=NULL,lease_until=NULL WHERE id=$1 RETURNING *) SELECT *,to_char(retention_from AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS retention_cutoff FROM retried`,
         [archiveId],
       );
       return view(queued);
@@ -291,7 +311,7 @@ export class LogExportService
         `SET LOCAL statement_timeout='3s'; SET LOCAL lock_timeout='1s'`,
       );
       const [row]: JobRow[] = await manager.query(
-        `SELECT j.* FROM public.log_export_jobs j JOIN public.tenants t ON t.id=j.tenant_id WHERE j.id=$1 AND j.tenant_id=$2 AND j.status='completed' AND j.expires_at>clock_timestamp() AND j.privacy_revision=t."logPrivacyRevision"`,
+        `SELECT j.* FROM public.log_export_jobs j JOIN public.tenants t ON t.id=j.tenant_id WHERE j.id=$1 AND j.tenant_id=$2 AND j.status='completed' AND j.expires_at>clock_timestamp() AND j.privacy_revision=t."logPrivacyRevision" AND j.retention_revision=t."logRetentionRevision"`,
         [id, tenantId],
       );
       return row;
@@ -491,12 +511,31 @@ export class LogExportService
       await query.query('SET TRANSACTION READ ONLY');
       await query.query(`SET LOCAL statement_timeout = '5s'`);
       const schema = tenantSchema(row.tenant_id);
-      const params: unknown[] = [row.filter.from, row.filter.to];
+      const profile = await retentionProfile(query, row.tenant_id);
+      if (profile.logRetentionRevision !== row.retention_revision)
+        throw new Error('Archive retention policy changed');
+      // Capture the actual processing cutoff, including age accrued while queued.
+      const covered = await this.db.transaction(async (manager) => {
+        await manager.query(
+          "SET LOCAL statement_timeout='3s'; SET LOCAL lock_timeout='1s'",
+        );
+        return manager.query(
+          `WITH covered AS (UPDATE public.log_export_jobs SET retention_from=$3::timestamptz WHERE id=$1 AND lease_id=$2 AND status='processing' AND expires_at>clock_timestamp() AND retention_revision=$4::uuid RETURNING id) SELECT * FROM covered`,
+          [row.id, row.lease_id, profile.cutoff, profile.logRetentionRevision],
+        );
+      });
+      if (!covered.length) throw new Error('Archive lease lost');
+      const params: unknown[] = [
+        row.filter.from,
+        row.filter.to,
+        profile.cutoff,
+      ];
       const timeColumn =
         row.time_basis === 'receipt' ? '"receivedAt"' : 'timestamp';
       const conditions = [
         `${timeColumn} >= $1::timestamptz`,
         `${timeColumn} < $2::timestamptz`,
+        '"receivedAt">=$3::timestamptz',
       ];
       if (row.filter.minStatusCode !== undefined) {
         params.push(row.filter.minStatusCode);

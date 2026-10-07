@@ -66,6 +66,13 @@ function UsageDetails({ data }: { data: ConsumerUsageStats }) {
           );
         })}
       </div>
+      {data.retention && (
+        <p className="mt-4 rounded-xl bg-indigo-50 p-3 text-sm text-indigo-950">
+          Retained logs only: {data.retention.days}-day receipt lifetime, with
+          receipts from {time(data.retention.receivedFrom)}. Expired records are
+          excluded even when their request timestamp falls in this window.
+        </p>
+      )}
       {data.requests === 0 && (
         <p
           role="status"
@@ -288,7 +295,8 @@ export function ConsumerUsagePanel({
           </p>
           {data?.consumer.revokedAt && (
             <p className="mb-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
-              This consumer is revoked. Its recorded history remains available.
+              This consumer is revoked. Its retained recorded history remains
+              available.
             </p>
           )}
           <div className="mb-5 flex flex-wrap items-end gap-3">

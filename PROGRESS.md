@@ -1,6 +1,6 @@
 # NovaGate progress and remaining work
 
-Updated: **6 October 2026** (Asia/Calcutta).
+Updated: **7 October 2026** (Asia/Calcutta).
 
 This report distinguishes merged development work, the alerting foundation checkpoint,
 and formal acceptance. The detailed roadmap is [implementation.md](implementation.md).
@@ -8,7 +8,7 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
-- Latest development work: [PR #79](https://github.com/mayank-rawat98/NovaGate/pull/79), linked to [issue #78](https://github.com/mayank-rawat98/NovaGate/issues/78) adds end-to-end tenant request-log privacy, historical erasure, private archive revocation, durable configuration retries and accessible Settings controls. The issue-linked branch starts from `dev` at **65a6b7c8**. Issue verification passes 1,183 tests, all five static gates, four builds, 42 cold browser loads and actual packaged privacy/metrics/alerts/RustFS checks. Merge details are recorded in its checkpoint below.
+- Latest verified development work: [PR #81](https://github.com/mayank-rawat98/NovaGate/pull/81), linked to [issue #80](https://github.com/mayank-rawat98/NovaGate/issues/80), adds tenant receipt-based raw-log retention, irreversible expiry, durable cleanup, archive revocation/coverage and accessible Settings. The linked branch starts from `dev` at **c40a7692**. Verification passes 1,207 tests, all five static gates, four builds, 42 cold browser loads and fresh packaged OrbStack gateway/collector/PostgreSQL/RustFS checks. Delivery targets `dev`; formal phase acceptance remains pending.
 - Alerting development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68), linked to [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), adds durable delivery and the Alerts dashboard.
 - Its issue-linked branch `65-feat-alert-delivery-and-dashboard` was created from `dev` at **653d7a00** / [PR #67](https://github.com/mayank-rawat98/NovaGate/pull/67), which merged the storage/evaluation foundations and roadmap documents. Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) is closed.
 - **AppModule imports AlertsModule**. Authenticated endpoints and workers start after migration; missing dedicated encryption keys disable channel creation/delivery.
@@ -83,7 +83,7 @@ No whole phase or production release is declared complete by this report.
   fenced replica workers, bounded snapshot/keyset reads, multipart handling, three
   attempts and object/job expiry cleanup (#37).
 - RustFS is pinned by digest; production storage is opt-in/private with separate
-  credentials. Scheduled exports and other export destinations remain unfinished.
+  credentials. Receipt-based scheduling is implemented in issue #72; external export destinations remain unfinished.
 
 ### Dashboard and release workflow
 
@@ -408,7 +408,7 @@ snapshot privacy, changed policies revoke old leases/jobs and existing private c
 removes their objects. Active downloads have finite admission/deadlines and recheck
 eligibility; disconnect/shutdown cancel owned streams. Old copies cannot be recalled.
 
-Broader sensitive-field rules, raw-log age retention, external destination credentials and
+Raw-log age retention is now implemented in issue #80. Broader sensitive-field rules, external destination credentials and
 providers, storage encryption/restore drills and formal acceptance remain outstanding.
 Updated gateway binaries are required for local-output enforcement. Admin migrations must
 precede the new collector; storage outages defer physical removal while download revocation
@@ -446,6 +446,61 @@ retain the intentional gateway-replacement/ephemeral-port failures; the verifier
 restores its own gateway connection and refreshes the published port before live policy
 checks. Production connection-admission rules are preserved.
 
+## Tenant raw-log retention — issue #80
+
+[PR #81](https://github.com/mayank-rawat98/NovaGate/pull/81) delivers
+`80-tenant-log-retention`, linked to
+[issue #80](https://github.com/mayank-rawat98/NovaGate/issues/80), from dev **c40a7692**.
+The default database request-log lifetime is 30 days, tenant-selectable from 1–90.
+Trusted database receipt and fixed 24-hour days determine age independently of session
+time zones and daylight-saving transitions; original request timestamps and security/
+consumer/trace correlation remain intact. Current reads, consumer usage and archive
+sources exclude expired receipts immediately, even before deletion finishes.
+
+Revision-aware settings persist an irreversible cutoff floor. Shrinking and increasing
+the lifetime cannot resurrect expired records, and no-op saves preserve revisions/jobs.
+Changes revoke existing archive leases/downloads and use the existing private RustFS
+cleanup. Queued jobs record the actual processing cutoff; completed archives retain a
+separate download lifetime. Schedules fast-forward fully expired backlog in one bounded
+write, preserve partial windows and report windows outside retained coverage.
+
+Cleanup uses fair 500-row transactions, at most eight per two-second sweep, durable
+pending/retry/check state, replica coordination, receipt locks and SQL/lock deadlines.
+Tests prove restart progress beyond 4,000 rows, failure isolation, blocked-row retry
+without false completion and archive foreign-key admission compatibility. Unknown
+legacy archive coverage is revoked once; repeated upgrades preserve proven new jobs.
+
+The ivory/indigo Settings panel exposes the lifetime, earliest retained receipt,
+irreversible removal, cleanup status and separate archive TTL. Failed writes and
+revision reload preserve selections; native dialogs retain focus/Escape/Tab behavior,
+workspace changes clear unsaved state and requests cancel on close. Raw-log settings
+remain available without object storage. Logs, usage and archives explain retained
+coverage; broader field redaction and external destinations remain separate work.
+
+Current verification passes **1,207 tests** (gateway 573, admin 523, control plane 101,
+dashboard 10): the full unchanged-project regression plus a final admin suite after blocked-row, upgrade and daylight-saving
+retention cases. All five static gates and four application builds pass.
+The production browser run passes 42 cold loads with sixfold CPU throttling in 45,301 ms
+with zero runtime or accessibility findings. Its additional retention checks cover
+read/save/revision recovery, input preservation, focus/Tab/Escape, workspace reset and
+disabled storage. Fresh packaged OrbStack verification also passes: immediate filtering,
+shrink/increase non-resurrection, private archive revocation, fresh receipt preservation
+for late request timestamps and durable removal of two expired receipts. Cleanup returns
+healthy. Retained consumer usage matches 21 requests, ten server errors and P95 11 ms;
+two private scheduled archives contain 96 rows including a late request. Local alert
+firing acceptance takes 59.603 seconds, and all three services shut down with exit 0.
+
+Verified packaged images: gateway `d41f3815614a`, admin `abda96f1876e`,
+control plane `ee34c2bc7cdc`; full hashes and measurements remain in the runtime artifact.
+
+Ignored evidence: `issue80-expanded-tests.log`, `issue80-regression.log`,
+`issue80-utc-tests.log`, `issue80-precision-final-tests.log`, `issue80-final-static.log`,
+`issue80-ready-admin-gates.log`, `issue80-all-builds.log`, `issue80-browser-second.log`,
+`issue80-browser-run.json`, `issue80-runtime-final.log` and
+`issue80-runtime-evidence.json`. The first browser run preserves an outdated schedule
+wording assertion; the corrected verifier checks retained-coverage warnings without
+relaxing its gates. Issue #69 remains open, and no formal phase acceptance is claimed.
+
 ## Remaining work
 
 ### Next: continue phase 4; retain hydration follow-up #69
@@ -460,9 +515,11 @@ checks. Production connection-admission rules are preserved.
 ### Remaining phase 4 work
 
 - Configurable external S3-compatible tenant destinations, webhook NDJSON and Datadog
-  exporters, with encrypted rotatable private credentials, delivery history, broader sensitive-field rules and raw-log age retention.
+  exporters, with encrypted rotatable private credentials, delivery history and broader sensitive-field rules.
 - High-volume per-consumer rollups, idempotent ingestion/backfill, retention and
   explicit coverage indicators beyond the bounded persisted-log usage view.
+- Align the existing trace/metric SQL retention cutoffs with fixed elapsed UTC days,
+  including daylight-saving boundary regressions; raw-log retention now follows this rule.
 - Formal acceptance for tracing, two-second live metrics, 90-second actual alert delivery,
   private RustFS export and consumer analytics.
 
@@ -491,7 +548,7 @@ checks. Production connection-admission rules are preserved.
 - Team RBAC, scoped automation tokens and immutable audit history.
 - Configuration preview/diff/rollback, drift detection, atomic reconciliation and
   verified last-known-good routing during control-plane outages.
-- Extend IP/user-agent privacy to broader sensitive-field rules and raw-log age retention; complete secret-management controls and storage encryption where
+- Extend IP/user-agent privacy to broader sensitive-field rules; complete secret-management controls and storage encryption where
   supported, backup/restore drills and documented operational recovery.
 - AI token/cost budgets, provider fallback, sensitive-data handling and MCP policy controls.
 - Continue modern accessible dashboard UX for every new capability; mobile, keyboard,

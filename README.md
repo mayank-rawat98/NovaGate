@@ -642,3 +642,38 @@ origins. Read the [alerting guide](apps/admin-api/src/alerts/README.md) for key 
 webhook signature verification, finite retries and at-least-once delivery semantics.
 API acceptance does not prove final email inbox receipt. Formal provider/phase
 acceptance remains separate from local development checks.
+
+### Database request-log retention
+
+Settings → **Log retention** sets a tenant's database request-log lifetime to 1–90
+whole 24-hour days; the default is 30. The lifetime starts at trusted database receipt,
+independently of the original request timestamp. Existing installations assign receipt
+time to legacy rows during the earlier receipt-schema upgrade, so those rows age from
+that upgrade. Logs, consumer usage and new archives immediately exclude expired
+receipts. Deleted or expired records cannot be restored by increasing the lifetime.
+
+The revision-aware tenant-session API is `GET/PUT /api/tenants/:id/log-retention`.
+PUT accepts exactly `{ days, expectedRevision }`. A stale revision returns a conflict;
+unchanged saves preserve the revision and archives. Reads return receipt cutoff,
+cleanup status and last check time. PostgreSQL owns UTC microsecond cutoffs and an
+irreversible floor; the browser never decides which records are expired.
+
+Cleanup runs automatically without object storage: at most eight 500-row transactions
+per non-overlapping two-second sweep, with three-second statement and one-second lock
+deadlines. Idle tenants are revisited once per minute. Progress and retry status survive
+restart. Expired data stays hidden during cleanup failures; deletion retries fairly and
+shutdown waits for actual admitted work. PostgreSQL vacuum, backups, replicated copies,
+gateway output, downloaded files and other telemetry tables remain operator concerns.
+
+A changed lifetime expires existing archives and cancels their workers/downloads.
+Private RustFS cleanup retries through the existing worker during storage failures.
+Archives created under the new policy show their receipt cutoff and retain their
+separate operator-configured download lifetime, default seven days. A completed
+archive can outlive its source database records. Queued work records its actual
+processing cutoff; it cannot promise the coverage available when it was queued.
+Automatic schedules report windows outside retained coverage and skip fully expired
+backlog in one bounded step. Increasing retention does not recreate missing windows.
+
+Upgrade the admin schema/application before using the new settings. Archives with
+unknown legacy retention revision are expired once on upgrade; recreate them from
+retained data if needed. User-agent/IP privacy rules remain independent of age retention.

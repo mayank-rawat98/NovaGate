@@ -191,6 +191,9 @@ integration(
         `TRUNCATE public.log_export_jobs,public.log_export_schedules`,
       );
       await db.query(`DELETE FROM ${schema}.request_logs`);
+      await db.query(
+        `UPDATE public.tenants SET "logRetentionDays"=30,"logRetentionFloor"=clock_timestamp()-INTERVAL '30 days'`,
+      );
     });
     afterAll(async () => {
       await schedules?.onModuleDestroy();
@@ -298,10 +301,10 @@ integration(
       expect((await schedules.get(other)).pendingJobs).toBe(0);
     });
     it('preserves a partial first window to the microsecond rather than including pre-save receipt rows', async () => {
-      const cursor = '2026-01-01T12:34:56.123456Z';
+      const cursor = from.slice(0, 17) + '56.123456Z';
       await due(tenant, cursor);
-      await log(randomUUID(), '2026-01-01T12:34:56.123455Z');
-      await log(randomUUID(), '2026-01-01T12:34:56.123457Z');
+      await log(randomUUID(), from.slice(0, 17) + '56.123455Z');
+      await log(randomUUID(), from.slice(0, 17) + '56.123457Z');
       expect(required((await schedules.get(tenant)).schedule).cursor).toBe(
         cursor,
       );
@@ -316,6 +319,41 @@ integration(
           )
         )[0].count,
       ).toBe(1);
+    });
+    it('fast-forwards fully expired backlog once and reports skipped windows', async () => {
+      const state = await due(
+        tenant,
+        new Date(Date.now() - 40 * 86400000).toISOString(),
+      );
+      await log(randomUUID(), from);
+      await schedules.scheduleNext();
+      const schedule = required((await schedules.get(tenant)).schedule);
+      expect(schedule.retentionSkippedWindows).toBeGreaterThan(10000);
+      expect(Date.parse(schedule.cursor)).toBeGreaterThan(
+        Date.now() - 31 * 86400000,
+      );
+      expect(schedule.revision).toBe(state.revision);
+      const jobs = await db.query('SELECT * FROM public.log_export_jobs');
+      expect(jobs).toHaveLength(0);
+    });
+    it('archives only retained receipts in a partial window and labels its data loss', async () => {
+      await due();
+      const cutoff = from.slice(0, 17) + '30.123456Z';
+      await db.query(
+        `UPDATE public.tenants SET "logRetentionDays"=90,"logRetentionFloor"=$2 WHERE id=$1`,
+        [tenant, cutoff],
+      );
+      await log(randomUUID(), from);
+      await log(randomUUID(), cutoff);
+      await schedules.scheduleNext();
+      const state = await schedules.get(tenant);
+      expect(required(state.schedule).retentionSkippedWindows).toBe(1);
+      const [job] = await db.query(
+        `SELECT filter,retention_days,to_char(retention_from AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cutoff FROM public.log_export_jobs`,
+      );
+      expect(job.filter.from).toBe(from);
+      expect(job.cutoff).toBe(cutoff);
+      expect(job.retention_days).toBe(90);
     });
     it('honors status, literal path prefix and consumer filters before creating a window job', async () => {
       const consumer = randomUUID();
@@ -380,7 +418,9 @@ integration(
       const blocked = await schedules.get(tenant);
       expect(blocked.pendingJobs).toBe(20);
       expect(required(blocked.schedule).cursor).toBe(from);
-      expect(required(blocked.schedule).error).toContain('retained');
+      expect(required(blocked.schedule).error).toContain(
+        'log retention still applies',
+      );
       await db.query(`UPDATE public.log_export_jobs SET status='failed'`);
       await db.query(
         `UPDATE public.log_export_schedules SET next_due_at=clock_timestamp()-INTERVAL '1 second'`,

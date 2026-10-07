@@ -13,11 +13,24 @@ function fixture() {
       .fn()
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ id: CONSUMER, name: 'Shop' }])
+      .mockResolvedValueOnce([
+        {
+          logRetentionDays: 30,
+          logRetentionRevision: TENANT,
+          cutoff: '2026-09-01T00:00:00.000000Z',
+        },
+      ])
       .mockResolvedValue([
         { matched: 0, totals: { requests: 0 }, series: [], paths: [] },
       ]),
   };
-  const ds = { transaction: jest.fn(async (_isolation, fn) => fn(manager)) };
+  const ds = {
+    transaction: jest.fn(async (isolation, fn) =>
+      typeof isolation === 'function'
+        ? isolation({ query: jest.fn().mockResolvedValue([{ valid: true }]) })
+        : fn(manager),
+    ),
+  };
   return {
     manager,
     ds,
@@ -66,6 +79,13 @@ describe('Consumer analytics bounds and lifecycle', () => {
       .mockReset()
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ id: CONSUMER }])
+      .mockResolvedValueOnce([
+        {
+          logRetentionDays: 30,
+          logRetentionRevision: TENANT,
+          cutoff: '2026-09-01T00:00:00.000000Z',
+        },
+      ])
       .mockResolvedValue([
         { matched: 100001, totals: { requests: 0 }, series: [], paths: [] },
       ]);
@@ -73,12 +93,46 @@ describe('Consumer analytics bounds and lifecycle', () => {
       'shorter period',
     );
   });
+  it('rejects a result if retention changed during the aggregate snapshot', async () => {
+    const { service, ds } = fixture();
+    ds.transaction
+      .mockImplementationOnce(async (_isolation, fn) =>
+        fn({
+          query: jest
+            .fn()
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([{ id: CONSUMER, name: 'Shop' }])
+            .mockResolvedValueOnce([
+              {
+                logRetentionDays: 30,
+                logRetentionRevision: TENANT,
+                cutoff: '2026-09-01T00:00:00.123456Z',
+              },
+            ])
+            .mockResolvedValueOnce([
+              { matched: 1, totals: { requests: 1 }, series: [], paths: [] },
+            ]),
+        }),
+      )
+      .mockImplementationOnce(async (fn) =>
+        fn({ query: jest.fn().mockResolvedValue([{ valid: false }]) }),
+      );
+    await expect(service.get(TENANT, CONSUMER)).rejects.toThrow(
+      'Log retention changed',
+    );
+  });
   it('bounds actual tenant work, canonicalizes uppercase IDs, drains it and stops new work', async () => {
     let release!: (value: unknown) => void;
     const result = new Promise<unknown>((resolve) => {
       release = resolve;
     });
-    const ds = { transaction: jest.fn(() => result) };
+    const ds = {
+      transaction: jest.fn((arg) =>
+        typeof arg === 'function'
+          ? arg({ query: jest.fn().mockResolvedValue([{ valid: true }]) })
+          : result,
+      ),
+    };
     const service = new ConsumerAnalyticsService(ds as unknown as DataSource);
     const first = service.get(TENANT, CONSUMER);
     const second = service.get(TENANT.toUpperCase(), CONSUMER);
@@ -104,7 +158,13 @@ describe('Consumer analytics bounds and lifecycle', () => {
     const pending = new Promise<unknown>((resolve) => {
       release = resolve;
     });
-    const ds = { transaction: jest.fn(() => pending) };
+    const ds = {
+      transaction: jest.fn((arg) =>
+        typeof arg === 'function'
+          ? arg({ query: jest.fn().mockResolvedValue([{ valid: true }]) })
+          : pending,
+      ),
+    };
     const service = new ConsumerAnalyticsService(ds as unknown as DataSource);
     const jobs = Array.from({ length: 8 }, (_, i) =>
       service.get(

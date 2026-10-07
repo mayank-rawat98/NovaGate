@@ -162,6 +162,8 @@ let graphqlSaves = 0;
 let configuredCa;
 let failCaSave = false;
 let caSaves = 0;
+let failRetention = '';
+const retentionStates = new Map();
 let failPrivacy = '';
 const privacyStates = new Map();
 let archivesEnabled = true;
@@ -180,6 +182,12 @@ const archives = ['queued', 'processing', 'completed', 'failed', 'expired'].map(
     retryCount: 0,
     kind: 'manual',
     timeBasis: 'request',
+    retention: {
+      days: 30,
+      revision: randomUUID(),
+      receivedFrom: '2026-09-06T12:00:00.123456Z',
+      timeBasis: 'receipt',
+    },
     rowCount: status === 'completed' ? 1 : 0,
     bytes: 64,
     createdAt,
@@ -237,6 +245,56 @@ const handleApiFixture = async (route) => {
     'Dashboard must use its configured API origin',
   );
   const resource = url.pathname.split('/').at(-1);
+  if (resource === 'log-retention') {
+    const tenant =
+      url.pathname.split('/')[url.pathname.split('/').indexOf('tenants') + 1];
+    let state = retentionStates.get(tenant) ?? {
+      days: 30,
+      revision: randomUUID(),
+      receivedFrom: '2026-09-06T12:00:00.123456Z',
+      timeBasis: 'receipt',
+      cleanup: 'healthy',
+      lastCheckedAt: createdAt,
+    };
+    retentionStates.set(tenant, state);
+    let status = 200,
+      problem;
+    if (route.request().method() === 'PUT') {
+      const dto = route.request().postDataJSON();
+      assert.deepEqual(Object.keys(dto).sort(), ['days', 'expectedRevision']);
+      assert.ok(Number.isInteger(dto.days) && dto.days >= 1 && dto.days <= 90);
+      if (failRetention === 'save') {
+        status = 503;
+        problem = 'Log retention temporarily unavailable';
+      } else if (
+        failRetention === 'revision' ||
+        dto.expectedRevision !== state.revision
+      ) {
+        status = 409;
+        problem =
+          'Log retention changed. Reload current settings before saving.';
+        state = { ...state, revision: randomUUID() };
+        retentionStates.set(tenant, state);
+      } else {
+        state = {
+          ...state,
+          days: dto.days,
+          revision: randomUUID(),
+          cleanup: 'pending',
+        };
+        retentionStates.set(tenant, state);
+      }
+    } else if (failRetention === 'read') {
+      status = 503;
+      problem = 'Log retention temporarily unavailable';
+    }
+    await route.fulfill({
+      status,
+      contentType: 'application/json',
+      body: JSON.stringify(problem ? { message: problem } : state),
+    });
+    return;
+  }
   if (resource === 'log-privacy') {
     const tenant =
       url.pathname.split('/')[url.pathname.split('/').indexOf('tenants') + 1];
@@ -371,6 +429,12 @@ const handleApiFixture = async (route) => {
         to,
         generatedAt: to,
         source: 'persisted_request_logs',
+        retention: {
+          days: 30,
+          revision: randomUUID(),
+          receivedFrom: '2026-09-06T12:00:00.123456Z',
+          timeBasis: 'receipt',
+        },
         bucketSeconds,
         rowLimit: 100000,
         series,
@@ -593,8 +657,9 @@ const handleApiFixture = async (route) => {
                           nextWindowAt: new Date(
                             Date.now() - 3600000,
                           ).toISOString(),
+                          retentionSkippedWindows: 2,
                           error:
-                            'Waiting for pending archives; unprocessed windows are retained',
+                            'Waiting for pending archives; log retention still applies to unprocessed windows',
                         }
                       : {}),
                   }
@@ -1573,6 +1638,109 @@ try {
       exact: true,
     }),
   ).toBeEnabled();
+  const retentionSection = page.getByRole('region', {
+    name: 'Log retention',
+    exact: true,
+  });
+  const retentionEdit = retentionSection.getByRole('button', {
+    name: 'Edit log retention',
+    exact: true,
+  });
+  await expect(retentionSection).toContainText('30 days');
+  await retentionEdit.click();
+  let retentionDialog = page.getByRole('dialog', {
+    name: 'Edit log retention',
+    exact: true,
+  });
+  await expect(retentionDialog).toContainText('Removal is irreversible');
+  await retentionDialog
+    .getByLabel('Raw-log lifetime in days', { exact: true })
+    .fill('7');
+  failRetention = 'save';
+  await retentionDialog
+    .getByRole('button', { name: 'Save retention settings', exact: true })
+    .click();
+  await expect(retentionDialog.getByRole('alert')).toContainText(
+    'temporarily unavailable',
+  );
+  await expect(
+    retentionDialog.getByLabel('Raw-log lifetime in days', { exact: true }),
+  ).toHaveValue('7');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await audit('Log retention failed save mobile');
+  failRetention = 'revision';
+  await retentionDialog
+    .getByRole('button', { name: 'Save retention settings', exact: true })
+    .click();
+  await expect(retentionDialog.getByRole('alert')).toContainText('changed');
+  failRetention = '';
+  await retentionDialog
+    .getByRole('button', { name: 'Reload current revision', exact: true })
+    .click();
+  await expect(
+    retentionDialog.getByLabel('Raw-log lifetime in days', { exact: true }),
+  ).toHaveValue('7');
+  await retentionDialog
+    .getByRole('button', { name: 'Save retention settings', exact: true })
+    .click();
+  await expect(retentionDialog).toHaveCount(0);
+  await expect(retentionSection).toContainText(
+    'Existing archives have expired',
+  );
+  await expect(retentionSection).toContainText('7 days');
+  await retentionEdit.click();
+  retentionDialog = page.getByRole('dialog', {
+    name: 'Edit log retention',
+    exact: true,
+  });
+  await retentionDialog
+    .getByLabel('Raw-log lifetime in days', { exact: true })
+    .fill('90');
+  await page.keyboard.press('Escape');
+  await expect(retentionDialog).toHaveCount(0);
+  await expect(retentionEdit).toBeFocused();
+  await retentionEdit.click();
+  retentionDialog = page.getByRole('dialog', {
+    name: 'Edit log retention',
+    exact: true,
+  });
+  await expect(
+    retentionDialog.getByLabel('Raw-log lifetime in days', { exact: true }),
+  ).toHaveValue('7');
+  await retentionDialog
+    .getByLabel('Raw-log lifetime in days', { exact: true })
+    .fill('14');
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await retentionDialog
+    .getByRole('button', { name: 'Save retention settings', exact: true })
+    .focus();
+  await page.keyboard.press('Tab');
+  await expect(
+    retentionDialog.getByRole('button', {
+      name: 'Close log retention editor',
+      exact: true,
+    }),
+  ).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(
+    retentionDialog.getByRole('button', {
+      name: 'Save retention settings',
+      exact: true,
+    }),
+  ).toBeFocused();
+  await audit('Log retention desktop dialog');
+  await page.keyboard.press('Escape');
+  failRetention = 'read';
+  await page.reload();
+  await expect(retentionSection.getByRole('alert')).toContainText(
+    'could not be loaded',
+  );
+  await expect(retentionEdit).toBeDisabled();
+  failRetention = '';
+  await retentionSection
+    .getByRole('button', { name: 'Try again', exact: true })
+    .click();
+  await expect(retentionEdit).toBeEnabled();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(
     page.getByText(/Clients must prove possession of their private key/),
@@ -1812,10 +1980,14 @@ try {
   ).toBeVisible();
   await expect(
     schedulePanel.getByText(
-      'Waiting for pending archives; unprocessed windows are retained',
+      'Waiting for pending archives; log retention still applies to unprocessed windows',
       { exact: true },
     ),
   ).toBeVisible();
+  await expect(schedulePanel).toContainText(
+    '2 receipt window(s) fell partly or wholly outside retained coverage',
+  );
+  await expect(archivePanel).toContainText('30-day raw-log lifetime');
   await audit('archive schedule backlog and failed jobs mobile');
   await page.screenshot({
     path: resolve(artifacts, 'mobile-archive-schedule.png'),
@@ -1928,6 +2100,33 @@ try {
     scheduleDialog.getByLabel('Archive frequency', { exact: true }),
   ).toHaveValue('hourly');
   await page.keyboard.press('Escape');
+  await expect(retentionSection).toContainText('30 days');
+  await retentionEdit.click();
+  retentionDialog = page.getByRole('dialog', {
+    name: 'Edit log retention',
+    exact: true,
+  });
+  await retentionDialog
+    .getByLabel('Raw-log lifetime in days', { exact: true })
+    .fill('89');
+  await page.evaluate((tenant) => {
+    localStorage.setItem('gw_tenant_id', tenant);
+    window.dispatchEvent(new Event('storage'));
+  }, tenant);
+  await expect(retentionDialog).not.toBeVisible();
+  await retentionEdit.click();
+  retentionDialog = page.getByRole('dialog', {
+    name: 'Edit log retention',
+    exact: true,
+  });
+  await expect(
+    retentionDialog.getByLabel('Raw-log lifetime in days', { exact: true }),
+  ).toHaveValue('7');
+  await page.keyboard.press('Escape');
+  await page.evaluate((tenant) => {
+    localStorage.setItem('gw_tenant_id', tenant);
+    window.dispatchEvent(new Event('storage'));
+  }, otherArchiveWorkspace);
   await expect(
     privacySection.getByText('Omitted', { exact: true }),
   ).toHaveCount(2);
@@ -1969,6 +2168,7 @@ try {
     apiRequests.includes(`/api/tenants/${otherArchiveWorkspace}/log-privacy`),
   );
   await audit('archive schedule and privacy workspace state reset');
+  await expect(retentionEdit).toBeEnabled();
   archivesEnabled = false;
   await page
     .getByRole('button', { name: 'Refresh archives', exact: true })

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import useSWR from 'swr';
+import { LogRetentionPanel } from '../../../components/log-retention-panel';
 import { LogPrivacyPanel } from '../../../components/log-privacy-panel';
 import { LogExportPanel } from '../../../components/log-export-panel';
 import { LogExportSchedulePanel } from '../../../components/log-export-schedule-panel';
@@ -355,6 +356,7 @@ export default function SettingsPage() {
       </div>
 
       <LogPrivacyPanel tenantId={tenantId} />
+      <LogRetentionPanel tenantId={tenantId} />
       <LogExportSchedulePanel tenantId={tenantId} />
       <LogExportPanel key={tenantId} tenantId={tenantId} />
 

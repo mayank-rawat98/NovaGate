@@ -26,6 +26,8 @@ export interface LogExportSchedule extends LogExportScheduleConfiguration {
   lastCheckedAt?: string;
   lastJobId?: string;
   error?: string;
+  /** Receipt windows partially or wholly outside retained coverage before selection. */
+  retentionSkippedWindows?: number;
 }
 export interface LogExportScheduleState {
   available: boolean;
@@ -48,6 +50,7 @@ export type LogExportStatus =
   | 'failed'
   | 'expired';
 export interface LogExportJob {
+  retention?: import('./log-retention.ts').LogRetentionCoverage;
   id: string;
   status: LogExportStatus;
   filter: LogExportFilter;

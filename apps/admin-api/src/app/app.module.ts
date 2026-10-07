@@ -1,3 +1,5 @@
+import { LogRetentionController } from '../log-retention/log-retention.controller';
+import { LogRetentionService } from '../log-retention/log-retention.service';
 import { LogPrivacyController } from '../log-privacy/log-privacy.controller';
 import { LogPrivacyService } from '../log-privacy/log-privacy.service';
 import { ConsumerAnalyticsService } from '../proxy-config/consumer-analytics.service';
@@ -61,6 +63,7 @@ import { AlertsModule } from '../alerts/alerts.module';
     TypeOrmModule.forFeature([Tenant, ApiKey, PendingConfigUpdate]),
   ],
   controllers: [
+    LogRetentionController,
     LogPrivacyController,
     HealthController,
     AuthController,
@@ -79,6 +82,7 @@ import { AlertsModule } from '../alerts/alerts.module';
     TenantProvisioningService,
     ConfigPushService,
     LogPrivacyService,
+    LogRetentionService,
     MigrationService,
     TracesService,
     MetricsStreamService,

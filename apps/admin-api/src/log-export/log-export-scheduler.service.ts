@@ -1,4 +1,8 @@
 import {
+  retentionProfile,
+  RETENTION_CUTOFF_SQL,
+} from '../log-retention/log-retention.policy';
+import {
   BadRequestException,
   ConflictException,
   Injectable,
@@ -30,6 +34,7 @@ interface ScheduleRow {
   enabled: boolean;
   cadence: LogExportCadence;
   filter: LogExportSelection;
+  retention_skipped_windows?: string | number;
   started_at: Date;
   cursor_at: Date;
   cursor_iso?: string;
@@ -81,6 +86,7 @@ function view(row: ScheduleRow): LogExportSchedule {
     enabled: row.enabled,
     cadence: row.cadence,
     filter: row.filter,
+    retentionSkippedWindows: Number(row.retention_skipped_windows ?? 0),
     startedAt: row.started_at.toISOString(),
     cursor: row.cursor_iso
       ? preciseIso(row.cursor_iso)
@@ -279,13 +285,30 @@ export class LogExportSchedulerService
         // Retry timing must not determine window boundaries; they use cursor + cadence below.
         return true;
       }
+      const profile = await retentionProfile(manager, canonical);
+      // Skip fully expired backlog in one bounded write. Preserve the first partial
+      // window, and report skipped windows rather than pretending they were archived.
+      await manager.query(
+        `WITH cutoff AS (
+        SELECT date_bin($2::interval,$3::timestamptz,'1970-01-01T00:00:00Z'::timestamptz) AS boundary
+      ) UPDATE public.log_export_schedules SET
+        retention_skipped_windows=retention_skipped_windows+CEIL(EXTRACT(EPOCH FROM (cutoff.boundary-cursor_at))/EXTRACT(EPOCH FROM $2::interval))::bigint,
+        cursor_at=cutoff.boundary,next_due_at=cutoff.boundary+$2::interval+make_interval(secs=>$4)
+        FROM cutoff WHERE tenant_id=$1 AND cursor_at<cutoff.boundary`,
+        [
+          canonical,
+          interval(row.cadence),
+          profile.cutoff,
+          LOG_EXPORT_SETTLEMENT_SECONDS,
+        ],
+      );
       const [{ pending }]: Array<{ pending: number }> = await manager.query(
         `SELECT COUNT(*)::integer AS pending FROM public.log_export_jobs WHERE tenant_id=$1 AND status IN ('queued','processing')`,
         [canonical],
       );
       if (pending >= LOG_EXPORT_QUEUE_LIMIT) {
         await manager.query(
-          `UPDATE public.log_export_schedules SET error='Waiting for pending archives; unprocessed windows are retained',last_checked_at=clock_timestamp(),next_due_at=clock_timestamp()+INTERVAL '5 seconds' WHERE tenant_id=$1`,
+          `UPDATE public.log_export_schedules SET error='Waiting for pending archives; log retention still applies to unprocessed windows',last_checked_at=clock_timestamp(),next_due_at=clock_timestamp()+INTERVAL '5 seconds' WHERE tenant_id=$1`,
           [canonical],
         );
         return true;
@@ -311,10 +334,11 @@ export class LogExportSchedulerService
         );
         return true;
       }
-      const params: unknown[] = [from, to];
+      const params: unknown[] = [from, to, profile.cutoff];
       const conditions = [
         '"receivedAt">=$1::timestamptz',
         '"receivedAt"<$2::timestamptz',
+        '"receivedAt">=$3::timestamptz',
       ];
       if (row.filter.minStatusCode !== undefined) {
         params.push(row.filter.minStatusCode);
@@ -337,8 +361,8 @@ export class LogExportSchedulerService
       let jobId: string | null = null;
       if (matched.length) {
         const [job]: Array<{ id: string }> = await manager.query(
-          `INSERT INTO public.log_export_jobs (tenant_id,kind,time_basis,schedule_id,window_from,window_to,filter,expires_at,privacy_policy,privacy_revision)
-           SELECT $1,'scheduled','receipt',$2,$3,$4,$5,clock_timestamp()+$6*INTERVAL '1 day',"logPrivacy","logPrivacyRevision" FROM public.tenants WHERE id=$1 RETURNING id`,
+          `INSERT INTO public.log_export_jobs (tenant_id,kind,time_basis,schedule_id,window_from,window_to,filter,expires_at,privacy_policy,privacy_revision,retention_revision,retention_days,retention_from)
+           SELECT $1,'scheduled','receipt',$2,$3,$4,$5,clock_timestamp()+$6*INTERVAL '1 day',"logPrivacy","logPrivacyRevision","logRetentionRevision","logRetentionDays",${RETENTION_CUTOFF_SQL} FROM public.tenants WHERE id=$1 RETURNING id`,
           [
             canonical,
             row.id,
@@ -351,7 +375,7 @@ export class LogExportSchedulerService
         jobId = job.id;
       }
       await manager.query(
-        `UPDATE public.log_export_schedules SET cursor_at=$2,next_due_at=$2::timestamptz+$3::interval+make_interval(secs=>$4),last_checked_at=clock_timestamp(),last_job_id=COALESCE($5::uuid,last_job_id),error=NULL WHERE tenant_id=$1 AND revision=$6`,
+        `UPDATE public.log_export_schedules SET cursor_at=$2,next_due_at=$2::timestamptz+$3::interval+make_interval(secs=>$4),last_checked_at=clock_timestamp(),last_job_id=COALESCE($5::uuid,last_job_id),retention_skipped_windows=retention_skipped_windows+CASE WHEN $7::timestamptz>$8::timestamptz THEN 1 ELSE 0 END,error=NULL WHERE tenant_id=$1 AND revision=$6`,
         [
           canonical,
           to,
@@ -359,6 +383,8 @@ export class LogExportSchedulerService
           LOG_EXPORT_SETTLEMENT_SECONDS,
           jobId,
           row.revision,
+          profile.cutoff,
+          from,
         ],
       );
       return true;

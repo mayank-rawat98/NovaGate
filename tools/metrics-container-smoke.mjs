@@ -624,6 +624,130 @@ try {
       'historical-redaction-and-expired-private-archives',
     ],
   };
+  const retentionUrl = `${adminUrl}/tenants/${tenant}/log-retention`;
+  assert.equal((await fetch(retentionUrl)).status, 401);
+  let retentionState = await (await fetch(retentionUrl, { headers })).json();
+  assert.equal(retentionState.days, 30);
+  assert.equal(retentionState.timeBasis, 'receipt');
+  const oldRetained = randomUUID(),
+    oldExpired = randomUUID();
+  await db.query(
+    `INSERT INTO ${schema}.request_logs
+    (id,"consumerId",method,path,"statusCode","responseTimeMs",timestamp,"receivedAt","clientIp")
+    VALUES ($1,$3,'GET','/retention-runtime',200,10,clock_timestamp(),clock_timestamp()-INTERVAL '5 days','[redacted]'),
+    ($2,$3,'GET','/retention-runtime',500,900,clock_timestamp(),clock_timestamp()-INTERVAL '40 days','[redacted]')`,
+    [oldRetained, oldExpired, usageConsumer],
+  );
+  const retainedLogs = async () => {
+    const response = await fetch(
+      `${adminUrl}/tenants/${tenant}/logs?path=%2Fretention-runtime`,
+      { headers },
+    );
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  assert.deepEqual(
+    (await retainedLogs()).map((log) => log.id),
+    [oldRetained],
+  );
+  const usageBefore = await (
+    await fetch(
+      `${adminUrl}/tenants/${tenant}/consumers/${usageConsumer}/stats?period=1h`,
+      { headers },
+    )
+  ).json();
+  assert.equal(usageBefore.retention.days, 30);
+  const queued = await fetch(`${adminUrl}/tenants/${tenant}/log-exports`, {
+    method: 'POST',
+    headers: { ...headers, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      from: new Date(Date.now() - 3600000).toISOString(),
+      to: new Date().toISOString(),
+      pathPrefix: '/retention-runtime',
+    }),
+  });
+  assert.equal(queued.status, 201);
+  const archive = await queued.json();
+  await until(async () => {
+    const response = await fetch(`${adminUrl}/tenants/${tenant}/log-exports`, {
+      headers,
+    });
+    const job = (await response.json()).jobs.find(
+      (job) => job.id === archive.id,
+    );
+    return (
+      job?.status === 'completed' &&
+      job.rowCount === 1 &&
+      job.retention?.days === 30
+    );
+  }, 'Retained-data archive processing');
+  const saveRetention = async (days) => {
+    const response = await fetch(retentionUrl, {
+      method: 'PUT',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ days, expectedRevision: retentionState.revision }),
+    });
+    assert.equal(response.status, 200);
+    retentionState = await response.json();
+    assert.equal(retentionState.days, days);
+  };
+  await saveRetention(1);
+  assert.deepEqual(await retainedLogs(), []);
+  const usageAfter = await (
+    await fetch(
+      `${adminUrl}/tenants/${tenant}/consumers/${usageConsumer}/stats?period=1h`,
+      { headers },
+    )
+  ).json();
+  assert.equal(usageAfter.requests, usageBefore.requests - 1);
+  assert.equal(usageAfter.retention.days, 1);
+  assert.equal(
+    (
+      await fetch(
+        `${adminUrl}/tenants/${tenant}/log-exports/${archive.id}/download`,
+        { headers },
+      )
+    ).status,
+    404,
+  );
+  await saveRetention(90);
+  assert.deepEqual(await retainedLogs(), []);
+  const lateRead = await fetch(
+    `${adminUrl}/tenants/${tenant}/logs?from=1999-01-01T00%3A00%3A00Z&to=2001-01-01T00%3A00%3A00Z`,
+    { headers },
+  );
+  assert.equal(lateRead.status, 200);
+  assert.ok(
+    (await lateRead.json()).some(
+      (log) => log.requestId === 'receipt-runtime-late',
+    ),
+  );
+  await until(async () => {
+    retentionState = await (await fetch(retentionUrl, { headers })).json();
+    return (
+      retentionState.cleanup === 'healthy' &&
+      (
+        await db.query(
+          `SELECT 1 FROM ${schema}.request_logs WHERE id=ANY($1::uuid[])`,
+          [[oldRetained, oldExpired]],
+        )
+      ).rowCount === 0
+    );
+  }, 'Bounded irreversible raw-log retention cleanup');
+  const logRetention = {
+    defaultDays: 30,
+    finalDays: 90,
+    cleanup: 'healthy',
+    expiredRowsRemoved: 2,
+    checks: [
+      'authenticated-receipt-lifetime',
+      'immediate-filter-and-consumer-coverage',
+      'separate-private-archive-lifetime-and-revocation',
+      'increasing-retention-does-not-resurrect',
+      'late-request-time-with-fresh-receipt-is-preserved',
+      'durable-bounded-database-cleanup',
+    ],
+  };
   const shutdown = [];
   for (const [name, role] of [
     [gateway, 'gateway'],
@@ -665,6 +789,7 @@ try {
         archives,
         consumerUsage,
         logPrivacy,
+        logRetention,
         consumerAttribution: {
           mappedJwt: true,
           unrelatedPrincipalRetained: true,

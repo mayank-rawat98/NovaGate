@@ -1,3 +1,4 @@
+import { RETENTION_CUTOFF_SQL } from '../log-retention/log-retention.policy';
 import { redactRequestLog } from '@api-gateway/shared-types';
 import type { Request, Response } from 'express';
 import { MetricsStreamService } from './metrics-stream.service';
@@ -60,11 +61,11 @@ export class AnalyticsController {
         [`log-receipt:${tenantId.toLowerCase()}`],
       );
       const [tenant] = await manager.query(
-        `SELECT "logPrivacy" FROM public.tenants WHERE id=$1`,
+        `SELECT "logPrivacy",to_char(${RETENTION_CUTOFF_SQL} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cutoff FROM public.tenants WHERE id=$1`,
         [tenantId],
       );
-      const params: (string | number)[] = [];
-      const conditions: string[] = [];
+      const params: (string | number)[] = [tenant?.cutoff];
+      const conditions: string[] = ['"receivedAt">=$1::timestamptz'];
 
       if (from) {
         params.push(from);
