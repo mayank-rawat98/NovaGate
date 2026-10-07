@@ -848,9 +848,15 @@ Remaining verification and follow-up:
 - Issue #72 adds near-real-time minute and hourly UTC schedules with shared typed contracts, authenticated revision-aware CRUD, database receipt windows, accessible Settings controls and failed-job retry. Start at save time; pause retains the cursor, resume catches up, deletion preserves history, and updates affect waiting windows while queued filters remain immutable.
 - Coordinate scheduling and receipt ingestion through a tenant transaction lock. Window admission, private job insertion and cursor advancement must commit together, including empty-window advancement. Use bounded admission/statement/lock/pool limits, finite fair sweeps and a shared 20-job tenant pending bound; queue pressure must retain windows rather than skip them. Scheduling has no network phase, so the transaction itself owns the claim; archive upload retains the existing durable fenced leases.
 - Admin owns UTC normalization, receipt defaults/indexes and idempotent upgrade paths. Stamp receipt after ingestion admission/lock waits in the database, including JSON-record insertion. Keep receipt metadata out of public logs/NDJSON; preserve request timestamps and microsecond pagination independently of database session timezone. Verify legacy upgrades and live packaged scheduling, replica/CRUD races, rollback, backlog, pause/resume and retries.
-- Issue #85 must make storage request deadlines actually reject stalled transport,
-  retain bounded retries/cancellation and guarantee application/fixture resource
-  cleanup when storage fails. A timed-out SDK warning is not a completed request.
+- Issue #85 implements rejecting storage transport deadlines and a 15-second absolute
+  command/admission budget across connection acquisition, signing, retries and backoff.
+  Keep three bounded attempts for fast transient failures, the existing two-minute
+  export deadline and a two-minute whole-prefix object/multipart cleanup budget.
+  Shutdown cancels storage requests/uploads and owned download streams; the worker
+  cancels cleanup before waiting for it. Failed deletion keeps durable retry state.
+  Integration teardown must release app/client/database resources even when object
+  cleanup fails and must preserve those failures. Real stalled HTTP regressions,
+  real PostgreSQL/RustFS checks and packaged OrbStack verification are required.
 - Remaining destinations: tenant-configurable external S3-compatible buckets, webhook NDJSON and Datadog Logs API. Encrypt tenant credentials with a dedicated rotatable keyring and strict private reads; bound destination validation/egress, retries, delivery identity and retention. Issue #80 adds raw-log age retention and issue #84 adds configurable stored-metadata redaction. Add per-destination payload policies and delivery history before claiming complete phase 4.4 coverage.
 
 Issue #78 implements tenant request-log privacy through shared contracts and

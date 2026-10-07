@@ -427,6 +427,16 @@ Settings → **Log archives** queues a private NDJSON copy of a tenant's request
 
 The API uses tenant session authorization for creation, listing and streaming downloads; it returns neither storage credentials nor private object keys. Jobs persist in PostgreSQL. Replicas claim jobs with row locks and tenant locks, renew fenced leases and recover interrupted work. Each replica runs at most two exports and each tenant has at most one active export and 20 pending requests. Each export reads a repeatable snapshot in 500-row keyset pages, preserves microsecond cursors, and stops at one million records, 512 MiB or two minutes. Automatic attempts stop after three failures; create a new archive with a smaller range when necessary. The worker never marks an incomplete upload ready.
 
+Storage commands and download admission have a 15-second absolute budget covering
+connection acquisition, SDK retries and backoff. The handler also rejects requests
+that exceed its transport timeout; connection timeout remains three seconds and
+fast transient failures can still retry up to three attempts within the budget.
+Uploads retain the archive worker's two-minute deadline and cancellation, with
+rejecting request deadlines for individual SDK transfers. A whole private-prefix
+object/multipart cleanup has a two-minute budget. Shutdown cancels admitted storage
+requests and uploads, destroys owned download streams, and cancels worker cleanup
+before waiting for it. Failed or cancelled deletion retains durable retry metadata.
+
 Archives expire after seven days by default (`LOG_EXPORT_RETENTION_DAYS`, 1–90). Expiry immediately prevents API downloads; background cleanup removes attempt objects and abandoned multipart uploads. Cleanup retries after a storage outage, and expired job metadata remains available to explain why a download disappeared. Expired job metadata is kept for 30 more days, then removed only after successful object cleanup. Preserve archive jobs during tenant offboarding until their object prefixes have been deleted.
 
 Settings → **Automatic log archives** schedules private receipt windows every minute or on UTC hour boundaries. Minute batching is near real time; each window waits 15 seconds after closing and then joins the archive queue. Saving starts from the database receipt time, so existing logs are not backfilled automatically. Gateway request timestamps remain intact in the NDJSON; a late-arriving request enters the window in which NovaGate receives it. Manual archives continue to filter by request time.

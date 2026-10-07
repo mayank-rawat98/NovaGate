@@ -71,6 +71,12 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
     forcePathStyle: true,
     region: 'us-east-1',
     credentials: { accessKeyId, secretAccessKey },
+    maxAttempts: 1,
+    requestHandler: {
+      connectionTimeout: 3000,
+      requestTimeout: 5000,
+      throwOnRequestTimeout: true,
+    },
   });
   const secret = 'archive-integration-secret-at-least-32-characters';
   const oldSecret = process.env.PLATFORM_JWT_SECRET;
@@ -184,19 +190,37 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
     url = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}/api/tenants`;
   }, 30000);
   afterAll(async () => {
-    if (storage?.enabled) {
-      await storage.cleanup('tenants/');
-      await client.send(new DeleteBucketCommand({ Bucket: bucket }));
-    }
-    await app?.close();
-    client.destroy();
-    if (db?.isInitialized) await db.destroy();
+    const failures: unknown[] = [];
+    const release = async (action: () => Promise<unknown> | void) => {
+      try {
+        await action();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    await release(async () => {
+      if (storage?.enabled) {
+        await storage.cleanup('tenants/');
+        await client.send(new DeleteBucketCommand({ Bucket: bucket }));
+      }
+    });
+    // Storage failure must not skip application/client/database cleanup.
+    await release(() => app?.close());
+    await release(() => client.destroy());
+    if (db?.isInitialized) await release(() => db.destroy());
     if (root?.isInitialized) {
-      await root.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
-      await root.destroy();
+      await release(() =>
+        root.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`),
+      );
+      await release(() => root.destroy());
     }
     if (oldSecret === undefined) delete process.env.PLATFORM_JWT_SECRET;
     else process.env.PLATFORM_JWT_SECRET = oldSecret;
+    if (failures.length)
+      throw new AggregateError(
+        failures,
+        'Private archive fixture cleanup failed',
+      );
   }, 30000);
 
   it('requires a matching tenant session and validates ranges before persisting jobs', async () => {

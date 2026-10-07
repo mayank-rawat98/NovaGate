@@ -24,6 +24,8 @@ export class ObjectStorageService implements OnModuleInit, OnModuleDestroy {
   private readonly client?: S3Client;
   private readonly createBucket: boolean;
   private readonly region: string;
+  private readonly shutdown = new AbortController();
+  private readonly downloads = new Set<Readable>();
 
   constructor(config: ConfigService) {
     const flag = config.get<string>('OBJECT_STORAGE_ENABLED') ?? 'false';
@@ -72,14 +74,22 @@ export class ObjectStorageService implements OnModuleInit, OnModuleDestroy {
       credentials: { accessKeyId, secretAccessKey },
       forcePathStyle: true,
       maxAttempts: 3,
-      requestHandler: { connectionTimeout: 3000, requestTimeout: 15000 },
+      requestHandler: {
+        connectionTimeout: 3000,
+        requestTimeout: 15000,
+        throwOnRequestTimeout: true,
+      },
     });
   }
 
   async onModuleInit() {
     if (!this.client) return;
     try {
-      await this.client.send(new HeadBucketCommand({ Bucket: this.bucket }));
+      await this.request((client, abortSignal) =>
+        client.send(new HeadBucketCommand({ Bucket: this.bucket }), {
+          abortSignal,
+        }),
+      );
     } catch (error) {
       if (
         !this.createBucket ||
@@ -88,17 +98,21 @@ export class ObjectStorageService implements OnModuleInit, OnModuleDestroy {
       )
         throw new Error('Archive bucket is unavailable');
       try {
-        await this.client.send(
-          new CreateBucketCommand({
-            Bucket: this.bucket,
-            ...(this.region === 'us-east-1'
-              ? {}
-              : {
-                  CreateBucketConfiguration: {
-                    LocationConstraint: this.region as BucketLocationConstraint,
-                  },
-                }),
-          }),
+        await this.request((client, abortSignal) =>
+          client.send(
+            new CreateBucketCommand({
+              Bucket: this.bucket,
+              ...(this.region === 'us-east-1'
+                ? {}
+                : {
+                    CreateBucketConfiguration: {
+                      LocationConstraint: this
+                        .region as BucketLocationConstraint,
+                    },
+                  }),
+            }),
+            { abortSignal },
+          ),
         );
       } catch (creationError) {
         if (
@@ -111,8 +125,10 @@ export class ObjectStorageService implements OnModuleInit, OnModuleDestroy {
     // New buckets are private by default. Refuse a configured public policy;
     // never mutate an operator-owned policy or add anonymous access.
     try {
-      const result = await this.client.send(
-        new GetBucketPolicyCommand({ Bucket: this.bucket }),
+      const result = await this.request((client, abortSignal) =>
+        client.send(new GetBucketPolicyCommand({ Bucket: this.bucket }), {
+          abortSignal,
+        }),
       );
       const policy = JSON.parse(result.Policy ?? '{}') as {
         Statement?: unknown;
@@ -139,8 +155,10 @@ export class ObjectStorageService implements OnModuleInit, OnModuleDestroy {
       if ((error as { name?: string }).name !== 'NoSuchBucketPolicy')
         throw error;
     }
-    const acl = await this.client.send(
-      new GetBucketAclCommand({ Bucket: this.bucket }),
+    const acl = await this.request((client, abortSignal) =>
+      client.send(new GetBucketAclCommand({ Bucket: this.bucket }), {
+        abortSignal,
+      }),
     );
     if (
       acl.Grants?.some((grant) =>
@@ -152,12 +170,55 @@ export class ObjectStorageService implements OnModuleInit, OnModuleDestroy {
       throw new Error('Archive bucket must have a private access ACL');
     }
   }
+  private async withDeadline<T>(
+    timeout: number,
+    operation: (signal: AbortSignal) => Promise<T>,
+    caller?: AbortSignal,
+  ): Promise<T> {
+    const deadline = new AbortController();
+    const signal = AbortSignal.any([
+      this.shutdown.signal,
+      deadline.signal,
+      ...(caller ? [caller] : []),
+    ]);
+    const timer = setTimeout(
+      () => deadline.abort(new Error('Archive storage deadline exceeded')),
+      timeout,
+    );
+    timer.unref();
+    try {
+      if (signal.aborted)
+        throw new Error('Archive storage operation cancelled');
+      return await operation(signal);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private request<T>(
+    operation: (client: S3Client, signal: AbortSignal) => Promise<T>,
+    caller?: AbortSignal,
+  ): Promise<T> {
+    const client = this.client;
+    if (!client) return Promise.reject(new Error('Object storage is disabled'));
+    // Absolute budget also covers signing, connection acquisition, retry backoff and attempts.
+    return this.withDeadline(
+      15000,
+      (signal) => operation(client, signal),
+      caller,
+    );
+  }
+
   onModuleDestroy() {
+    this.shutdown.abort();
+    for (const stream of this.downloads) stream.destroy();
+    this.downloads.clear();
     this.client?.destroy();
   }
 
   async upload(key: string, body: Readable, signal: AbortSignal) {
     if (!this.client) throw new Error('Object storage is disabled');
+    signal = AbortSignal.any([signal, this.shutdown.signal]);
     if (signal.aborted) {
       body.destroy();
       throw new Error('Archive upload cancelled');
@@ -192,61 +253,99 @@ export class ObjectStorageService implements OnModuleInit, OnModuleDestroy {
 
   async download(key: string, signal?: AbortSignal): Promise<Readable> {
     if (!this.client) throw new Error('Object storage is disabled');
-    const result = await this.client.send(
-      new GetObjectCommand({ Bucket: this.bucket, Key: key }),
-      { abortSignal: signal },
+    const result = await this.request(
+      (client, abortSignal) =>
+        client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }), {
+          abortSignal,
+        }),
+      signal,
     );
     if (!(result.Body instanceof Readable))
       throw new Error('Archive stream is unavailable');
-    return result.Body;
+    const stream = result.Body;
+    if (this.shutdown.signal.aborted) {
+      stream.destroy();
+      throw new Error('Archive storage operation cancelled');
+    }
+    this.downloads.add(stream);
+    stream.once('close', () => this.downloads.delete(stream));
+    return stream;
   }
-  async remove(key: string) {
+  async remove(key: string, signal?: AbortSignal) {
     if (!this.client) return;
-    await this.client.send(
-      new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
+    await this.request(
+      (client, abortSignal) =>
+        client.send(
+          new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
+          { abortSignal },
+        ),
+      signal,
     );
   }
-  async cleanup(prefix: string) {
+  async cleanup(prefix: string, caller?: AbortSignal) {
     if (!this.client) return;
-    // Bounded pages and sequential deletes keep cleanup independent of archive size.
-    let continuation: string | undefined;
-    do {
-      const page = await this.client.send(
-        new ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: prefix,
-          MaxKeys: 100,
-          ContinuationToken: continuation,
-        }),
-      );
-      for (const object of page.Contents ?? [])
-        if (object.Key) await this.remove(object.Key);
-      continuation = page.IsTruncated ? page.NextContinuationToken : undefined;
-    } while (continuation);
-    let keyMarker: string | undefined;
-    let uploadIdMarker: string | undefined;
-    let truncated: boolean | undefined;
-    do {
-      const page = await this.client.send(
-        new ListMultipartUploadsCommand({
-          Bucket: this.bucket,
-          Prefix: prefix,
-          MaxUploads: 100,
-          KeyMarker: keyMarker,
-          UploadIdMarker: uploadIdMarker,
-        }),
-      );
-      for (const upload of page.Uploads ?? [])
-        await this.client.send(
-          new AbortMultipartUploadCommand({
-            Bucket: this.bucket,
-            Key: upload.Key,
-            UploadId: upload.UploadId,
-          }),
-        );
-      truncated = page.IsTruncated;
-      keyMarker = page.NextKeyMarker;
-      uploadIdMarker = page.NextUploadIdMarker;
-    } while (truncated);
+    return this.withDeadline(
+      120000,
+      async (signal) => {
+        // Bounded pages and sequential deletes keep cleanup independent of archive size.
+        let continuation: string | undefined;
+        do {
+          const page = await this.request(
+            (client, abortSignal) =>
+              client.send(
+                new ListObjectsV2Command({
+                  Bucket: this.bucket,
+                  Prefix: prefix,
+                  MaxKeys: 100,
+                  ContinuationToken: continuation,
+                }),
+                { abortSignal },
+              ),
+            signal,
+          );
+          for (const object of page.Contents ?? [])
+            if (object.Key) await this.remove(object.Key, signal);
+          continuation = page.IsTruncated
+            ? page.NextContinuationToken
+            : undefined;
+        } while (continuation);
+        let keyMarker: string | undefined;
+        let uploadIdMarker: string | undefined;
+        let truncated: boolean | undefined;
+        do {
+          const page = await this.request(
+            (client, abortSignal) =>
+              client.send(
+                new ListMultipartUploadsCommand({
+                  Bucket: this.bucket,
+                  Prefix: prefix,
+                  MaxUploads: 100,
+                  KeyMarker: keyMarker,
+                  UploadIdMarker: uploadIdMarker,
+                }),
+                { abortSignal },
+              ),
+            signal,
+          );
+          for (const upload of page.Uploads ?? [])
+            await this.request(
+              (client, abortSignal) =>
+                client.send(
+                  new AbortMultipartUploadCommand({
+                    Bucket: this.bucket,
+                    Key: upload.Key,
+                    UploadId: upload.UploadId,
+                  }),
+                  { abortSignal },
+                ),
+              signal,
+            );
+          truncated = page.IsTruncated;
+          keyMarker = page.NextKeyMarker;
+          uploadIdMarker = page.NextUploadIdMarker;
+        } while (truncated);
+      },
+      caller,
+    );
   }
 }
