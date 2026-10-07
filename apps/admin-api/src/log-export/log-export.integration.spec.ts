@@ -7,6 +7,8 @@ import { MetricsStreamService } from '../proxy-config/metrics-stream.service';
 import { ConsumerAnalyticsService } from '../proxy-config/consumer-analytics.service';
 import type {
   LogPrivacyState,
+  ConsumerUsageStats,
+  RequestLog,
   LogExportJob,
   LogExportScheduleState,
 } from '@api-gateway/shared-types';
@@ -166,7 +168,7 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
         { provide: ConfigPushService, useValue: push },
         { provide: DataSource, useValue: db },
         { provide: MetricsStreamService, useValue: {} },
-        { provide: ConsumerAnalyticsService, useValue: {} },
+        ConsumerAnalyticsService,
         { provide: LogExportService, useValue: exports },
         { provide: ObjectStorageService, useValue: storage },
         {
@@ -1092,5 +1094,231 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
       ongoing.destroy();
       await retention.onModuleDestroy();
     }
+  }, 15000);
+  it('hides selected historical metadata before erasure, revokes archives and never restores erased attribution', async () => {
+    const id = randomUUID(),
+      consumer = randomUUID(),
+      schema = tenantSchema(id);
+    await db.query(
+      `INSERT INTO public.tenants(id,name,email,"planId") VALUES($1,'Field privacy fixture',$2,'free')`,
+      [id, id + '@example.test'],
+    );
+    await new TenantProvisioningService(db).provisionTenant(id);
+    await db.query(
+      `INSERT INTO ${schema}.consumers (id,name,"keyHash") VALUES($1,'Recorded client','fixture-never-return')`,
+      [consumer],
+    );
+    await privacy.scrub();
+    const initial = await privacy.get(id);
+    const retain = await privacy.save(id, {
+      expectedRevision: initial.revision,
+      policy: { clientIp: 'retain', userAgent: 'retain' },
+    });
+    await privacy.scrub();
+    const recordedAt = new Date(Date.now() - 30000).toISOString();
+    await db.query(
+      `INSERT INTO ${schema}.request_logs(id,"consumerId",method,path,"statusCode","responseTimeMs","requestId","downstreamService","traceId","spanId","clientIp","userAgent",timestamp)
+      SELECT gen_random_uuid(),$1,'GET','/private-record',503,12,'private-correlation','private-service','0123456789abcdef0123456789abcdef','0123456789abcdef','192.0.2.123','fixture-agent',$2 FROM generate_series(1,601)`,
+      [consumer, recordedAt],
+    );
+    const selection = {
+      from: new Date(Date.now() - 60000).toISOString(),
+      to: new Date().toISOString(),
+    };
+    const old = await exports.create(id, selection);
+    const pathOnly = await privacy.save(id, {
+      expectedRevision: retain.revision,
+      policy: {
+        clientIp: 'retain',
+        userAgent: 'retain',
+        redactedFields: ['path'],
+      },
+    });
+    const statsUrl = `${url}/${id}/consumers/${consumer}/stats?period=1h`;
+    const before = await fetch(statsUrl, { headers: headers(id) });
+    expect(before.status).toBe(200);
+    const usage = (await before.json()) as ConsumerUsageStats;
+    expect(usage.requests).toBe(601);
+    expect(usage.topPaths.map((p: { path: string }) => p.path)).toEqual([
+      '[redacted]',
+    ]);
+    const hidden = [
+      'path',
+      'downstreamService',
+      'requestId',
+      'consumerId',
+      'traceId',
+      'spanId',
+    ];
+    const save = await fetch(`${url}/${id}/log-privacy`, {
+      method: 'PUT',
+      headers: headers(id),
+      body: JSON.stringify({
+        expectedRevision: pathOnly.revision,
+        policy: { clientIp: 'omit', userAgent: 'omit', redactedFields: hidden },
+      }),
+    });
+    expect(save.status).toBe(200);
+    const state = (await save.json()) as LogPrivacyState;
+    expect(state.historicalCleanup).toBe('pending');
+    const observed = await fetch(`${url}/${id}/logs`, { headers: headers(id) });
+    expect(observed.status).toBe(200);
+    const rows = (await observed.json()) as RequestLog[];
+    expect(rows).toHaveLength(50);
+    for (const row of rows) {
+      expect(row).toMatchObject({
+        path: '[redacted]',
+        requestId: '[redacted]',
+        clientIp: '[redacted]',
+        statusCode: 503,
+        responseTimeMs: 12,
+      });
+      for (const field of [
+        'consumerId',
+        'traceId',
+        'spanId',
+        'downstreamService',
+        'userAgent',
+      ])
+        expect(row).not.toHaveProperty(field);
+    }
+    // Physical rows deliberately remain private until the bounded worker runs.
+    expect(
+      Number(
+        (
+          await db.query(
+            `SELECT count(*) FROM ${schema}.request_logs WHERE "consumerId"=$1`,
+            [consumer],
+          )
+        )[0].count,
+      ),
+    ).toBe(601);
+    for (const query of ['?path=private-record', '?consumerId=' + consumer])
+      expect(
+        await (
+          await fetch(`${url}/${id}/logs${query}`, { headers: headers(id) })
+        ).json(),
+      ).toEqual([]);
+    const hiddenUsage = (await (
+      await fetch(statsUrl, { headers: headers(id) })
+    ).json()) as ConsumerUsageStats;
+    expect(hiddenUsage).toMatchObject({
+      requests: 0,
+      privacy: { revision: state.revision, redactedFields: hidden },
+    });
+    expect(hiddenUsage.topPaths).toEqual([]);
+    expect(
+      hiddenUsage.series.every((b: { requests: number }) => b.requests === 0),
+    ).toBe(true);
+    await expect(exports.download(id, old.id)).rejects.toThrow('expired');
+    await expect(
+      privacy.save(id, {
+        expectedRevision: state.revision,
+        policy: { clientIp: 'omit', userAgent: 'omit' },
+      }),
+    ).rejects.toThrow('cleanup must finish');
+    const job = await exports.create(id, selection);
+    const claimed = required(await exports.claim());
+    expect(claimed.id).toBe(job.id);
+    await exports.process(claimed);
+    const stream = await exports.download(id, job.id);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+    const body = Buffer.concat(chunks).toString();
+    expect(body.trim().split('\n')).toHaveLength(601);
+    expect(body).not.toMatch(
+      /private-record|private-correlation|private-service|fixture-agent|192\.0\.2\.123/,
+    );
+    expect(body).not.toContain(consumer);
+    for (const extra of [
+      { pathPrefix: '/private-record' },
+      { consumerId: consumer },
+    ]) {
+      const filtered = await exports.create(id, { ...selection, ...extra });
+      const lease = required(await exports.claim());
+      expect(lease.id).toBe(filtered.id);
+      await exports.process(lease);
+      const completed = (await exports.list(id)).jobs.find(
+        (item) => item.id === filtered.id,
+      );
+      expect(completed).toMatchObject({ status: 'completed', rowCount: 0 });
+    }
+    // Receipt-based automatic admission must not expose matching hidden metadata.
+    const receiptStart = new Date(
+      Math.floor((Date.now() - 180000) / 60000) * 60000,
+    ).toISOString();
+    await db.query(
+      `UPDATE ${schema}.request_logs SET "receivedAt"=$1::timestamptz+INTERVAL '1 second'`,
+      [receiptStart],
+    );
+    let scheduleRevision: string | null = null;
+    for (const filter of [
+      { pathPrefix: '/private-record' },
+      { consumerId: consumer },
+    ]) {
+      const saved = await schedules.save(id, {
+        enabled: true,
+        cadence: 'near_real_time',
+        filter,
+        expectedRevision: scheduleRevision,
+      });
+      scheduleRevision = required(saved.schedule ?? undefined).revision;
+      await db.query(
+        `UPDATE public.log_export_schedules SET cursor_at=$2,next_due_at=clock_timestamp()-INTERVAL '1 second' WHERE tenant_id=$1`,
+        [id, receiptStart],
+      );
+      await schedules.scheduleNext();
+      expect(
+        await db.query(
+          `SELECT id FROM public.log_export_jobs WHERE tenant_id=$1 AND kind='scheduled'`,
+          [id],
+        ),
+      ).toHaveLength(0);
+      const [cursor] = await db.query(
+        `SELECT cursor_at FROM public.log_export_schedules WHERE tenant_id=$1`,
+        [id],
+      );
+      expect(new Date(cursor.cursor_at).getTime()).toBeGreaterThan(
+        new Date(receiptStart).getTime(),
+      );
+    }
+    await schedules.remove(id, { expectedRevision: scheduleRevision });
+    await privacy.scrub();
+    expect((await privacy.get(id)).historicalCleanup).toBe('complete');
+    const [record] = await db.query(
+      `SELECT * FROM ${schema}.request_logs LIMIT 1`,
+    );
+    expect(record).toMatchObject({
+      path: '[redacted]',
+      requestId: '[redacted]',
+      consumerId: null,
+      traceId: null,
+      spanId: null,
+      downstreamService: null,
+      clientIp: '[redacted]',
+      userAgent: null,
+    });
+    await privacy.save(id, {
+      expectedRevision: state.revision,
+      policy: { clientIp: 'retain', userAgent: 'retain' },
+    });
+    expect(
+      (
+        (await (
+          await fetch(statsUrl, { headers: headers(id) })
+        ).json()) as ConsumerUsageStats
+      ).requests,
+    ).toBe(0);
+    expect(
+      (
+        await db.query(
+          `SELECT count(*) FROM ${schema}.request_logs WHERE "consumerId"=$1`,
+          [consumer],
+        )
+      )[0].count,
+    ).toBe('0');
+    expect(
+      (await db.query(`SELECT count(*) FROM ${schema}.request_logs`))[0].count,
+    ).toBe('601');
   }, 15000);
 });

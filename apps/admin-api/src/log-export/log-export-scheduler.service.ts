@@ -1,3 +1,4 @@
+import { logPrivacyPolicy } from '@api-gateway/shared-types';
 import {
   retentionProfile,
   RETENTION_CUTOFF_SQL,
@@ -286,6 +287,11 @@ export class LogExportSchedulerService
         return true;
       }
       const profile = await retentionProfile(manager, canonical);
+      const [privacy] = await manager.query(
+        'SELECT "logPrivacy" FROM public.tenants WHERE id=$1',
+        [canonical],
+      );
+      const hidden = logPrivacyPolicy(privacy?.logPrivacy).redactedFields ?? [];
       // Skip fully expired backlog in one bounded write. Preserve the first partial
       // window, and report skipped windows rather than pretending they were archived.
       await manager.query(
@@ -347,10 +353,11 @@ export class LogExportSchedulerService
       if (row.filter.pathPrefix !== undefined) {
         params.push(row.filter.pathPrefix);
         conditions.push(
-          `LEFT(path,LENGTH($${params.length}::text))=$${params.length}`,
+          `LEFT(${hidden.includes('path') ? "'[redacted]'" : 'path'},LENGTH($${params.length}::text))=$${params.length}`,
         );
       }
       if (row.filter.consumerId !== undefined) {
+        if (hidden.includes('consumerId')) conditions.push('FALSE');
         params.push(row.filter.consumerId);
         conditions.push(`"consumerId"=$${params.length}::uuid`);
       }

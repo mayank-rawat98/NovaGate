@@ -20,6 +20,12 @@ function fixture() {
           cutoff: '2026-09-01T00:00:00.000000Z',
         },
       ])
+      .mockResolvedValueOnce([
+        {
+          logPrivacy: { clientIp: 'omit', userAgent: 'omit' },
+          logPrivacyRevision: CONSUMER,
+        },
+      ])
       .mockResolvedValue([
         { matched: 0, totals: { requests: 0 }, series: [], paths: [] },
       ]),
@@ -86,6 +92,12 @@ describe('Consumer analytics bounds and lifecycle', () => {
           cutoff: '2026-09-01T00:00:00.000000Z',
         },
       ])
+      .mockResolvedValueOnce([
+        {
+          logPrivacy: { clientIp: 'omit', userAgent: 'omit' },
+          logPrivacyRevision: CONSUMER,
+        },
+      ])
       .mockResolvedValue([
         { matched: 100001, totals: { requests: 0 }, series: [], paths: [] },
       ]);
@@ -110,6 +122,12 @@ describe('Consumer analytics bounds and lifecycle', () => {
               },
             ])
             .mockResolvedValueOnce([
+              {
+                logPrivacy: { clientIp: 'omit', userAgent: 'omit' },
+                logPrivacyRevision: CONSUMER,
+              },
+            ])
+            .mockResolvedValueOnce([
               { matched: 1, totals: { requests: 1 }, series: [], paths: [] },
             ]),
         }),
@@ -118,7 +136,7 @@ describe('Consumer analytics bounds and lifecycle', () => {
         fn({ query: jest.fn().mockResolvedValue([{ valid: false }]) }),
       );
     await expect(service.get(TENANT, CONSUMER)).rejects.toThrow(
-      'Log retention changed',
+      'Log privacy or retention changed',
     );
   });
   it('bounds actual tenant work, canonicalizes uppercase IDs, drains it and stops new work', async () => {

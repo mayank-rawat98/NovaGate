@@ -1,5 +1,5 @@
 import { RETENTION_CUTOFF_SQL } from '../log-retention/log-retention.policy';
-import { redactRequestLog } from '@api-gateway/shared-types';
+import { logPrivacyPolicy, redactRequestLog } from '@api-gateway/shared-types';
 import type { Request, Response } from 'express';
 import { MetricsStreamService } from './metrics-stream.service';
 import {
@@ -65,6 +65,7 @@ export class AnalyticsController {
         [tenantId],
       );
       const params: (string | number)[] = [tenant?.cutoff];
+      const hidden = logPrivacyPolicy(tenant?.logPrivacy).redactedFields ?? [];
       const conditions: string[] = ['"receivedAt">=$1::timestamptz'];
 
       if (from) {
@@ -77,13 +78,16 @@ export class AnalyticsController {
       }
       if (path) {
         params.push(`%${path}%`);
-        conditions.push(`path ILIKE $${params.length}`);
+        conditions.push(
+          `${hidden.includes('path') ? "'[redacted]'" : 'path'} ILIKE $${params.length}`,
+        );
       }
       if (statusCode) {
         params.push(Number(statusCode));
         conditions.push(`"statusCode" = $${params.length}`);
       }
       if (consumerId) {
+        if (hidden.includes('consumerId')) conditions.push('FALSE');
         params.push(consumerId);
         conditions.push(`"consumerId" = $${params.length}`);
       }

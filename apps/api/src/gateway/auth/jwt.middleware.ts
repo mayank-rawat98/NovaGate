@@ -1,4 +1,7 @@
-import { canonicalConsumerId } from '@api-gateway/shared-types';
+import {
+  canonicalConsumerId,
+  redactRequestLog,
+} from '@api-gateway/shared-types';
 import { Injectable, Logger, NestMiddleware } from '@nestjs/common';
 import type { NextFunction, Request } from 'express';
 import { ConfigService } from '@nestjs/config';
@@ -157,7 +160,7 @@ export class JwtMiddleware implements NestMiddleware {
     const logEntry: Record<string, string | number | undefined> = {
       timestamp: new Date().toISOString(),
       method: req.method,
-      path: req.originalUrl,
+      path: res.locals.routePattern ?? 'unmatched',
       statusCode,
       responseTimeMs,
       requestId,
@@ -167,6 +170,10 @@ export class JwtMiddleware implements NestMiddleware {
       logEntry.clientIp = req.ip;
     }
 
-    this.logger.warn(JSON.stringify(logEntry));
+    this.logger.warn(
+      JSON.stringify(
+        redactRequestLog(logEntry, this.configManager.getConfig()?.logPrivacy),
+      ),
+    );
   }
 }

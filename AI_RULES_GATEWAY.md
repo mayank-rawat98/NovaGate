@@ -136,7 +136,7 @@ UUID v4 generated at the gateway. This header must:
 
 1. Be generated if not present in the incoming request
 2. Be forwarded to the downstream service
-3. Be included in the gateway's log entry for that request
+3. Be included in the gateway's log entry unless the tenant explicitly redacts request correlation IDs
 4. Be included in the gateway's response to the client
 
 ```typescript
@@ -348,3 +348,14 @@ Acquire an atomic weighted target reservation immediately before dispatch. Relea
 ## Rule 22 — Observe responses after they finish
 
 Attach HTTP observation before authentication and guards. Hold active request accounting through actual response finish/close, emit once and remove listeners. Record final filter status after completed responses; use internal 499 for interrupted responses rather than false success. Duration is monotonic. Labels use known methods and configured route patterns, never caller URLs, queries or user agents. Validate request IDs before use. Guards must not duplicate general logging/counters. Observation failures cannot change request outcomes; telemetry timers and batches have explicit shutdown cleanup. These are best-effort logs, not a durable audit trail.
+
+## Rule 23 — Field redaction changes observations only
+
+Tenant-selected request-log metadata redaction never changes live request IDs,
+consumer identity, routing, authentication, ACL or rate-limit inputs. Preserve
+primary log IDs, receipt timestamps and response outcomes. Apply the union of
+request-start and request-finish omissions to telemetry and local JSON output.
+Use only the shared bounded field inventory; unknown or duplicate field selections
+are invalid. Collectors and current historical reads enforce persisted policy before
+exposing records. Consumer attribution and path grouping must respect current privacy
+while erasure is pending. Separate trace/error storage has separate policies.

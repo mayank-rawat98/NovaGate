@@ -110,3 +110,12 @@ Issue #82 aligns trace/metric SQL retention with elapsed 24-hour days. Use
 calendar-day intervals shift cutoffs during daylight-saving changes. Keep inclusive
 retained boundaries, existing advisory locks, row caps and deadlines. Real PostgreSQL
 regressions cover UTC/New York/Kolkata sessions and spring/autumn microsecond edges.
+
+Issue #84 extends the shared request-log privacy redactor to six stored metadata
+fields. Read persisted policy under the existing receipt-ingestion lock, then redact
+legacy frames before JSON record conversion. Preserve authenticated socket tenant,
+primary log UUID, receipt, method, status and duration; never accept caller-selected
+tenants. Malformed explicit metadata selections fail closed. Selected paths/request
+IDs use the required-column placeholder; optional consumer/service/trace/span values
+become NULL. Admin owns existing schema upgrades; deploy updated collectors before
+enabling selections. Verify actual WebSocket/PostgreSQL persistence, not only mocks.

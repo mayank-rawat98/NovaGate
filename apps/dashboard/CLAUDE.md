@@ -166,7 +166,8 @@ Use workspace-keyed state and abort admitted mutations on close/switch. Preserve
 on failures and revision reload; invalidate archive views after a changed save. Retain
 30-second SWR refresh, native focus/Escape/Tab behavior and labelled selects. Browser
 checks cover failed reads/saves/revisions, workspace resets, disabled object storage,
-mobile/desktop accessibility and keyboard controls. Broader field sanitization remains separate; raw-log age retention is handled by issue #80.
+mobile/desktop accessibility and keyboard controls. Issue #84 adds six stored-metadata selections; arbitrary payload sanitization remains
+separate. Raw-log age retention is handled by issue #80.
 
 Issue #80 adds Settings → Log retention through shared retention/coverage/revision
 contracts and api-client. Default database request-log lifetime is 30 days, selectable
@@ -177,3 +178,11 @@ or switch and retain 30-second SWR. Use native dialog focus/Escape/Tab behavior 
 labelled bounded numeric input. Browser verification covers mobile/desktop, failed
 reads/saves/revisions, workspace resets, disabled object storage and archive/usage
 coverage. Recorded-log analytics and archives must not promise complete traffic history.
+
+Issue #84 extends Log privacy with controlled, labelled selections for paths,
+service names, request/consumer/trace/span IDs. Preserve checkbox input on failed
+saves and revision reload; closing discards unsaved selections. Explain irreversible
+metadata erasure and its effect on path filters and consumer attribution. Usage
+coverage must distinguish unavailable attribution from no traffic and redacted path
+groups from missing totals. Keep shared contracts → typed api-client → UI, legacy
+optional coverage, workspace cancellation and mobile/keyboard/accessibility checks.

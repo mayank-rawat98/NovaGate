@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import type { TenantConfig } from '@api-gateway/shared-types';
 import { Test } from '@nestjs/testing';
+import { Logger } from '@nestjs/common';
 import jwt from 'jsonwebtoken';
 import { ConfigService } from '@nestjs/config';
 import { JwtMiddleware } from './jwt.middleware';
@@ -69,6 +70,45 @@ describe('JwtMiddleware', () => {
       'X-Request-ID',
       expect.any(String),
     );
+  });
+  it('does not leak raw auth-rejection URLs/IPs or redacted correlation IDs into local diagnostics', () => {
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    try {
+      jest.mocked(manager.getConfig).mockReturnValue({
+        logPrivacy: {
+          clientIp: 'omit',
+          userAgent: 'omit',
+          redactedFields: ['path', 'requestId'],
+        },
+      } as TenantConfig);
+      const req = {
+        headers: { authorization: 'invalid' },
+        method: 'GET',
+        originalUrl: '/person/private?token=never-log',
+        ip: '192.0.2.125',
+      } as unknown as RequestWithUser;
+      const res = createResponse();
+      middleware.use(req, res, jest.fn());
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestId: expect.stringMatching(/^[a-f0-9-]{36}$/),
+        }),
+      );
+      const record = JSON.parse(String(warn.mock.calls[0][0]));
+      expect(record).toMatchObject({
+        path: '[redacted]',
+        requestId: '[redacted]',
+        clientIp: '[redacted]',
+      });
+      expect(JSON.stringify(record)).not.toMatch(
+        /never-log|192\.0\.2\.125|\/person/,
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('sets user for valid token', () => {

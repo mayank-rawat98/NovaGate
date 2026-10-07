@@ -3,7 +3,7 @@ import { INestApplication } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { sign } from 'jsonwebtoken';
-import { DataSource, QueryRunner } from 'typeorm';
+import { DataSource, QueryRunner, type EntityManager } from 'typeorm';
 import {
   ConsumerUsageStats,
   MetricsSnapshot,
@@ -70,6 +70,7 @@ integration(
         `ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS "logPrivacy" JSONB NOT NULL DEFAULT '{"clientIp":"omit","userAgent":"omit"}'::jsonb`,
       );
       await db.query(`ALTER TABLE public.tenants
+        ADD COLUMN IF NOT EXISTS "logPrivacyRevision" UUID NOT NULL DEFAULT gen_random_uuid(),
         ADD COLUMN IF NOT EXISTS "logRetentionDays" SMALLINT NOT NULL DEFAULT 30,
         ADD COLUMN IF NOT EXISTS "logRetentionRevision" UUID NOT NULL DEFAULT gen_random_uuid(),
         ADD COLUMN IF NOT EXISTS "logRetentionFloor" TIMESTAMPTZ NOT NULL DEFAULT (clock_timestamp()-INTERVAL '30 days'),
@@ -209,6 +210,35 @@ integration(
       expect(JSON.stringify(result)).not.toMatch(
         /private|keyHash|anonymous|foreign-consumer|excluded/,
       );
+    });
+    it('fences a real aggregate when privacy changes after its repeatable snapshot', async () => {
+      const actual = db.transaction.bind(db);
+      const source = {
+        transaction: async (levelOrFn: unknown, body?: unknown) => {
+          if (levelOrFn === 'REPEATABLE READ') {
+            const result = await actual(
+              'REPEATABLE READ',
+              body as (manager: EntityManager) => Promise<ConsumerUsageStats>,
+            );
+            await db.query(
+              'UPDATE public.tenants SET "logPrivacyRevision"=gen_random_uuid() WHERE id=$1',
+              [tenants[0]],
+            );
+            return result;
+          }
+          return actual(
+            levelOrFn as (manager: EntityManager) => Promise<unknown>,
+          );
+        },
+      } as unknown as DataSource;
+      const service = new ConsumerAnalyticsService(source);
+      try {
+        await expect(service.get(tenants[0], consumer, '1h')).rejects.toThrow(
+          'Log privacy or retention changed',
+        );
+      } finally {
+        await service.onModuleDestroy();
+      }
     });
     it('preserves revoked history and returns explicit empty windows', async () => {
       await db.query(

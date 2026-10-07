@@ -202,6 +202,7 @@ const archives = ['queued', 'processing', 'completed', 'failed', 'expired'].map(
 const newArchiveId = '45678901-1234-1234-1234-123456789abc';
 let failConsumerUsage = false;
 let emptyConsumerUsage = false;
+let privacyUsage = '';
 const consumerUsageRequests = [];
 const otherTenant = '87654321-1234-1234-1234-123456789abc';
 let failServices = false;
@@ -310,10 +311,32 @@ const handleApiFixture = async (route) => {
     if (route.request().method() === 'PUT') {
       const dto = route.request().postDataJSON();
       assert.deepEqual(Object.keys(dto).sort(), ['expectedRevision', 'policy']);
-      assert.deepEqual(Object.keys(dto.policy).sort(), [
-        'clientIp',
-        'userAgent',
-      ]);
+      assert.deepEqual(
+        Object.keys(dto.policy).sort(),
+        dto.policy.redactedFields?.length
+          ? ['clientIp', 'redactedFields', 'userAgent']
+          : ['clientIp', 'userAgent'],
+      );
+      if (dto.policy.redactedFields) {
+        assert(Array.isArray(dto.policy.redactedFields));
+        assert(dto.policy.redactedFields.length <= 6);
+        assert.equal(
+          new Set(dto.policy.redactedFields).size,
+          dto.policy.redactedFields.length,
+        );
+        assert(
+          dto.policy.redactedFields.every((field) =>
+            [
+              'path',
+              'downstreamService',
+              'requestId',
+              'consumerId',
+              'traceId',
+              'spanId',
+            ].includes(field),
+          ),
+        );
+      }
       assert(['omit', 'retain'].includes(dto.policy.clientIp));
       assert(['omit', 'retain'].includes(dto.policy.userAgent));
       if (failPrivacy === 'save') {
@@ -381,6 +404,7 @@ const handleApiFixture = async (route) => {
       });
       return;
     }
+    const noUsage = emptyConsumerUsage || privacyUsage === 'consumerId';
     const seconds = period === '1h' ? 3600 : period === '7d' ? 604800 : 86400;
     const bucketSeconds = period === '1h' ? 60 : period === '7d' ? 3600 : 900;
     const to = new Date().toISOString();
@@ -397,19 +421,13 @@ const handleApiFixture = async (route) => {
     });
     const series = Array.from({ length: seconds / bucketSeconds }, (_, i) => ({
       ...counts(
-        emptyConsumerUsage
-          ? 0
-          : i === 0
-            ? 12
-            : i === seconds / bucketSeconds - 1
-              ? 8
-              : 0,
-        emptyConsumerUsage ? 0 : i === 0 ? 4 : 0,
+        noUsage ? 0 : i === 0 ? 12 : i === seconds / bucketSeconds - 1 ? 8 : 0,
+        noUsage ? 0 : i === 0 ? 4 : 0,
       ),
       timestamp: new Date(
         Date.parse(from) + i * bucketSeconds * 1000,
       ).toISOString(),
-      rps: emptyConsumerUsage
+      rps: noUsage
         ? 0
         : (i === 0 ? 12 : i === seconds / bucketSeconds - 1 ? 8 : 0) /
           bucketSeconds,
@@ -418,7 +436,7 @@ const handleApiFixture = async (route) => {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        ...counts(emptyConsumerUsage ? 0 : 20, emptyConsumerUsage ? 0 : 4),
+        ...counts(noUsage ? 0 : 20, noUsage ? 0 : 4),
         consumer: {
           id: url.pathname.split('/').at(-2),
           name: 'Storefront app',
@@ -429,6 +447,9 @@ const handleApiFixture = async (route) => {
         to,
         generatedAt: to,
         source: 'persisted_request_logs',
+        privacy: privacyUsage
+          ? { revision: randomUUID(), redactedFields: [privacyUsage] }
+          : undefined,
         retention: {
           days: 30,
           revision: randomUUID(),
@@ -438,9 +459,15 @@ const handleApiFixture = async (route) => {
         bucketSeconds,
         rowLimit: 100000,
         series,
-        topPaths: emptyConsumerUsage
+        topPaths: noUsage
           ? []
-          : [{ ...counts(20, 4), method: 'GET', path: '/orders' }],
+          : [
+              {
+                ...counts(20, 4),
+                method: 'GET',
+                path: privacyUsage === 'path' ? '[redacted]' : '/orders',
+              },
+            ],
       }),
     });
     return;
@@ -1389,6 +1416,28 @@ try {
     path: resolve(artifacts, 'consumer-usage-desktop.png'),
     fullPage: true,
   });
+  privacyUsage = 'path';
+  await usageDialog
+    .getByRole('button', { name: 'Refresh usage', exact: true })
+    .click();
+  await expect(usageDialog).toContainText(
+    'Request paths are hidden by log privacy settings',
+  );
+  await expect(
+    usageDialog.getByRole('region', { name: 'Consumer top paths table' }),
+  ).toContainText('GET [redacted]');
+  privacyUsage = 'consumerId';
+  await usageDialog
+    .getByRole('button', { name: 'Refresh usage', exact: true })
+    .click();
+  await expect(usageDialog).toContainText(
+    'zero recorded counts do not mean there was no traffic',
+  );
+  await expect(usageDialog.getByRole('status')).toContainText(
+    'No recorded requests',
+  );
+  await audit('consumer usage privacy coverage desktop');
+  privacyUsage = '';
   const usageClose = usageDialog.getByRole('button', {
     name: 'Close consumer usage',
     exact: true,
@@ -1540,6 +1589,16 @@ try {
   await privacyDialog
     .getByLabel('Client IP addresses', { exact: true })
     .selectOption('retain');
+  await privacyDialog.getByLabel('Request paths', { exact: true }).check();
+  await privacyDialog
+    .getByLabel('Consumer attribution IDs', { exact: true })
+    .check();
+  await expect(privacyDialog).toContainText(
+    'removes attribution from consumer usage',
+  );
+  await privacyDialog.screenshot({
+    path: resolve(artifacts, 'log-privacy-mobile.png'),
+  });
   failPrivacy = 'save';
   await privacyDialog
     .getByRole('button', { name: 'Save privacy settings', exact: true })
@@ -1550,6 +1609,12 @@ try {
   await expect(
     privacyDialog.getByLabel('Client IP addresses', { exact: true }),
   ).toHaveValue('retain');
+  await expect(
+    privacyDialog.getByLabel('Request paths', { exact: true }),
+  ).toBeChecked();
+  await expect(
+    privacyDialog.getByLabel('Consumer attribution IDs', { exact: true }),
+  ).toBeChecked();
   await audit('Log privacy failed save mobile');
   failPrivacy = 'revision';
   await privacyDialog
@@ -1569,6 +1634,9 @@ try {
     .getByRole('button', { name: 'Save privacy settings', exact: true })
     .click();
   await expect(privacyDialog).toHaveCount(0);
+  await expect(privacySection).toContainText(
+    'Request paths, Consumer attribution IDs',
+  );
   await expect(privacySection).toContainText('Existing archives have expired');
   await expect(privacySection).toContainText(
     'Historical cleanup is in progress',
@@ -1581,6 +1649,9 @@ try {
   await privacyDialog
     .getByLabel('User agents', { exact: true })
     .selectOption('retain');
+  await privacyDialog
+    .getByLabel('Request correlation IDs', { exact: true })
+    .check();
   await page.keyboard.press('Escape');
   await expect(privacyDialog).toHaveCount(0);
   await expect(privacyEdit).toBeFocused();
@@ -1593,6 +1664,15 @@ try {
   await expect(
     privacyDialog.getByLabel('User agents', { exact: true }),
   ).toHaveValue('omit');
+  await expect(
+    privacyDialog.getByLabel('Request correlation IDs', { exact: true }),
+  ).not.toBeChecked();
+  await expect(
+    privacyDialog.getByLabel('Request paths', { exact: true }),
+  ).toBeChecked();
+  await expect(
+    privacyDialog.getByLabel('Consumer attribution IDs', { exact: true }),
+  ).toBeChecked();
   await privacyDialog
     .getByLabel('User agents', { exact: true })
     .selectOption('retain');

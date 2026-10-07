@@ -8,7 +8,7 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
-- Latest verified development work: [PR #83](https://github.com/mayank-rawat98/NovaGate/pull/83), linked to [issue #82](https://github.com/mayank-rawat98/NovaGate/issues/82), aligns trace/metric/alert/archive SQL lifetimes with fixed elapsed 24-hour days. Its branch starts from `dev` at **ccb91854** / merged retention [PR #81](https://github.com/mayank-rawat98/NovaGate/pull/81). Verification passes 1,249 tests, affected backend static/build gates and fresh packaged OrbStack gateway/collector/PostgreSQL/RustFS checks. Formal phase acceptance remains pending.
+- Latest verified development work: [PR #86](https://github.com/mayank-rawat98/NovaGate/pull/86), linked to [issue #84](https://github.com/mayank-rawat98/NovaGate/issues/84), adds six configurable stored request-log metadata fields with immediate privacy-projected views/usage/filters and irreversible bounded erasure. Its branch starts from `dev` at **7047b247** / merged [PR #83](https://github.com/mayank-rawat98/NovaGate/pull/83). The required final affected-project run passes 1,263 tests; all static/build gates, production browser checks and fresh packaged OrbStack/RustFS verification pass. [Issue #85](https://github.com/mayank-rawat98/NovaGate/issues/85) tracks the separately observed non-rejecting storage timeout. Formal phase acceptance remains pending.
 - Alerting development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68), linked to [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), adds durable delivery and the Alerts dashboard.
 - Its issue-linked branch `65-feat-alert-delivery-and-dashboard` was created from `dev` at **653d7a00** / [PR #67](https://github.com/mayank-rawat98/NovaGate/pull/67), which merged the storage/evaluation foundations and roadmap documents. Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) is closed.
 - **AppModule imports AlertsModule**. Authenticated endpoints and workers start after migration; missing dedicated encryption keys disable channel creation/delivery.
@@ -545,6 +545,69 @@ Ignored evidence: `issue82-dst-red.log`, `issue82-dst-green.log`,
 `issue82-runtime-evidence.json`. Formal phase acceptance
 and the full remaining roadmap stay open.
 
+## Sensitive request-log metadata — issue #84 / PR #86
+
+[Issue #84](https://github.com/mayank-rawat98/NovaGate/issues/84) extends the existing
+privacy policy to paths, service names, request IDs, consumer attribution, trace IDs
+and span IDs through [PR #86](https://github.com/mayank-rawat98/NovaGate/pull/86). Its linked branch starts from `dev` at **7047b247** / merged PR #83.
+Legacy two-field policies and empty selections remain compatible; strict validation
+canonicalizes selections, while malformed explicit selections fail closed. Primary
+log identity, receipts, method, status, timings and live security/wire inputs remain
+intact. Gateway start/finish union, collector enforcement, current historical reads,
+archive snapshots/revocation and bounded irreversible erasure share the policy.
+JWT rejection diagnostics no longer copy raw URLs/query strings or bypass IP privacy.
+
+Path/consumer filters and usage operate on the current privacy projection while
+physical erasure is pending. Hidden paths retain totals with redacted groups; hidden
+consumer IDs produce zero observed attribution, explicitly distinguished from no
+traffic in the dashboard. Usage carries privacy coverage and rechecks both policy
+revisions outside its bounded snapshot. Real PostgreSQL/RustFS checks exercise 601
+historical rows, immediate projection, two manual and two automatic filtered archive
+paths, revocation, durable erasure and non-resurrection after later relaxation.
+Settings adds six labelled checkboxes with native mobile dialogs, failed-save and
+revision-input preservation, workspace reset and clear consequences for correlation.
+
+The required final affected-project verification passes **1,263 regression tests** (gateway 584, admin 555, control plane
+114, dashboard 10). All five projects' lint/typecheck gates and four application
+builds pass after correcting new integration response typings. Final focused real
+PostgreSQL/RustFS archive checks pass **19 tests** with unchanged deadlines.
+Production browser checks pass **42 cold loads at sixfold CPU throttling** in
+44,905 ms, followed by a seven-load visual/functional run in 44,146 ms. Both have
+zero runtime or accessibility findings; the mobile metadata dialog was inspected.
+These successful sweeps do not resolve intermittent hydration issue #69.
+
+Fresh OrbStack production images prove policy ACK, preserved wire request IDs,
+metadata-minimized local JSON output, immediate persisted-record enforcement,
+historical cleanup, zero consumer attribution after erasure and **104 masked NDJSON
+records** in an actual private RustFS download. Existing metrics/SSE/reconnect,
+JWT/legacy attribution, raw-log shrink/increase non-resurrection and alert delivery
+also pass. Before metadata erasure, consumer usage matches PostgreSQL at 21 requests,
+ten server errors and P95 12 ms; two automatic archives contain 97 rows including a
+late request. Local alert firing acceptance takes **60.094 seconds**, with six
+accepted deliveries. Gateway/admin/collector all stop with exit 0 and disposable
+runtime resources are removed. Images: gateway `477927fc9327`, admin `ea9ba6b732d8`,
+collector `e1451f66e048`; full hashes remain in the runtime artifact.
+
+An extra archive run during concurrent OrbStack image import timed out in a storage
+request and its cleanup hook. The installed SDK warned after its configured deadline
+without rejecting the request. The failed process was explicitly stopped, its exact
+fixture database removed and the verification storage confirmed empty. The separate
+final archive run passes all 19 tests without increasing deadlines; Nx still reports
+the prior failure as flaky. [Issue #85](https://github.com/mayank-rawat98/NovaGate/issues/85)
+tracks actual rejecting storage deadlines and guaranteed failure-path resource cleanup.
+No storage reliability fix or full phase acceptance is claimed by #84.
+
+Ignored evidence: `issue84-full-tests.log`, `issue84-affected-tests-final.log`,
+`issue84-full-gates.log`,
+`issue84-admin-gates-final.log`, `issue84-admin-final-static.log`,
+`issue84-archive-schedule-final.log`, `issue84-archive-schedule-green.log`,
+`issue84-cleanup.log`, `issue84-browser.log`, `issue84-browser-run.json`,
+`issue84-browser-visual.log`, `issue84-browser-visual-run.json`,
+`dashboard-verification/log-privacy-mobile.png`, `issue84-runtime.log` and
+`issue84-runtime-evidence.json`. Evidence supports this issue's implementation;
+external destination delivery, scalable rollups, phases 5–6 and formal acceptance
+remain open below.
+
 ## Remaining work
 
 ### Next: continue phase 4; retain hydration follow-up #69
@@ -558,8 +621,12 @@ and the full remaining roadmap stay open.
 
 ### Remaining phase 4 work
 
+- Fix storage transport deadlines and guaranteed fixture/resource cleanup in
+  [issue #85](https://github.com/mayank-rawat98/NovaGate/issues/85). A configured
+  SDK request timeout currently warns without rejecting a stalled request.
 - Configurable external S3-compatible tenant destinations, webhook NDJSON and Datadog
-  exporters, with encrypted rotatable private credentials, delivery history and broader sensitive-field rules.
+  exporters, with encrypted rotatable private credentials, destination payload policies
+  and delivery history. Issue #84 implements stored-metadata field selection.
 - High-volume per-consumer rollups, idempotent ingestion/backfill, retention and
   explicit coverage indicators beyond the bounded persisted-log usage view.
 - Formal acceptance for tracing, two-second live metrics, 90-second actual alert delivery,
@@ -590,8 +657,10 @@ and the full remaining roadmap stay open.
 - Team RBAC, scoped automation tokens and immutable audit history.
 - Configuration preview/diff/rollback, drift detection, atomic reconciliation and
   verified last-known-good routing during control-plane outages.
-- Extend IP/user-agent privacy to broader sensitive-field rules; complete secret-management controls and storage encryption where
-  supported, backup/restore drills and documented operational recovery.
+- Complete destination-specific payload/secret-management controls and storage
+  encryption where supported, backup/restore drills and operational recovery.
+  Stored request-log IP/user-agent and metadata privacy are implemented in #78/#84;
+  bodies/arbitrary headers are not collected by this log product.
 - AI token/cost budgets, provider fallback, sensitive-data handling and MCP policy controls.
 - Continue modern accessible dashboard UX for every new capability; mobile, keyboard,
   reduced-motion, contrast and real-user usability verification.
