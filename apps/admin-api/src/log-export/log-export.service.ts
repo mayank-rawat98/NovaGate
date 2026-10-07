@@ -2,7 +2,7 @@ import {
   retentionProfile,
   RETENTION_CUTOFF_SQL,
 } from '../log-retention/log-retention.policy';
-import { redactRequestLog } from '@api-gateway/shared-types';
+import { logPrivacyPolicy, redactRequestLog } from '@api-gateway/shared-types';
 import {
   Injectable,
   BadRequestException,
@@ -532,6 +532,7 @@ export class LogExportService
       ];
       const timeColumn =
         row.time_basis === 'receipt' ? '"receivedAt"' : 'timestamp';
+      const hidden = logPrivacyPolicy(row.privacy_policy).redactedFields ?? [];
       const conditions = [
         `${timeColumn} >= $1::timestamptz`,
         `${timeColumn} < $2::timestamptz`,
@@ -544,10 +545,11 @@ export class LogExportService
       if (row.filter.pathPrefix !== undefined) {
         params.push(row.filter.pathPrefix);
         conditions.push(
-          `LEFT(path,LENGTH($${params.length}::text))=$${params.length}`,
+          `LEFT(${hidden.includes('path') ? "'[redacted]'" : 'path'},LENGTH($${params.length}::text))=$${params.length}`,
         );
       }
       if (row.filter.consumerId !== undefined) {
+        if (hidden.includes('consumerId')) conditions.push('FALSE');
         params.push(row.filter.consumerId);
         conditions.push(`"consumerId"=$${params.length}`);
       }

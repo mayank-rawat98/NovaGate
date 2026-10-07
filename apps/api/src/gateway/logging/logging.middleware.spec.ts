@@ -3,6 +3,8 @@ import {
   redactRequestLog,
   stricterLogPrivacy,
   validateLogPrivacy,
+  LOG_REDACTED_FIELDS,
+  type LogPrivacyPolicy,
 } from '@api-gateway/shared-types';
 import { EventEmitter } from 'node:events';
 import { Logger } from '@nestjs/common';
@@ -130,6 +132,121 @@ describe('HTTP response lifetime observation', () => {
         { clientIp: 'omit', userAgent: 'retain' },
       ),
     ).toEqual({ clientIp: 'omit', userAgent: 'omit' });
+  });
+  it.each([
+    null,
+    'path',
+    {},
+    ['id'],
+    ['path', 'path'],
+    ['path', 1],
+    Array(7).fill('path'),
+  ])(
+    'rejects malformed metadata selections and hides metadata on malformed configuration: %#',
+    (redactedFields) => {
+      const policy = {
+        clientIp: 'retain',
+        userAgent: 'retain',
+        redactedFields,
+      };
+      expect(() => validateLogPrivacy(policy)).toThrow();
+      expect(logPrivacyPolicy(policy)).toEqual({
+        clientIp: 'omit',
+        userAgent: 'omit',
+        redactedFields: [...LOG_REDACTED_FIELDS],
+      });
+    },
+  );
+  it('normalizes optional selections without changing legacy policies or permitting identity/receipt removal', () => {
+    const legacy = { clientIp: 'retain', userAgent: 'omit' };
+    expect(validateLogPrivacy({ ...legacy, redactedFields: [] })).toEqual(
+      legacy,
+    );
+    expect(
+      validateLogPrivacy({ ...legacy, redactedFields: ['traceId', 'path'] }),
+    ).toEqual({ ...legacy, redactedFields: ['path', 'traceId'] });
+    for (const field of [
+      'id',
+      'timestamp',
+      'receivedAt',
+      'statusCode',
+      'method',
+      '__proto__',
+    ])
+      expect(() =>
+        validateLogPrivacy({ ...legacy, redactedFields: [field] }),
+      ).toThrow();
+  });
+  it('redacts every supported metadata field without mutating recorded originals', () => {
+    const raw = Object.freeze({
+      id: 'primary',
+      timestamp: 'original-time',
+      statusCode: 503,
+      method: 'GET',
+      path: '/safe',
+      requestId: 'correlation',
+      consumerId: 'consumer',
+      downstreamService: 'service',
+      traceId: 'trace',
+      spanId: 'span',
+    });
+    const output = redactRequestLog(raw, {
+      clientIp: 'omit',
+      userAgent: 'omit',
+      redactedFields: [...LOG_REDACTED_FIELDS],
+    });
+    expect(output).toEqual({
+      id: 'primary',
+      timestamp: 'original-time',
+      statusCode: 503,
+      method: 'GET',
+      path: '[redacted]',
+      requestId: '[redacted]',
+      clientIp: '[redacted]',
+    });
+    expect(raw.path).toBe('/safe');
+    expect(raw.consumerId).toBe('consumer');
+  });
+  it('applies the union of start/finish metadata omissions to local output while preserving security inputs and wire correlation', () => {
+    let policy: LogPrivacyPolicy = {
+      clientIp: 'retain',
+      userAgent: 'retain',
+      redactedFields: ['path', 'requestId'],
+    };
+    const f = fixture(
+      () => 'tenant',
+      () => ({ logPrivacy: policy }),
+    );
+    const requestId = f.req.headers['x-request-id'];
+    f.req.user = {
+      id: 'provider',
+      consumerId: '56789012-1234-1234-1234-123456789abc',
+    };
+    f.res.locals.routePattern = '/users/:id';
+    policy = {
+      clientIp: 'omit',
+      userAgent: 'omit',
+      redactedFields: ['consumerId', 'traceId', 'spanId', 'downstreamService'],
+    };
+    f.res.emit('finish');
+    const entry = f.telemetry.logRequest.mock.calls[0][0];
+    expect(entry.path).toBe('[redacted]');
+    expect(entry.requestId).toBe('[redacted]');
+    expect(entry).not.toHaveProperty('consumerId');
+    expect(f.req.user.consumerId).toBe('56789012-1234-1234-1234-123456789abc');
+    expect(f.req.headers['x-request-id']).toBe(requestId);
+    expect(f.req.ip).toBe('127.0.0.1');
+    expect(
+      jest
+        .mocked(Logger.prototype.log)
+        .mock.calls.map((c) => c[0])
+        .join(''),
+    ).not.toContain('/users/:id');
+    expect(f.metrics.incrementHttpRequests).toHaveBeenCalledWith(
+      'GET',
+      '/users/:id',
+      499,
+    );
   });
   it('does not label an arbitrary authenticated principal as a registered consumer', () => {
     const f = fixture();

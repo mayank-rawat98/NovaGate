@@ -17,7 +17,10 @@ import type {
 import { DataSource } from 'typeorm';
 import { tenantSchema } from '../tenants/tenant-schema';
 
-import { CONSUMER_ANALYTICS_ROW_LIMIT } from '@api-gateway/shared-types';
+import {
+  CONSUMER_ANALYTICS_ROW_LIMIT,
+  logPrivacyPolicy,
+} from '@api-gateway/shared-types';
 export { CONSUMER_ANALYTICS_ROW_LIMIT } from '@api-gateway/shared-types';
 const PERIODS = {
   '1h': { seconds: 3600, bucket: 60 },
@@ -114,12 +117,19 @@ export class ConsumerAnalyticsService implements OnModuleDestroy {
             manager,
             schema.slice(7).replace(/_/g, '-'),
           );
+          const [privacy] = await manager.query(
+            'SELECT "logPrivacy","logPrivacyRevision" FROM public.tenants WHERE id=$1',
+            [schema.slice(7).replace(/_/g, '-')],
+          );
+          if (!privacy) throw new NotFoundException('Workspace not found');
+          const hidden =
+            logPrivacyPolicy(privacy.logPrivacy).redactedFields ?? [];
           const [row] = await manager.query(
             `WITH selected AS MATERIALIZED (
           SELECT timestamp,LEFT(COALESCE(method,'UNKNOWN'),16) AS method,
-            LEFT(split_part(COALESCE(path,'/'), '?', 1),512) AS path,"statusCode",
+            CASE WHEN $8::boolean THEN '[redacted]' ELSE LEFT(split_part(COALESCE(path,'/'), '?', 1),512) END AS path,"statusCode",
             CASE WHEN "responseTimeMs">=0 THEN "responseTimeMs" END AS "responseTimeMs"
-          FROM ${schema}.request_logs WHERE "consumerId"=$1 AND timestamp>=$2::timestamptz AND timestamp<$3::timestamptz AND "receivedAt">=$7::timestamptz
+          FROM ${schema}.request_logs WHERE NOT $9::boolean AND "consumerId"=$1 AND timestamp>=$2::timestamptz AND timestamp<$3::timestamptz AND "receivedAt">=$7::timestamptz
           ORDER BY timestamp DESC,id DESC LIMIT $4
         ), cardinality AS (SELECT COUNT(*)::integer AS matched FROM selected),
         supported AS MATERIALIZED (SELECT * FROM selected WHERE (SELECT matched FROM cardinality)<$4),
@@ -146,6 +156,8 @@ export class ConsumerAnalyticsService implements OnModuleDestroy {
               seconds,
               bucket,
               profile.cutoff,
+              hidden.includes('path'),
+              hidden.includes('consumerId'),
             ],
           );
           if (row.matched > CONSUMER_ANALYTICS_ROW_LIMIT)
@@ -155,6 +167,10 @@ export class ConsumerAnalyticsService implements OnModuleDestroy {
           return {
             ...row.totals,
             retention: retentionCoverage(profile),
+            privacy: {
+              revision: privacy.logPrivacyRevision,
+              redactedFields: hidden,
+            },
             consumer: {
               id: consumer.id,
               name: consumer.name,
@@ -178,14 +194,18 @@ export class ConsumerAnalyticsService implements OnModuleDestroy {
           "SET LOCAL statement_timeout='3s'; SET LOCAL lock_timeout='1s'",
         );
         const [row] = await manager.query(
-          'SELECT "logRetentionRevision"=$2::uuid AS valid FROM public.tenants WHERE id=$1',
-          [schema.slice(7).replace(/_/g, '-'), result.retention?.revision],
+          'SELECT "logRetentionRevision"=$2::uuid AND "logPrivacyRevision"=$3::uuid AS valid FROM public.tenants WHERE id=$1',
+          [
+            schema.slice(7).replace(/_/g, '-'),
+            result.retention?.revision,
+            result.privacy?.revision,
+          ],
         );
         return row?.valid;
       });
       if (!valid)
         throw new ServiceUnavailableException(
-          'Log retention changed. Retry consumer usage.',
+          'Log privacy or retention changed. Retry consumer usage.',
         );
       return result;
     } catch (error) {

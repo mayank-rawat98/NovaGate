@@ -539,6 +539,96 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
   }
+  it('enforces all selected metadata omissions on an authenticated legacy log frame', async () => {
+    const id = randomUUID(),
+      consumerId = randomUUID();
+    const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
+    const [{ logPrivacy: previous }] = await ds.query(
+      'SELECT "logPrivacy" FROM public.tenants WHERE id=$1',
+      [tenantId],
+    );
+    try {
+      await ds.query('UPDATE public.tenants SET "logPrivacy"=$2 WHERE id=$1', [
+        tenantId,
+        JSON.stringify({
+          clientIp: 'omit',
+          userAgent: 'omit',
+          redactedFields: [
+            'path',
+            'downstreamService',
+            'requestId',
+            'consumerId',
+            'traceId',
+            'spanId',
+          ],
+        }),
+      ]);
+      const { ws } = await connectTraceGateway();
+      ws.send(
+        JSON.stringify({
+          type: 'logs',
+          tenantId: secondId,
+          payload: [
+            {
+              id,
+              consumerId,
+              method: 'GET',
+              path: '/historical-private',
+              requestId: randomUUID(),
+              downstreamService: 'private-service',
+              traceId: '0123456789abcdef0123456789abcdef',
+              spanId: '0123456789abcdef',
+              statusCode: 503,
+              responseTimeMs: 12,
+              clientIp: '192.0.2.123',
+              userAgent: 'private-agent',
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        }),
+      );
+      await until(
+        async () =>
+          (
+            await ds.query(
+              `SELECT id FROM ${schema}.request_logs WHERE id=$1`,
+              [id],
+            )
+          ).length === 1,
+      );
+      const [row] = await ds.query(
+        `SELECT * FROM ${schema}.request_logs WHERE id=$1`,
+        [id],
+      );
+      expect(row).toMatchObject({
+        id,
+        path: '[redacted]',
+        requestId: '[redacted]',
+        consumerId: null,
+        downstreamService: null,
+        traceId: null,
+        spanId: null,
+        clientIp: '[redacted]',
+        userAgent: null,
+        statusCode: 503,
+        responseTimeMs: 12,
+      });
+      expect(row.receivedAt).toBeInstanceOf(Date);
+      expect(
+        (
+          await ds.query(
+            `SELECT id FROM tenant_${secondId.replace(/-/g, '_')}.request_logs WHERE id=$1`,
+            [id],
+          )
+        ).length,
+      ).toBe(0);
+    } finally {
+      await ds.query('UPDATE public.tenants SET "logPrivacy"=$2 WHERE id=$1', [
+        tenantId,
+        JSON.stringify(previous),
+      ]);
+    }
+  });
   it('attributes trace batches to the authenticated tenant and deduplicates replays', async () => {
     const { ws } = await connectTraceGateway();
     const message = { type: 'traces', tenantId: secondId, payload: [trace()] };

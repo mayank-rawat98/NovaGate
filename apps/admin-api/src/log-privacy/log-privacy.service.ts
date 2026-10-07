@@ -144,7 +144,10 @@ export class LogPrivacyService
         if (
           !row.logPrivacyScrubDone &&
           ((previous.clientIp === 'omit' && policy.clientIp === 'retain') ||
-            (previous.userAgent === 'omit' && policy.userAgent === 'retain'))
+            (previous.userAgent === 'omit' && policy.userAgent === 'retain') ||
+            previous.redactedFields?.some(
+              (field) => !policy.redactedFields?.includes(field),
+            ))
         )
           throw new ConflictException(
             'Historical cleanup must finish before retaining previously omitted fields. Try again shortly.',
@@ -194,11 +197,19 @@ export class LogPrivacyService
           const changed: Array<{ id: string }> = await manager.query(
             `WITH page AS (
           SELECT id FROM ${schema}.request_logs WHERE ($1::uuid IS NULL OR id>$1) ORDER BY id LIMIT 500 FOR UPDATE
-        ), scrubbed AS (UPDATE ${schema}.request_logs l SET "clientIp"=CASE WHEN $2 THEN '[redacted]' ELSE "clientIp" END,"userAgent"=CASE WHEN $3 THEN NULL ELSE "userAgent" END FROM page WHERE l.id=page.id RETURNING l.id) SELECT id FROM scrubbed ORDER BY id`,
+        ), scrubbed AS (UPDATE ${schema}.request_logs l SET "clientIp"=CASE WHEN $2 THEN '[redacted]' ELSE "clientIp" END,"userAgent"=CASE WHEN $3 THEN NULL ELSE "userAgent" END,
+          path=CASE WHEN 'path'=ANY($4::text[]) THEN '[redacted]' ELSE path END,
+          "requestId"=CASE WHEN 'requestId'=ANY($4::text[]) THEN '[redacted]' ELSE "requestId" END,
+          "downstreamService"=CASE WHEN 'downstreamService'=ANY($4::text[]) THEN NULL ELSE "downstreamService" END,
+          "consumerId"=CASE WHEN 'consumerId'=ANY($4::text[]) THEN NULL ELSE "consumerId" END,
+          "traceId"=CASE WHEN 'traceId'=ANY($4::text[]) THEN NULL ELSE "traceId" END,
+          "spanId"=CASE WHEN 'spanId'=ANY($4::text[]) THEN NULL ELSE "spanId" END
+          FROM page WHERE l.id=page.id RETURNING l.id) SELECT id FROM scrubbed ORDER BY id`,
             [
               row.logPrivacyScrubCursor,
               policy.clientIp === 'omit',
               policy.userAgent === 'omit',
+              policy.redactedFields ?? [],
             ],
           );
           await manager.query(

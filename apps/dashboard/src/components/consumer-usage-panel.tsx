@@ -35,6 +35,15 @@ function UsageDetails({ data }: { data: ConsumerUsageStats }) {
   const selected = data.series[Math.min(bucket, data.series.length - 1)];
   return (
     <>
+      {!!data.privacy?.redactedFields.length && (
+        <p className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+          {data.privacy.redactedFields.includes('consumerId')
+            ? 'Consumer attribution is hidden by log privacy settings. These logs cannot contribute to consumer usage; zero recorded counts do not mean there was no traffic.'
+            : data.privacy.redactedFields.includes('path')
+              ? 'Request paths are hidden by log privacy settings. Usage totals remain available; path groups show redacted values.'
+              : 'Log privacy settings hide selected correlation metadata. Usage reports only recorded observations.'}
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
           ['Recorded requests', number(data.requests), Activity],

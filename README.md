@@ -379,11 +379,12 @@ Browser API calls default to the dashboard's same-origin `/api` rewrite. `NEXT_P
 
 ### Tenant log privacy
 
-Settings → **Log privacy** controls client IP and user-agent retention. Both are
-omitted by default. Security rules and authentication still receive the original
-request; consumer IDs, request/trace correlation, route patterns and timings remain
-available. Explicit retention applies to future observations and cannot recover erased
-values. Updated gateways enforce the policy in their local JSON output and telemetry;
+Settings → **Log privacy** controls client IP and user-agent retention, both omitted
+by default, and six optional metadata fields: request paths, downstream service names,
+request IDs, consumer attribution, trace IDs and span IDs. Security rules and
+authentication still receive the original request. Wire request IDs remain intact;
+log identity, method, status, timings and database receipts are preserved. Explicit
+retention applies to future observations and cannot recover erased values. Updated gateways enforce the policy in their local JSON output and telemetry;
 the collector also enforces the saved policy for older gateway frames.
 
 Saving requires the displayed revision. On a conflict, reload the current revision,
@@ -399,7 +400,24 @@ proven privacy revision expire during upgrade. New downloads require the current
 revision; in-progress downloads recheck eligibility every second, with bounded query
 waits and a two-minute deadline. Client disconnect and shutdown cancel owned streams.
 Storage outages defer physical object removal while API revocation stays effective.
-This controls two known fields; broader sensitive-field rules remain roadmap work.
+Selected paths and request IDs become `[redacted]`; selected optional metadata is
+omitted. Path filters operate on the projected value, and a hidden consumer ID cannot
+match consumer filters. Consumer usage includes the current privacy revision and
+selected fields: hidden paths retain counts with redacted groups, while hidden
+consumer attribution produces zero recorded counts even before historical erasure.
+These zeros do not prove there was no traffic. Usage checks both privacy and retention
+revisions before returning a snapshot and asks for retry after concurrent changes.
+
+The policy API accepts optional `redactedFields` with the six field names
+`path`, `downstreamService`, `requestId`, `consumerId`, `traceId`, `spanId`. Missing
+or empty selections preserve legacy metadata behavior; saves canonicalize order and
+reject duplicates, unknown fields and malformed arrays. Deploy updated admin and
+collector services before enabling the new selections, and updated gateways for local
+output enforcement. Malformed configuration containing a selection fails closed to
+all six fields. Trace storage, metric snapshots, error events, operator diagnostics,
+backups and previously downloaded copies have separate policies. Request bodies and
+arbitrary headers are not collected by this request-log product. External destination
+payload rules, encryption and delivery integrations remain roadmap work.
 Database request-log age retention is available separately under Settings → Log retention.
 Archive TTL remains the operator's existing setting below.
 

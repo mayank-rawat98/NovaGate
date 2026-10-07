@@ -6,9 +6,22 @@ import type {
   LogPrivacyPolicy,
   LogPrivacyState,
 } from '@api-gateway/shared-types';
+import {
+  LOG_REDACTED_FIELDS,
+  logPrivacyPolicy,
+  type LogRedactedField,
+} from '@api-gateway/shared-types';
 import { getLogPrivacy, saveLogPrivacy } from '../lib/api-client';
 import { WorkspaceDialog } from './workspace-dialog';
 import { DataLoadNotice } from './data-load-notice';
+const FIELD_LABELS: Record<LogRedactedField, string> = {
+  path: 'Request paths',
+  downstreamService: 'Downstream service names',
+  requestId: 'Request correlation IDs',
+  consumerId: 'Consumer attribution IDs',
+  traceId: 'Trace IDs',
+  spanId: 'Span IDs',
+};
 export function LogPrivacyPanel({ tenantId }: { tenantId: string }) {
   return tenantId ? (
     <PrivacyWorkspace key={tenantId} tenantId={tenantId} />
@@ -38,7 +51,7 @@ function PrivacyWorkspace({ tenantId }: { tenantId: string }) {
               Log privacy
             </h2>
             <p className="mt-1 text-sm text-slate-600">
-              Choose which client details your request logs retain.
+              Choose which client details and metadata your request logs retain.
             </p>
           </div>
         </div>
@@ -83,6 +96,18 @@ function PrivacyWorkspace({ tenantId }: { tenantId: string }) {
               </dd>
             </div>
           </dl>
+          <div className="mt-3 rounded-2xl border border-emerald-100 bg-white p-4">
+            <p className="text-sm font-medium text-slate-800">
+              Hidden metadata
+            </p>
+            <p className="mt-1 text-sm text-slate-600">
+              {data.policy.redactedFields?.length
+                ? data.policy.redactedFields
+                    .map((field) => FIELD_LABELS[field])
+                    .join(', ')
+                : 'Paths, service names and correlation IDs are retained.'}
+            </p>
+          </div>
           <p className="mt-4 text-sm text-slate-600">
             {data.historicalCleanup === 'retrying'
               ? 'Historical cleanup encountered a temporary failure and will retry. Omitted fields remain hidden from log views.'
@@ -240,6 +265,50 @@ function PrivacyEditor({
               </select>
             </div>
           ))}
+          <fieldset className="rounded-2xl border border-indigo-100 bg-white p-4">
+            <legend className="px-2 font-medium text-slate-900">
+              Hide sensitive metadata
+            </legend>
+            <p className="mb-3 text-sm text-slate-600">
+              Selected fields are hidden from request logs and archives.
+              Filtering uses the redacted values.
+            </p>
+            <div className="space-y-3">
+              {LOG_REDACTED_FIELDS.map((field) => (
+                <label
+                  key={field}
+                  className="flex cursor-pointer items-center gap-3 rounded-xl bg-indigo-50/60 p-3 text-sm text-slate-800"
+                >
+                  <input
+                    type="checkbox"
+                    checked={policy.redactedFields?.includes(field) ?? false}
+                    disabled={busy}
+                    onChange={(event) =>
+                      setPolicy((current) =>
+                        logPrivacyPolicy({
+                          ...current,
+                          redactedFields: LOG_REDACTED_FIELDS.filter(
+                            (candidate) =>
+                              candidate === field
+                                ? event.target.checked
+                                : current.redactedFields?.includes(candidate),
+                          ),
+                        }),
+                      )
+                    }
+                    className="h-4 w-4 accent-indigo-700"
+                  />
+                  {FIELD_LABELS[field]}
+                </label>
+              ))}
+            </div>
+            <p className="mt-3 text-sm text-slate-600">
+              Hiding consumer IDs removes attribution from consumer usage,
+              including historical views. Hiding paths removes top-path detail.
+              Hidden request/trace/span IDs cannot link logs to traces. Trace
+              and error records have separate policies.
+            </p>
+          </fieldset>
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
             <p>
               Saving a changed policy expires all existing archives, cancels

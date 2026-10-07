@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 import pg from 'pg';
 import jwt from 'jsonwebtoken';
 import { startAlertFixture } from './alerts-container-fixture.mjs';
@@ -532,6 +533,8 @@ try {
       return (
         cached?.tenantId === tenant &&
         cached.config?.logPrivacy?.clientIp === policy.clientIp &&
+        JSON.stringify(cached.config?.logPrivacy?.redactedFields ?? []) ===
+          JSON.stringify(policy.redactedFields ?? []) &&
         pending.rowCount === 0
       );
     }, 'Privacy configuration installed and acknowledged by the production gateway');
@@ -747,6 +750,146 @@ try {
       'late-request-time-with-fresh-receipt-is-preserved',
       'durable-bounded-database-cleanup',
     ],
+  };
+  // Extend the production proof after retained attribution/age checks: metadata
+  // erasure is irreversible, so the earlier usage assertions must run first.
+  const redactedFields = [
+    'path',
+    'downstreamService',
+    'requestId',
+    'consumerId',
+    'traceId',
+    'spanId',
+  ];
+  const previousIds = (
+    await db.query(`SELECT id FROM ${schema}.request_logs`)
+  ).rows.map((r) => r.id);
+  await savePrivacy({ clientIp: 'omit', userAgent: 'omit', redactedFields });
+  const wireId = randomUUID();
+  const minimized = await fetch(`${gatewayUrl}/traffic/success`, {
+    headers: {
+      authorization: `Bearer ${usageConsumerKey}`,
+      'x-request-id': wireId,
+      'user-agent': 'metadata-private-agent',
+    },
+  });
+  assert.equal(minimized.status, 200);
+  assert.equal(minimized.headers.get('x-request-id'), wireId);
+  await until(async () => {
+    const fresh = await db.query(
+      `SELECT * FROM ${schema}.request_logs WHERE NOT(id=ANY($1::uuid[]))`,
+      [previousIds],
+    );
+    return (
+      fresh.rowCount > 0 &&
+      fresh.rows.every(
+        (row) =>
+          row.path === '[redacted]' &&
+          row.requestId === '[redacted]' &&
+          row.consumerId === null &&
+          row.downstreamService === null &&
+          row.traceId === null &&
+          row.spanId === null,
+      )
+    );
+  }, 'Production authenticated metadata-redacted observations preserve wire correlation');
+  await until(async () => {
+    privacyState = await (await fetch(privacyUrl, { headers })).json();
+    const unredacted = await db.query(
+      `SELECT 1 FROM ${schema}.request_logs WHERE path IS DISTINCT FROM '[redacted]' OR "requestId" IS DISTINCT FROM '[redacted]' OR "consumerId" IS NOT NULL OR "downstreamService" IS NOT NULL OR "traceId" IS NOT NULL OR "spanId" IS NOT NULL LIMIT 1`,
+    );
+    return (
+      privacyState.historicalCleanup === 'complete' && unredacted.rowCount === 0
+    );
+  }, 'Production metadata cleanup permanently erases attribution and correlation');
+  const privateUsage = await (
+    await fetch(
+      `${adminUrl}/tenants/${tenant}/consumers/${usageConsumer}/stats?period=1h`,
+      { headers },
+    )
+  ).json();
+  assert.equal(privateUsage.requests, 0);
+  assert.deepEqual(privateUsage.privacy.redactedFields, redactedFields);
+  assert.equal(privateUsage.privacy.revision, privacyState.revision);
+  const maskedRequest = await fetch(
+    `${adminUrl}/tenants/${tenant}/log-exports`,
+    {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        from: new Date(Date.now() - 3600000).toISOString(),
+        to: new Date().toISOString(),
+      }),
+    },
+  );
+  assert.equal(maskedRequest.status, 201);
+  const maskedJob = await maskedRequest.json();
+  await until(async () => {
+    const jobs = await (
+      await fetch(`${adminUrl}/tenants/${tenant}/log-exports`, { headers })
+    ).json();
+    return jobs.jobs.some(
+      (job) =>
+        job.id === maskedJob.id &&
+        job.status === 'completed' &&
+        job.rowCount > 0,
+    );
+  }, 'Production private metadata-redacted archive');
+  const maskedDownload = await fetch(
+    `${adminUrl}/tenants/${tenant}/log-exports/${maskedJob.id}/download`,
+    { headers },
+  );
+  assert.equal(maskedDownload.status, 200);
+  const maskedRecords = (await maskedDownload.text())
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  assert(maskedRecords.length > 0);
+  for (const record of maskedRecords) {
+    assert.equal(record.path, '[redacted]');
+    assert.equal(record.requestId, '[redacted]');
+    for (const field of [
+      'consumerId',
+      'downstreamService',
+      'traceId',
+      'spanId',
+      'userAgent',
+    ])
+      assert.equal(Object.hasOwn(record, field), false);
+  }
+  const gatewayOutput = stripVTControlCharacters(docker('logs', gateway));
+  const localRecords = gatewayOutput.split('\n').flatMap((line) => {
+    const start = line.indexOf('{');
+    if (start < 0) return [];
+    try {
+      const item = JSON.parse(line.slice(start));
+      return item.path === '[redacted]' && item.requestId === '[redacted]'
+        ? [item]
+        : [];
+    } catch {
+      return [];
+    }
+  });
+  assert(localRecords.length > 0);
+  assert(
+    localRecords.every(
+      (record) =>
+        !Object.hasOwn(record, 'consumerId') &&
+        !Object.hasOwn(record, 'downstreamService') &&
+        !Object.hasOwn(record, 'traceId') &&
+        !Object.hasOwn(record, 'spanId') &&
+        !Object.hasOwn(record, 'userAgent') &&
+        record.clientIp === '[redacted]',
+    ),
+  );
+  logPrivacy.sensitiveFields = {
+    redactedFields,
+    gatewayConfigAcknowledged: true,
+    wireRequestIdPreserved: true,
+    historicalCleanup: 'complete',
+    consumerRequests: 0,
+    archiveRecords: maskedRecords.length,
+    localRecords: localRecords.length,
   };
   const shutdown = [];
   for (const [name, role] of [
