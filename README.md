@@ -399,8 +399,9 @@ proven privacy revision expire during upgrade. New downloads require the current
 revision; in-progress downloads recheck eligibility every second, with bounded query
 waits and a two-minute deadline. Client disconnect and shutdown cancel owned streams.
 Storage outages defer physical object removal while API revocation stays effective.
-This controls two known fields; broader sensitive-field rules and raw-log age retention
-remain roadmap work. Archive TTL remains the operator's existing setting below.
+This controls two known fields; broader sensitive-field rules remain roadmap work.
+Database request-log age retention is available separately under Settings → Log retention.
+Archive TTL remains the operator's existing setting below.
 
 ### Private log archives with RustFS
 
@@ -677,3 +678,11 @@ backlog in one bounded step. Increasing retention does not recreate missing wind
 Upgrade the admin schema/application before using the new settings. Archives with
 unknown legacy retention revision are expired once on upgrade; recreate them from
 retained data if needed. User-agent/IP privacy rules remain independent of age retention.
+
+### Telemetry lifetimes and time zones
+
+A retention day always means 24 elapsed hours. Trace/metric retention, alert history
+and private archive lifetimes use this same rule across database time zones and
+spring/autumn daylight-saving changes. Their lifetimes remain separate from the
+tenant raw-log setting. New manual and scheduled archives receive the exact configured
+download lifetime when queued; existing archive expiry timestamps remain unchanged.

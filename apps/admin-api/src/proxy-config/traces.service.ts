@@ -222,7 +222,7 @@ export class TracesService {
           }
         >
       >(
-        `SELECT "traceId", "spanId", "parentSpanId", name, kind, timestamp, "durationMs", status, attributes FROM ${schema}.trace_spans WHERE "traceId" = $1 AND timestamp >= NOW() - make_interval(days => $3) ORDER BY timestamp, "spanId" LIMIT $2`,
+        `SELECT "traceId", "spanId", "parentSpanId", name, kind, timestamp, "durationMs", status, attributes FROM ${schema}.trace_spans WHERE "traceId" = $1 AND timestamp >= NOW() - make_interval(secs => $3::integer * 86400) ORDER BY timestamp, "spanId" LIMIT $2`,
         [
           traceId,
           this.settings.maxDetailSpans + 1,

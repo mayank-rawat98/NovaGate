@@ -104,3 +104,9 @@ Malformed legacy principal IDs become unassigned logs; keep their request record
 receipt lock/default behavior and duplicate IDs intact. Arbitrary gateway/provider
 principals are not consumer IDs. Verify mixed batches on actual modern and legacy
 schemas and through authenticated production fixture sockets.
+
+Issue #82 aligns trace/metric SQL retention with elapsed 24-hour days. Use
+`make_interval(secs => $1::integer * 86400)` in both active and idle cleanup;
+calendar-day intervals shift cutoffs during daylight-saving changes. Keep inclusive
+retained boundaries, existing advisory locks, row caps and deadlines. Real PostgreSQL
+regressions cover UTC/New York/Kolkata sessions and spring/autumn microsecond edges.

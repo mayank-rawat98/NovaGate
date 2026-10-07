@@ -119,7 +119,7 @@ enabled channels remain available in dashboard history without external delivery
 Each evaluation prunes expired/over-limit events and matching public delivery jobs
 in the same transaction. Idle cleanup also visits at most 64 public tenant IDs per
 minute using a UUID cursor; it shares storage admission, validates schemas, prevents
-overlap and continues after a tenant failure. Keep 30 days and at most 1,000 events
+overlap and continues after a tenant failure. Keep 30 fixed elapsed 24-hour days and at most 1,000 events
 per tenant, with delivery rows cascading away. Shutdown stops the timer and awaits
 actual evaluation and retention work. Bootstrap ordering and end-to-end delivery
 are verified with the three-service production-container fixture.
@@ -204,3 +204,9 @@ receivers to check real measured traffic through firing, a five-second webhook
 retry, all three notification formats, healthy recovery and graceful shutdown.
 It records sanitized timings and image IDs in `.local-work/metrics-container-evidence.json`.
 No real Slack webhook, provider mailbox or production credential is used.
+
+Issue #82 uses 720-hour SQL intervals for the thirty-day history lifetime in reads,
+delivery eligibility and physical cleanup. This preserves the same inclusive boundary
+across database time zones and daylight-saving transitions. Real PostgreSQL service
+regressions exercise spring/autumn boundaries and cancel expired deliveries before
+transport, while keeping the exact-cutoff event available.

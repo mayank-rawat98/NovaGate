@@ -220,7 +220,7 @@ export class TraceIngestionService implements OnModuleInit, OnModuleDestroy {
               [`trace-ingestion:${tenantId}`],
             );
             await manager.query(
-              `DELETE FROM ${schema}.trace_spans WHERE timestamp < NOW() - make_interval(days => $1)`,
+              `DELETE FROM ${schema}.trace_spans WHERE timestamp < NOW() - make_interval(secs => $1::integer * 86400)`,
               [this.settings.retentionDays],
             );
           });
@@ -263,7 +263,7 @@ export class TraceIngestionService implements OnModuleInit, OnModuleDestroy {
           [`trace-ingestion:${tenantId}`],
         );
         await manager.query(
-          `DELETE FROM ${schema}.trace_spans WHERE timestamp < NOW() - make_interval(days => $1)`,
+          `DELETE FROM ${schema}.trace_spans WHERE timestamp < NOW() - make_interval(secs => $1::integer * 86400)`,
           [this.settings.retentionDays],
         );
         const values = spans.map((span) => [

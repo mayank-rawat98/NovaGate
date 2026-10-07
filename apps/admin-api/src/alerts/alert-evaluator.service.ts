@@ -288,7 +288,7 @@ export class AlertEvaluatorService
   ): Promise<void> {
     if (schema !== tenantSchema(tenantId))
       throw new Error('Invalid alert retention tenant.');
-    const expired = `e."createdAt" < clock_timestamp() - INTERVAL '30 days' OR e.id IN
+    const expired = `e."createdAt" < clock_timestamp() - INTERVAL '720 hours' OR e.id IN
       (SELECT id FROM ${schema}.alert_events ORDER BY "createdAt" DESC, id DESC OFFSET 1000)`;
     await manager.query(
       `DELETE FROM public.alert_delivery_schedule q USING ${schema}.alert_deliveries d, ${schema}.alert_events e
