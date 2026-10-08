@@ -3,6 +3,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { LOG_PRIVACY_SCHEMA } from '../log-privacy/log-privacy-schema';
 import { LOG_EXPORT_SCHEMA } from '../log-export/log-export-schema';
+import { EXPORT_DESTINATION_SCHEMA } from '../log-export/export-destination-schema';
 import { traceSchemaSql } from './trace-schema';
 import { ALERT_SCHEDULE_SCHEMA, alertSchemaSql } from '../alerts/alert-schema';
 import { tenantSchema } from '../tenants/tenant-schema';
@@ -36,6 +37,7 @@ export class MigrationService implements OnModuleInit {
       await manager.query(`CREATE UNIQUE INDEX IF NOT EXISTS pending_config_updates_tenant_unique
         ON public.pending_config_updates ("tenantId")`);
       await manager.query(LOG_EXPORT_SCHEMA);
+      await manager.query(EXPORT_DESTINATION_SCHEMA);
       await manager.query(LOG_PRIVACY_SCHEMA);
       await manager.query(LOG_RETENTION_SCHEMA);
       await manager.query(ALERT_SCHEDULE_SCHEMA);

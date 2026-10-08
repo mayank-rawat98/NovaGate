@@ -9,6 +9,7 @@ import pg from 'pg';
 import jwt from 'jsonwebtoken';
 import { startAlertFixture } from './alerts-container-fixture.mjs';
 import { configureArchiveFixture } from './log-export-container-fixture.mjs';
+import { exportDestinationFixture } from './export-destinations-container-fixture.mjs';
 
 // Production images, disposable infrastructure and fixture credentials only.
 const docker = (...args) =>
@@ -32,6 +33,7 @@ const tenant = randomUUID();
 const schema = `tenant_${tenant.replaceAll('-', '_')}`;
 const secret = 'metric-container-fixture-session-secret-32-characters';
 const apiKey = randomUUID();
+const destinationsFixture = exportDestinationFixture();
 const usageConsumer = randomUUID();
 const usageConsumerKey = `gw_${tenant}_verification-only`;
 const headers = {
@@ -226,6 +228,7 @@ try {
       'OBJECT_STORAGE_CREATE_BUCKET=true',
 
       ...alertFixture.environment,
+      ...destinationsFixture.environment,
     ],
     [3001],
   );
@@ -234,6 +237,12 @@ try {
     async () => (await fetch(`${adminUrl}/health`)).ok,
     'Production admin startup',
   );
+  const exportDestinations = await destinationsFixture.verify({
+    adminUrl,
+    tenant,
+    headers,
+    db,
+  });
   const alertConfiguration = await alertFixture.configure(
     adminUrl,
     headers,
@@ -933,6 +942,7 @@ try {
         consumerUsage,
         logPrivacy,
         logRetention,
+        exportDestinations,
         consumerAttribution: {
           mappedJwt: true,
           unrelatedPrincipalRetained: true,
