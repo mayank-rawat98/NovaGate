@@ -1,6 +1,6 @@
 # NovaGate progress and remaining work
 
-Updated: **7 October 2026** (Asia/Calcutta).
+Updated: **8 October 2026** (Asia/Calcutta).
 
 This report distinguishes merged development work, the alerting foundation checkpoint,
 and formal acceptance. The detailed roadmap is [implementation.md](implementation.md).
@@ -8,7 +8,9 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
-- Latest verified development work: [PR #87](https://github.com/mayank-rawat98/NovaGate/pull/87), linked to [issue #85](https://github.com/mayank-rawat98/NovaGate/issues/85), fixes non-rejecting storage timeouts and shutdown/resource cleanup. Its branch starts from `dev` at **2affcb71** / merged [PR #86](https://github.com/mayank-rawat98/NovaGate/pull/86), which implements six-field stored-metadata privacy. The final affected-project run passes 568 admin tests, including twelve actual stalled-network checks and a real multipart RustFS round trip; backend static/build gates and fresh packaged OrbStack/RustFS/metrics/alerts/privacy/retention verification pass. The unchanged gateway/collector/dashboard retain issue #84's 1,263-test and 42-plus-seven-load browser checkpoint. Formal phase acceptance remains pending.
+- Current [issue #88](https://github.com/mayank-rawat98/NovaGate/issues/88) adds secure external destination draft configuration from `dev` at **0c1f6dce** / merged PR #87. All 1,358 workspace tests pass (650 admin, 584 gateway, 114 control-plane, 10 dashboard), alongside five projects' lint/typecheck and four app builds. The final focused suite passes 82 checks, including real HTTP/PostgreSQL key retirement, contended updates and capacity across two independent service instances. Packaged verification and the linked PR checkpoint will be recorded after completion. Provider delivery and Settings controls remain pending; drafts are explicitly inactive.
+
+- Previous verified development checkpoint: [PR #87](https://github.com/mayank-rawat98/NovaGate/pull/87), linked to [issue #85](https://github.com/mayank-rawat98/NovaGate/issues/85), fixes non-rejecting storage timeouts and shutdown/resource cleanup. Its branch starts from `dev` at **2affcb71** / merged [PR #86](https://github.com/mayank-rawat98/NovaGate/pull/86), which implements six-field stored-metadata privacy. The final affected-project run passes 568 admin tests, including twelve actual stalled-network checks and a real multipart RustFS round trip; backend static/build gates and fresh packaged OrbStack/RustFS/metrics/alerts/privacy/retention verification pass. The unchanged gateway/collector/dashboard retain issue #84's 1,263-test and 42-plus-seven-load browser checkpoint. Formal phase acceptance remains pending.
 - Alerting development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68), linked to [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), adds durable delivery and the Alerts dashboard.
 - Its issue-linked branch `65-feat-alert-delivery-and-dashboard` was created from `dev` at **653d7a00** / [PR #67](https://github.com/mayank-rawat98/NovaGate/pull/67), which merged the storage/evaluation foundations and roadmap documents. Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) is closed.
 - **AppModule imports AlertsModule**. Authenticated endpoints and workers start after migration; missing dedicated encryption keys disable channel creation/delivery.
@@ -669,6 +671,34 @@ Ignored evidence: `issue85-deadline-red.log`, `issue85-storage-green.log`,
 not phase 4 or full-roadmap acceptance. External destination delivery, scalable
 rollups, later phases and formal acceptance remain open below.
 
+## Issue #88 — secure external destination configuration
+
+- Added shared contracts for write-only S3-compatible credentials (including session
+  tokens), signed NDJSON webhooks and the explicit Datadog site list. Reads return
+  only name/type/origin or site, revision/timestamps and credential readability.
+- Dedicated four-key AES-256-GCM keyring uses one active write key. Tenant,
+  destination, provider type, key identifier and namespace authenticate ciphertext;
+  neither alert envelopes nor another tenant/destination/provider can substitute it.
+  Credentials never appear in API reads or safe validation errors.
+- Tenant-session no-store CRUD and explicit key rewrap enforce exact revisions and
+  complete same-provider replacements. Lost/retired keys mark drafts unavailable;
+  replacement/removal remains possible. Metadata edits preserve the envelope.
+- Ten live drafts per tenant; database advisory admission works across independent
+  admin instances. Eight admitted operations per instance, three-second SQL and
+  one-second lock budgets bound work. Contention returns 503 without mutation.
+  Shutdown drains admitted work and disposes keys. Deletion clears the live
+  encrypted credential field while preserving a nonsecret identity tombstone.
+- Startup schema creation is idempotent and preserves rotated records. Compose
+  forwards the two dedicated encryption settings, with credential writes disabled
+  until both are supplied. Added the operator API/rotation guide under log-export.
+- Full workspace verification: **1,358 tests**, all five lint/typecheck targets and
+  four app builds; final focused checks: **82 tests**. Evidence lives in ignored
+  `.local-work/issue88-all-tests.log`, `issue88-all-static.log`,
+  `issue88-all-builds.log` and `issue88-focused-final.log`.
+- Packaged production-image verification is in progress. External connections are
+  **drafts**, `deliveryAvailable: false`; storing them is not proof of provider
+  delivery, a modern Settings editor or phase acceptance.
+
 ## Remaining work
 
 ### Next: continue phase 4; retain hydration follow-up #69
@@ -682,9 +712,10 @@ rollups, later phases and formal acceptance remain open below.
 
 ### Remaining phase 4 work
 
-- Configurable external S3-compatible tenant destinations, webhook NDJSON and Datadog
-  exporters, with encrypted rotatable private credentials, destination payload policies
-  and delivery history. Issue #84 implements stored-metadata field selection.
+- Complete the Settings editor and delivery workers for stored external S3-compatible,
+  webhook NDJSON and Datadog drafts. Issue #88 supplies dedicated encrypted credentials
+  and revision-aware configuration; DNS-pinned egress, destination payload policies,
+  delivery identity/retries/history and retention are still required. Issue #84 implements stored-metadata field selection.
 - High-volume per-consumer rollups, idempotent ingestion/backfill, retention and
   explicit coverage indicators beyond the bounded persisted-log usage view.
 - Formal acceptance for tracing, two-second live metrics, 90-second actual alert delivery,
