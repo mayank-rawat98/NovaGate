@@ -8,7 +8,7 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
-- Current [issue #91](https://github.com/mayank-rawat98/NovaGate/issues/91) adds modern Settings controls for encrypted export destination drafts from `dev` at **c4c03406** / merged PR #89. Production browser verification passes 42 cold loads under sixfold CPU throttling, all provider form/revision/availability/capacity flows and interrupted-save/workspace-reset checks, with zero runtime or WCAG A/AA findings. A first run caught failed focus restoration after a saved re-encryption; the source was fixed and the strict assertion remains. Five projects’ lint/typecheck, four application builds, 650 admin tests in a quiescent rerun and the retained 584 gateway/114 control-plane/10 dashboard regressions pass. A final committed-head affected gate and PR evidence will be recorded before merging. Drafts do not deliver logs; #69 hydration, #90 RustFS cleanup and #92 retention fixture deadline/contamination remain open.
+- Current [issue #91](https://github.com/mayank-rawat98/NovaGate/issues/91) adds modern Settings controls for encrypted export destination drafts from `dev` at **c4c03406** / merged PR #89. Production browser verification passes 42 cold loads under sixfold CPU throttling, all provider form/revision/availability/capacity flows and interrupted-save/workspace-reset checks, with zero runtime or WCAG A/AA findings. A first run caught failed focus restoration after a saved re-encryption; the source was fixed and the strict assertion remains. Five projects’ lint/typecheck, four application builds, 650 admin tests in a quiescent rerun and the retained 584 gateway/114 control-plane/10 dashboard regressions pass. The final committed-source affected run passes all 660 admin/dashboard tests; [PR #93](https://github.com/mayank-rawat98/NovaGate/pull/93) records the checkpoint and closes #91. Drafts do not deliver logs; #69 hydration, #90 RustFS cleanup and #92 retention fixture deadline/contamination remain open.
 
 - Previous verified development checkpoint: [PR #89](https://github.com/mayank-rawat98/NovaGate/pull/89), linked to [issue #88](https://github.com/mayank-rawat98/NovaGate/issues/88), adds secure external destination draft configuration from `dev` at **0c1f6dce** / merged PR #87. All 1,358 workspace tests pass (650 admin, 584 gateway, 114 control-plane, 10 dashboard), alongside five projects' lint/typecheck and four app builds. The final focused suite passes 82 checks, including real HTTP/PostgreSQL key retirement, contended updates and capacity across two independent service instances. The final committed-head affected run and packaged OrbStack verification pass. The packaged image proves encrypted draft storage/reads, tenant isolation, revisions, key rewrap/removal and retained metrics/alerts/RustFS/privacy/retention; all three app services exit 0. An earlier RustFS fixture teardown failure is preserved and tracked separately in issue #90. At that checkpoint, provider delivery and Settings controls remained pending; issue #91 implements the editor. Drafts remain explicitly inactive.
 
@@ -769,9 +769,16 @@ rollups, later phases and formal acceptance remain open below.
   timeout, followed by extra event IDs in the next case. [Issue #92](https://github.com/mayank-rawat98/NovaGate/issues/92)
   tracks reproduction and fixture/production ownership investigation. A quiescent
   pass does not establish its cause or close it. No assertion/deadline was relaxed.
-- Final committed-head affected checks and the PR checkpoint are pending. External
-  provider delivery, payload policy/history/retention, high-volume rollups, later
-  phases and full formal all-phase acceptance remain required.
+- [PR #93](https://github.com/mayank-rawat98/NovaGate/pull/93) closes #91. The final affected
+  run on source commit **3c6bd0356d7d862cae7c3e6a9c9b8bad2bcf8147** passes all
+  **660 admin/dashboard tests** with real PostgreSQL/Redis/RustFS available; the
+  unchanged gateway/control-plane retain the 584/114-test full-run checkpoint.
+  Evidence: `.local-work/issue91-affected-final.log`. All final commands exit 0.
+  The configured administrator exception permits exact-head merging despite the
+  one-review ruleset; no ruleset or PR/dev CI trigger is changed.
+- External provider delivery, payload policy/history/retention, high-volume rollups,
+  later phases and full formal all-phase acceptance remain required. #69/#90/#92
+  stay open; passing runs do not close their independent investigations.
 
 ## Remaining work
 
