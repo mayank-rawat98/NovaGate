@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { RetentionCaseWork } from './retention-case-work.fixture';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -31,12 +32,13 @@ const beforeTransitions = cases([
 integration(
   'Elapsed-day reads, deliveries and archive lifetimes on PostgreSQL',
   () => {
+    const cases = new RetentionCaseWork();
     const database = 'novagate_admin_time_' + randomUUID().replace(/-/g, '');
     const tenant = randomUUID(),
       schema = tenantSchema(tenant);
     const traceId = '0123456789abcdef0123456789abcdef';
     let root: DataSource, db: DataSource, source: DataSource;
-    let zone: string, now: string;
+    let now: string;
     let rules: AlertRulesService,
       evaluator: AlertEvaluatorService,
       delivery: AlertDeliveryService;
@@ -54,8 +56,6 @@ integration(
       }),
       ALERT_CHANNEL_ACTIVE_KEY: 'fixture',
     });
-    const fixedClock = (sql: string) =>
-      sql.replace(/\b(?:NOW|clock_timestamp)\(\)/gi, `'${now}'::timestamptz`);
 
     beforeAll(async () => {
       root = new DataSource({
@@ -81,24 +81,48 @@ integration(
       await new TenantProvisioningService(db).provisionTenant(tenant);
       await new MigrationService(db).onModuleInit();
     }, 30000);
-    afterEach(async () => {
-      await delivery?.onModuleDestroy();
-      await evaluator?.onModuleDestroy();
-      await rules?.onModuleDestroy();
-      await exports?.onModuleDestroy();
-      await schedules?.onModuleDestroy();
-    });
-    afterAll(async () => {
-      if (db?.isInitialized) await db.destroy();
-      if (root?.isInitialized) {
-        await root.query(
-          'DROP DATABASE IF EXISTS ' + database + ' WITH (FORCE)',
-        );
-        await root.destroy();
+    async function cleanupServices() {
+      const failures: unknown[] = [];
+      for (const service of [delivery, evaluator, rules, exports, schedules]) {
+        try {
+          await service?.onModuleDestroy();
+        } catch (error) {
+          failures.push(error);
+        }
       }
+      if (failures.length)
+        throw new AggregateError(failures, 'Retention service cleanup failed.');
+    }
+    afterEach(() => cases.finish(cleanupServices));
+    afterAll(async () => {
+      const failures: unknown[] = [];
+      const release = async (work: () => Promise<unknown>) => {
+        try {
+          await work();
+        } catch (error) {
+          failures.push(error);
+        }
+      };
+      await release(() => cases.finish(cleanupServices));
+      if (db?.isInitialized) await release(() => db.destroy());
+      if (root?.isInitialized) {
+        await release(() =>
+          root.query('DROP DATABASE IF EXISTS ' + database + ' WITH (FORCE)'),
+        );
+        await release(() => root.destroy());
+      }
+      if (failures.length)
+        throw new AggregateError(failures, 'Retention fixture cleanup failed.');
     });
     async function prepare(input: { zone: string; now: string }) {
-      ({ zone, now } = input);
+      now = input.now;
+      const caseZone = input.zone,
+        caseNow = input.now;
+      const fixedClock = (sql: string) =>
+        sql.replace(
+          /\b(?:NOW|clock_timestamp)\(\)/gi,
+          `'${caseNow}'::timestamptz`,
+        );
       cleanup.mockClear();
       deliver.mockClear();
       const transaction = (
@@ -111,7 +135,9 @@ integration(
           typeof isolationOrFn === 'function' ? isolationOrFn : optionalFn;
         if (!callback) throw new Error('Expected transaction callback');
         const run = async (manager: EntityManager) => {
-          await manager.query("SELECT set_config('TimeZone',$1,true)", [zone]);
+          await manager.query("SELECT set_config('TimeZone',$1,true)", [
+            caseZone,
+          ]);
           return callback({
             query: (sql: string, params?: unknown[]) =>
               manager.query(fixedClock(sql), params),
@@ -156,159 +182,169 @@ integration(
     }
     it.each(afterTransitions)(
       'trace detail retains the inclusive microsecond cutoff: $zone $now',
-      async (input) => {
-        await prepare(input);
-        for (const [index, offset] of [-1, 0, 1].entries())
-          await db.query(
-            `INSERT INTO ${schema}.trace_spans ("traceId","spanId",name,kind,timestamp,"durationMs",status,attributes)
+      (input) =>
+        cases.run(async () => {
+          await prepare(input);
+          for (const [index, offset] of [-1, 0, 1].entries())
+            await db.query(
+              `INSERT INTO ${schema}.trace_spans ("traceId","spanId",name,kind,timestamp,"durationMs",status,attributes)
         VALUES($1,$2,'Boundary','server',$3::timestamptz-INTERVAL '48 hours'+$4*INTERVAL '1 microsecond',1,'ok','{}')`,
-            [traceId, index.toString(16).padStart(16, '1'), now, offset],
+              [traceId, index.toString(16).padStart(16, '1'), now, offset],
+            );
+          const traces = new TracesService(
+            source,
+            new ConfigService({ traceQueries: { retentionDays: 2 } }),
           );
-        const traces = new TracesService(
-          source,
-          new ConfigService({ traceQueries: { retentionDays: 2 } }),
-        );
-        const result = await traces.detail(tenant, traceId);
-        expect(result.spans.map((s) => s.spanId)).toEqual([
-          '1111111111111111',
-          '1111111111111112',
-        ]);
-      },
+          const result = await traces.detail(tenant, traceId);
+          expect(result.spans.map((s) => s.spanId)).toEqual([
+            '1111111111111111',
+            '1111111111111112',
+          ]);
+        }),
     );
     it.each(afterTransitions)(
       'alert read and physical history cleanup agree at the microsecond boundary: $zone $now',
-      async (input) => {
-        await prepare(input);
-        const ids = await alertEvents();
-        for (const id of ids) {
-          const [{ id: deliveryId }] = await db.query(
-            `INSERT INTO ${schema}.alert_deliveries ("eventId","channelName",type,"channelRevision") VALUES($1,'Boundary','webhook',1) RETURNING id`,
-            [id],
-          );
-          await db.query(
-            'INSERT INTO public.alert_delivery_schedule("tenantId","deliveryId") VALUES($1,$2)',
-            [tenant, deliveryId],
-          );
-        }
-        expect((await rules.history(tenant)).map((e) => e.id)).toEqual([
-          ids[2],
-          ids[1],
-        ]);
-        await rules.withTenantTransaction(tenant, (manager, name) =>
-          evaluator.pruneTenant(manager, name, tenant),
-        );
-        expect(
-          (
+      (input) =>
+        cases.run(async () => {
+          await prepare(input);
+          const ids = await alertEvents();
+          for (const id of ids) {
+            const [{ id: deliveryId }] = await db.query(
+              `INSERT INTO ${schema}.alert_deliveries ("eventId","channelName",type,"channelRevision") VALUES($1,'Boundary','webhook',1) RETURNING id`,
+              [id],
+            );
             await db.query(
-              `SELECT id FROM ${schema}.alert_events ORDER BY "createdAt" DESC`,
-            )
-          ).map((e: { id: string }) => e.id),
-        ).toEqual([ids[2], ids[1]]);
-        expect(
-          (await db.query('SELECT * FROM public.alert_delivery_schedule'))
-            .length,
-        ).toBe(2);
-        expect(
-          (await db.query(`SELECT * FROM ${schema}.alert_deliveries`)).length,
-        ).toBe(2);
-      },
+              'INSERT INTO public.alert_delivery_schedule("tenantId","deliveryId") VALUES($1,$2)',
+              [tenant, deliveryId],
+            );
+          }
+          expect((await rules.history(tenant)).map((e) => e.id)).toEqual([
+            ids[2],
+            ids[1],
+          ]);
+          await rules.withTenantTransaction(tenant, (manager, name) =>
+            evaluator.pruneTenant(manager, name, tenant),
+          );
+          expect(
+            (
+              await db.query(
+                `SELECT id FROM ${schema}.alert_events ORDER BY "createdAt" DESC`,
+              )
+            ).map((e: { id: string }) => e.id),
+          ).toEqual([ids[2], ids[1]]);
+          expect(
+            (await db.query('SELECT * FROM public.alert_delivery_schedule'))
+              .length,
+          ).toBe(2);
+          expect(
+            (await db.query(`SELECT * FROM ${schema}.alert_deliveries`)).length,
+          ).toBe(2);
+        }),
     );
     it.each(afterTransitions)(
       'alert delivery rejects expired events before any transport attempt: $zone $now',
-      async (input) => {
-        await prepare(input);
-        const ids = await alertEvents();
-        const channel = await rules.createChannel(tenant, {
-          name: 'Boundary',
-          type: 'webhook',
-          url: 'https://example.test/events',
-          secret: 'fixture-only-signing-secret-at-least-32-bytes',
-        });
-        const deliveries: string[] = [];
-        for (const event of ids) {
-          const [{ id }] = await db.query(
-            `INSERT INTO ${schema}.alert_deliveries ("eventId","channelId","channelName",type,"channelRevision") VALUES($1,$2,'Boundary','webhook',1) RETURNING id`,
-            [event, channel.id],
+      (input) =>
+        cases.run(async () => {
+          await prepare(input);
+          const ids = await alertEvents();
+          const channel = await rules.createChannel(tenant, {
+            name: 'Boundary',
+            type: 'webhook',
+            url: 'https://example.test/events',
+            secret: 'fixture-only-signing-secret-at-least-32-bytes',
+          });
+          const deliveries: string[] = [];
+          for (const event of ids) {
+            const [{ id }] = await db.query(
+              `INSERT INTO ${schema}.alert_deliveries ("eventId","channelId","channelName",type,"channelRevision") VALUES($1,$2,'Boundary','webhook',1) RETURNING id`,
+              [event, channel.id],
+            );
+            await db.query(
+              'INSERT INTO public.alert_delivery_schedule("tenantId","deliveryId","dueAt") VALUES($1,$2,$3)',
+              [tenant, id, now],
+            );
+            deliveries.push(id);
+          }
+          const leases = await delivery.claimDue();
+          expect(leases).toHaveLength(3);
+          for (const id of deliveries) {
+            const lease = leases.find((l) => l.deliveryId === id);
+            if (!lease) throw new Error('Missing claimed boundary delivery');
+            expect(await delivery.deliverLease(lease)).toBe(
+              id !== deliveries[0],
+            );
+          }
+          expect(deliver).toHaveBeenCalledTimes(2);
+          const states = await db.query(
+            `SELECT id,status,attempts FROM ${schema}.alert_deliveries`,
           );
-          await db.query(
-            'INSERT INTO public.alert_delivery_schedule("tenantId","deliveryId","dueAt") VALUES($1,$2,$3)',
-            [tenant, id, now],
-          );
-          deliveries.push(id);
-        }
-        const leases = await delivery.claimDue();
-        expect(leases).toHaveLength(3);
-        for (const id of deliveries) {
-          const lease = leases.find((l) => l.deliveryId === id);
-          if (!lease) throw new Error('Missing claimed boundary delivery');
-          expect(await delivery.deliverLease(lease)).toBe(id !== deliveries[0]);
-        }
-        expect(deliver).toHaveBeenCalledTimes(2);
-        const states = await db.query(
-          `SELECT id,status,attempts FROM ${schema}.alert_deliveries`,
-        );
-        expect(
-          states.find((s: { id: string }) => s.id === deliveries[0]),
-        ).toMatchObject({ status: 'cancelled', attempts: 0 });
-        for (const id of deliveries.slice(1))
-          expect(states.find((s: { id: string }) => s.id === id)).toMatchObject(
-            { status: 'delivered', attempts: 1 },
-          );
-      },
+          expect(
+            states.find((s: { id: string }) => s.id === deliveries[0]),
+          ).toMatchObject({ status: 'cancelled', attempts: 0 });
+          for (const id of deliveries.slice(1))
+            expect(
+              states.find((s: { id: string }) => s.id === id),
+            ).toMatchObject({ status: 'delivered', attempts: 1 });
+        }),
     );
     it.each(beforeTransitions)(
       'manual and scheduled jobs have the same exact seven-day download lifetime: $zone $now',
-      async (input) => {
-        await prepare(input);
-        const manual = await exports.create(tenant, {
-          from: '2026-01-01T00:00:00Z',
-          to: '2026-01-01T01:00:00Z',
-        });
-        expect(Date.parse(manual.expiresAt) - Date.parse(now)).toBe(
-          7 * 86400000,
-        );
-        await schedules.save(tenant, {
-          enabled: true,
-          cadence: 'near_real_time',
-          filter: {},
-          expectedRevision: null,
-        });
-        await db.query(
-          `UPDATE public.log_export_schedules SET cursor_at=$1::timestamptz-INTERVAL '2 minutes',started_at=$1::timestamptz-INTERVAL '5 minutes',next_due_at=$1::timestamptz-INTERVAL '1 second'`,
-          [now],
-        );
-        await db.query(
-          `INSERT INTO ${schema}.request_logs(id,path,timestamp,"receivedAt") VALUES(gen_random_uuid(),'/boundary',$1,$1::timestamptz-INTERVAL '90 seconds')`,
-          [now],
-        );
-        expect(await schedules.scheduleNext()).toBe(true);
-        const jobs = (await exports.list(tenant)).jobs;
-        expect(jobs).toHaveLength(2);
-        expect(jobs.map((j) => j.kind).sort()).toEqual(['manual', 'scheduled']);
-        for (const job of jobs)
-          expect(Date.parse(job.expiresAt) - Date.parse(now)).toBe(
+      (input) =>
+        cases.run(async () => {
+          await prepare(input);
+          const manual = await exports.create(tenant, {
+            from: '2026-01-01T00:00:00Z',
+            to: '2026-01-01T01:00:00Z',
+          });
+          expect(Date.parse(manual.expiresAt) - Date.parse(now)).toBe(
             7 * 86400000,
           );
-      },
+          await schedules.save(tenant, {
+            enabled: true,
+            cadence: 'near_real_time',
+            filter: {},
+            expectedRevision: null,
+          });
+          await db.query(
+            `UPDATE public.log_export_schedules SET cursor_at=$1::timestamptz-INTERVAL '2 minutes',started_at=$1::timestamptz-INTERVAL '5 minutes',next_due_at=$1::timestamptz-INTERVAL '1 second'`,
+            [now],
+          );
+          await db.query(
+            `INSERT INTO ${schema}.request_logs(id,path,timestamp,"receivedAt") VALUES(gen_random_uuid(),'/boundary',$1,$1::timestamptz-INTERVAL '90 seconds')`,
+            [now],
+          );
+          expect(await schedules.scheduleNext()).toBe(true);
+          const jobs = (await exports.list(tenant)).jobs;
+          expect(jobs).toHaveLength(2);
+          expect(jobs.map((j) => j.kind).sort()).toEqual([
+            'manual',
+            'scheduled',
+          ]);
+          for (const job of jobs)
+            expect(Date.parse(job.expiresAt) - Date.parse(now)).toBe(
+              7 * 86400000,
+            );
+        }),
     );
     it.each(afterTransitions)(
       'archive metadata cleanup retains the exact thirty-day boundary: $zone $now',
-      async (input) => {
-        await prepare(input);
-        const ids: string[] = [];
-        for (const offset of [-1, 0, 1]) {
-          const [{ id }] = await db.query(
-            `INSERT INTO public.log_export_jobs(tenant_id,filter,expires_at,status) VALUES($1,'{}',$2::timestamptz-INTERVAL '720 hours'+$3*INTERVAL '1 microsecond','failed') RETURNING id`,
-            [tenant, now, offset],
-          );
-          ids.push(id);
-        }
-        await exports.cleanupExpired();
-        const jobs = (await exports.list(tenant)).jobs;
-        expect(jobs.map((j) => j.id).sort()).toEqual(ids.slice(1).sort());
-        expect(jobs.every((j) => j.status === 'expired')).toBe(true);
-        expect(cleanup).toHaveBeenCalledTimes(3);
-      },
+      (input) =>
+        cases.run(async () => {
+          await prepare(input);
+          const ids: string[] = [];
+          for (const offset of [-1, 0, 1]) {
+            const [{ id }] = await db.query(
+              `INSERT INTO public.log_export_jobs(tenant_id,filter,expires_at,status) VALUES($1,'{}',$2::timestamptz-INTERVAL '720 hours'+$3*INTERVAL '1 microsecond','failed') RETURNING id`,
+              [tenant, now, offset],
+            );
+            ids.push(id);
+          }
+          await exports.cleanupExpired();
+          const jobs = (await exports.list(tenant)).jobs;
+          expect(jobs.map((j) => j.id).sort()).toEqual(ids.slice(1).sort());
+          expect(jobs.every((j) => j.status === 'expired')).toBe(true);
+          expect(cleanup).toHaveBeenCalledTimes(3);
+        }),
     );
   },
 );

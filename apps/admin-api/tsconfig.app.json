@@ -16,6 +16,7 @@
     "jest.config.cts",
     "src/**/*.spec.ts",
     "src/**/*.test.ts",
+    "src/**/*.fixture.ts",
     "eslint.config.js",
     "eslint.config.cjs",
     "eslint.config.mjs"
