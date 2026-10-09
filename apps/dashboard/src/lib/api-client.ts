@@ -18,6 +18,10 @@ import type {
   LogExportList,
   LogExportScheduleState,
   SaveLogExportSchedule,
+  LogExportDestination,
+  LogExportDestinationList,
+  CreateLogExportDestination,
+  UpdateLogExportDestination,
   TraceListResponse,
   TraceDetailResponse,
   MetricsSnapshot,
@@ -410,6 +414,62 @@ export function getMetrics(
 
 export function getLogExports(tenantId: string): Promise<LogExportList> {
   return request(`/tenants/${tenantId}/log-exports`);
+}
+export function getLogExportDestinations(
+  tenantId: string,
+  signal?: AbortSignal,
+): Promise<LogExportDestinationList> {
+  return request(`/tenants/${tenantId}/log-export-destinations`, { signal });
+}
+export function createLogExportDestination(
+  tenantId: string,
+  input: CreateLogExportDestination,
+  signal?: AbortSignal,
+): Promise<LogExportDestination> {
+  return request(`/tenants/${tenantId}/log-export-destinations`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+export function updateLogExportDestination(
+  tenantId: string,
+  id: string,
+  input: UpdateLogExportDestination,
+  signal?: AbortSignal,
+): Promise<LogExportDestination> {
+  return request(`/tenants/${tenantId}/log-export-destinations/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+export function reencryptLogExportDestination(
+  tenantId: string,
+  id: string,
+  expectedRevision: string,
+  signal?: AbortSignal,
+): Promise<LogExportDestination> {
+  return request(
+    `/tenants/${tenantId}/log-export-destinations/${id}/rotate-key`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ expectedRevision }),
+      signal,
+    },
+  );
+}
+export function removeLogExportDestination(
+  tenantId: string,
+  id: string,
+  expectedRevision: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  return request(`/tenants/${tenantId}/log-export-destinations/${id}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ expectedRevision }),
+    signal,
+  });
 }
 export function createLogExport(
   tenantId: string,

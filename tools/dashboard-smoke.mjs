@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { verifyAlertsDashboard } from './alerts-dashboard-smoke.mjs';
+import {
+  exportDestinationsBrowserFixture,
+  verifyExportDestinationsDashboard,
+} from './export-destinations-dashboard-smoke.mjs';
 import { createServer } from 'node:http';
 import {
   existsSync,
@@ -41,6 +45,7 @@ const context = await chromium.launchPersistentContext(profile, {
 let traceStarted = false;
 let traceWritten = false;
 let passed = false;
+let exportDestinationsEvidence;
 let coldLoads = 0;
 const startedAt = Date.now();
 let metricsConnections = 0;
@@ -97,6 +102,7 @@ const metricsServer = createServer((request, response) => {
 await new Promise((resolve) => metricsServer.listen(0, '127.0.0.1', resolve));
 const metricsOrigin = `http://127.0.0.1:${metricsServer.address().port}`;
 const tenant = '12345678-1234-1234-1234-123456789abc';
+const exportDestinationsFixture = exportDestinationsBrowserFixture();
 const service = '23456789-1234-1234-1234-123456789abc';
 const traceId = '0123456789abcdef0123456789abcdef';
 let traceMode = 'normal';
@@ -246,6 +252,7 @@ const handleApiFixture = async (route) => {
     'Dashboard must use its configured API origin',
   );
   const resource = url.pathname.split('/').at(-1);
+  if (await exportDestinationsFixture.handle(route)) return;
   if (resource === 'log-retention') {
     const tenant =
       url.pathname.split('/')[url.pathname.split('/').indexOf('tenants') + 1];
@@ -2292,6 +2299,14 @@ try {
     artifacts,
     onFixtureError: (error) => runtimeErrors.push(error),
   });
+  exportDestinationsEvidence = await verifyExportDestinationsDashboard({
+    page,
+    base,
+    tenant,
+    audit,
+    artifacts,
+    fixture: exportDestinationsFixture,
+  });
   writeFileSync(
     resolve(artifacts, 'accessibility.json'),
     JSON.stringify(violations, null, 2),
@@ -2340,6 +2355,7 @@ try {
           cpuThrottlingRate: 6,
           elapsedMs: Date.now() - startedAt,
           traceWritten,
+          exportDestinations: exportDestinationsEvidence,
           runtimeErrors,
           accessibilityViolations: violations,
         },

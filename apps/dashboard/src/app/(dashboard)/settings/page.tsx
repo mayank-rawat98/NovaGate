@@ -6,6 +6,7 @@ import { LogRetentionPanel } from '../../../components/log-retention-panel';
 import { LogPrivacyPanel } from '../../../components/log-privacy-panel';
 import { LogExportPanel } from '../../../components/log-export-panel';
 import { LogExportSchedulePanel } from '../../../components/log-export-schedule-panel';
+import { ExportDestinationsPanel } from '../../../components/export-destinations-panel';
 import { DataLoadNotice } from '../../../components/data-load-notice';
 import { toast } from 'sonner';
 import { Copy, Check, Eye, EyeOff, RefreshCw, Shield, X } from 'lucide-react';
@@ -359,6 +360,7 @@ export default function SettingsPage() {
       <LogRetentionPanel tenantId={tenantId} />
       <LogExportSchedulePanel tenantId={tenantId} />
       <LogExportPanel key={tenantId} tenantId={tenantId} />
+      <ExportDestinationsPanel tenantId={tenantId} />
 
       {/* Environment variables */}
       <div

@@ -186,3 +186,18 @@ metadata erasure and its effect on path filters and consumer attribution. Usage
 coverage must distinguish unavailable attribution from no traffic and redacted path
 groups from missing totals. Keep shared contracts → typed api-client → UI, legacy
 optional coverage, workspace cancellation and mobile/keyboard/accessibility checks.
+
+Issue #91 adds Settings → External export destinations through the existing shared
+contracts and typed api-client. Show stored S3-compatible/webhook/Datadog drafts
+as **not sending**, never as connected or active. Provider configuration, read-safe
+summaries and installation availability are independent of private RustFS archives.
+Use complete same-provider credential replacement, metadata-only rename, revision
+reload that keeps typed input, removal and saved-credential re-encryption. Mask
+all secret fields and the webhook URL; saved connection details are never returned
+or prefilled. State remounts per workspace, admitted reads/writes have deadlines,
+and closing/switching cancels browser transport without promising server rollback.
+Keep 30-second SWR refresh, native Escape/Tab behavior and explicit focus restoration
+following successful writes, including a logical target after removal. Production
+browser checks cover all providers, failed reads/writes, stale revisions, retained
+input, unavailable keys/configuration, capacity, interrupted writes, workspace resets,
+mobile/desktop accessibility and absence of secrets in browser persistence/summaries.
