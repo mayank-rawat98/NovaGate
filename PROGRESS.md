@@ -8,7 +8,9 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
-- Current [issue #91](https://github.com/mayank-rawat98/NovaGate/issues/91) adds modern Settings controls for encrypted export destination drafts from `dev` at **c4c03406** / merged PR #89. Production browser verification passes 42 cold loads under sixfold CPU throttling, all provider form/revision/availability/capacity flows and interrupted-save/workspace-reset checks, with zero runtime or WCAG A/AA findings. A first run caught failed focus restoration after a saved re-encryption; the source was fixed and the strict assertion remains. Five projects’ lint/typecheck, four application builds, 650 admin tests in a quiescent rerun and the retained 584 gateway/114 control-plane/10 dashboard regressions pass. The final committed-source affected run passes all 660 admin/dashboard tests; [PR #93](https://github.com/mayank-rawat98/NovaGate/pull/93) records the checkpoint and closes #91. Drafts do not deliver logs; #69 hydration, #90 RustFS cleanup and #92 retention fixture deadline/contamination remain open.
+- Current [issue #92](https://github.com/mayank-rawat98/NovaGate/issues/92) fixes retention integration case ownership from merged `dev` **a3597969** / PR #93. An actual child Jest/PostgreSQL regression proves a timed-out body contaminates the following case without draining; with ownership tracking, the intentional timeout still fails while the next case passes. The 30 exact elapsed-time boundary cases retain their five-second budgets and assertions. All **1,359 tests** pass (651 admin, 584 gateway, 114 control-plane, 10 dashboard), all five static gates pass, and the admin build matches the prior production compilation. Final committed-source affected checks and PR evidence are pending. Formal acceptance remains separate.
+
+- Previous verified development checkpoint: [issue #91](https://github.com/mayank-rawat98/NovaGate/issues/91) adds modern Settings controls for encrypted export destination drafts from `dev` at **c4c03406** / merged PR #89. Production browser verification passes 42 cold loads under sixfold CPU throttling, all provider form/revision/availability/capacity flows and interrupted-save/workspace-reset checks, with zero runtime or WCAG A/AA findings. A first run caught failed focus restoration after a saved re-encryption; the source was fixed and the strict assertion remains. Five projects’ lint/typecheck, four application builds, 650 admin tests in a quiescent rerun and the retained 584 gateway/114 control-plane/10 dashboard regressions pass. The final committed-source affected run passes all 660 admin/dashboard tests; [PR #93](https://github.com/mayank-rawat98/NovaGate/pull/93) records the checkpoint and closes #91. Drafts do not deliver logs; #69 hydration, #90 RustFS cleanup and #92 retention fixture deadline/contamination remain open.
 
 - Previous verified development checkpoint: [PR #89](https://github.com/mayank-rawat98/NovaGate/pull/89), linked to [issue #88](https://github.com/mayank-rawat98/NovaGate/issues/88), adds secure external destination draft configuration from `dev` at **0c1f6dce** / merged PR #87. All 1,358 workspace tests pass (650 admin, 584 gateway, 114 control-plane, 10 dashboard), alongside five projects' lint/typecheck and four app builds. The final focused suite passes 82 checks, including real HTTP/PostgreSQL key retirement, contended updates and capacity across two independent service instances. The final committed-head affected run and packaged OrbStack verification pass. The packaged image proves encrypted draft storage/reads, tenant isolation, revisions, key rewrap/removal and retained metrics/alerts/RustFS/privacy/retention; all three app services exit 0. An earlier RustFS fixture teardown failure is preserved and tracked separately in issue #90. At that checkpoint, provider delivery and Settings controls remained pending; issue #91 implements the editor. Drafts remain explicitly inactive.
 
@@ -780,17 +782,55 @@ rollups, later phases and formal acceptance remain open below.
   later phases and full formal all-phase acceptance remain required. #69/#90/#92
   stay open; passing runs do not close their independent investigations.
 
+## Issue #92 — drain timed-out retention fixtures before reuse
+
+- The original #91 failure is retained: a five-second retention cutoff timeout
+  followed by unexpected previous-case event IDs while builds/browser work overlapped.
+  A later quiescent pass alone did not prove a fix.
+- Installed Jest's runner stops observing a returned promise at its deadline and
+  starts `afterEach` without cancelling the underlying body. The prior fixture
+  destroyed services and let the next `prepare()` truncate/reuse the same database
+  and mutable clock while the old body could still issue SQL.
+- A fixture-only owner now tracks every elapsed-time case body. Teardown awaits
+  actual completion before releasing all five services; a following case cannot
+  start while work or teardown is owned. Cleanup failures remain reported, and
+  failed service release keeps admission sealed. Final teardown attempts owned
+  service/database/root cleanup and preserves errors rather than skipping later releases.
+- Each database transaction freezes its case's zone and clock instead of consulting
+  mutable next-case values. Production retention predicates, query limits and the
+  original thirty UTC/New York/Kolkata microsecond-boundary assertions/budgets are unchanged.
+- The regression runs real child Jest processes and PostgreSQL `pg_sleep`, using a
+  deliberate 100 ms child-test deadline. Without ownership, the timeout and following
+  case both fail with `late-previous-case`; with ownership, the timeout still fails
+  and the following case passes. The parent requires those precise outcomes and
+  rejects unexpected child exit codes/errors. No intentional child failure is
+  counted as a passing production test. Evidence:
+  `.local-work/issue92-timeout-regression.json` and `issue92-focused.log` (**31 checks**).
+- Keep `.fixture.ts` helpers in the test TypeScript project and out of the application
+  project. The first static run caught this ownership configuration error; corrected
+  project inclusion/exclusion makes all five projects' lint/typecheck pass.
+- Complete workspace regression: **1,359 tests**, 651 admin + 584 gateway + 114
+  control-plane + 10 dashboard, with real OrbStack PostgreSQL/Redis/RustFS available.
+  Admin compilation passes with the same webpack content hash **24559a4cafcb40bc**
+  as #91. Unchanged applications retain #91's full builds and 42-plus-seven-load
+  production browser checkpoint. Evidence: `.local-work/issue92-all-tests.log`,
+  `issue92-static-final.log` and `issue92-build.log`.
+- Final committed-source affected checks and PR checkpoint are pending. This fixes
+  demonstrated deadline contamination; it does not promise that every test finishes
+  within budget on an overloaded host. Resource-pressure timeouts remain failures.
+  #69 hydration, #90 RustFS cleanup and the full remaining roadmap stay open.
+
 ## Remaining work
 
-### Next: external destination delivery; retain follow-ups #69, #90 and #92
+### Next: external destination delivery; retain follow-ups #69 and #90
 
 - Reproduce the intermittent server/session hydration recovery, identify the DOM/state
   mismatch and fix its source. Keep strict browser error gates and record a regression
   that demonstrates the failure before the fix. Successful reruns alone do not close it.
 - Resolve RustFS empty-bucket cleanup/orphan metadata in #90 with a real regression
   and verified fix; preserve strict lifecycle cleanup gates.
-- Reproduce and fix the retention-boundary deadline/following-case contamination in #92,
-  preserving the original limits, exact microsecond assertions and cleanup failures.
+- Retain #92’s actual Jest/PostgreSQL timeout ownership regression and strict budgets;
+  any remaining resource-pressure deadline failures must remain visible.
 - Continue later work through the issue → dev branch → tested PR → merge convention.
 - Provider/inbox acceptance and at-least-once receiver/provider deduplication remain
   explicit formal acceptance requirements, not locally proven provider guarantees.
