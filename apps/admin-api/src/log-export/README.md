@@ -4,8 +4,20 @@ Private RustFS manual and scheduled archives remain the active export product.
 The external destination API stores **drafts** for S3-compatible buckets, NDJSON
 webhooks and Datadog. It does not send data or contact a provider. Every read
 reports `deliveryAvailable: false`, and destination rows remain `state: draft`.
-Settings controls, DNS-pinned provider transports, delivery history and activation
-follow this foundation; storing a draft is not external export acceptance.
+Settings controls are implemented in issue #91. DNS-pinned provider transports,
+delivery history and activation follow this foundation; storing a draft is not external export acceptance.
+
+## Settings editor
+
+Settings → External export destinations exposes safe summaries and masked entry
+for all three providers. A saved destination can be renamed without changing its
+credentials, replaced using a complete connection of the same provider, re-encrypted
+under the installation's current key or removed with confirmation. Revision reload
+keeps unsaved input for review; failed writes do not discard it. Missing/retired keys
+can be repaired with complete replacement. Disabled installation configuration
+still allows metadata-only edits and removal. Close/workspace changes discard local
+credential state and abort browser requests; an already admitted server transaction
+may still commit, so cancellation is not a rollback guarantee. Drafts stay inactive.
 
 ## Encryption configuration
 

@@ -99,7 +99,7 @@
         ],
         "options": {
           "commands": [
-            "eslint tools/dashboard-smoke.mjs tools/alerts-dashboard-smoke.mjs",
+            "eslint tools/dashboard-smoke.mjs tools/alerts-dashboard-smoke.mjs tools/export-destinations-dashboard-smoke.mjs",
             "node tools/dashboard-smoke.mjs"
           ],
           "parallel": false

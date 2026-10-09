@@ -1,6 +1,6 @@
 # NovaGate progress and remaining work
 
-Updated: **8 October 2026** (Asia/Calcutta).
+Updated: **9 October 2026** (Asia/Calcutta).
 
 This report distinguishes merged development work, the alerting foundation checkpoint,
 and formal acceptance. The detailed roadmap is [implementation.md](implementation.md).
@@ -8,7 +8,9 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
-- Latest verified development work: [PR #89](https://github.com/mayank-rawat98/NovaGate/pull/89), linked to [issue #88](https://github.com/mayank-rawat98/NovaGate/issues/88), adds secure external destination draft configuration from `dev` at **0c1f6dce** / merged PR #87. All 1,358 workspace tests pass (650 admin, 584 gateway, 114 control-plane, 10 dashboard), alongside five projects' lint/typecheck and four app builds. The final focused suite passes 82 checks, including real HTTP/PostgreSQL key retirement, contended updates and capacity across two independent service instances. The final committed-head affected run and packaged OrbStack verification pass. The packaged image proves encrypted draft storage/reads, tenant isolation, revisions, key rewrap/removal and retained metrics/alerts/RustFS/privacy/retention; all three app services exit 0. An earlier RustFS fixture teardown failure is preserved and tracked separately in issue #90. Provider delivery and Settings controls remain pending; drafts are explicitly inactive.
+- Current [issue #91](https://github.com/mayank-rawat98/NovaGate/issues/91) adds modern Settings controls for encrypted export destination drafts from `dev` at **c4c03406** / merged PR #89. Production browser verification passes 42 cold loads under sixfold CPU throttling, all provider form/revision/availability/capacity flows and interrupted-save/workspace-reset checks, with zero runtime or WCAG A/AA findings. A first run caught failed focus restoration after a saved re-encryption; the source was fixed and the strict assertion remains. Five projects’ lint/typecheck, four application builds, 650 admin tests in a quiescent rerun and the retained 584 gateway/114 control-plane/10 dashboard regressions pass. The final committed-source affected run passes all 660 admin/dashboard tests; [PR #93](https://github.com/mayank-rawat98/NovaGate/pull/93) records the checkpoint and closes #91. Drafts do not deliver logs; #69 hydration, #90 RustFS cleanup and #92 retention fixture deadline/contamination remain open.
+
+- Previous verified development checkpoint: [PR #89](https://github.com/mayank-rawat98/NovaGate/pull/89), linked to [issue #88](https://github.com/mayank-rawat98/NovaGate/issues/88), adds secure external destination draft configuration from `dev` at **0c1f6dce** / merged PR #87. All 1,358 workspace tests pass (650 admin, 584 gateway, 114 control-plane, 10 dashboard), alongside five projects' lint/typecheck and four app builds. The final focused suite passes 82 checks, including real HTTP/PostgreSQL key retirement, contended updates and capacity across two independent service instances. The final committed-head affected run and packaged OrbStack verification pass. The packaged image proves encrypted draft storage/reads, tenant isolation, revisions, key rewrap/removal and retained metrics/alerts/RustFS/privacy/retention; all three app services exit 0. An earlier RustFS fixture teardown failure is preserved and tracked separately in issue #90. At that checkpoint, provider delivery and Settings controls remained pending; issue #91 implements the editor. Drafts remain explicitly inactive.
 
 - Previous verified development checkpoint: [PR #87](https://github.com/mayank-rawat98/NovaGate/pull/87), linked to [issue #85](https://github.com/mayank-rawat98/NovaGate/issues/85), fixes non-rejecting storage timeouts and shutdown/resource cleanup. Its branch starts from `dev` at **2affcb71** / merged [PR #86](https://github.com/mayank-rawat98/NovaGate/pull/86), which implements six-field stored-metadata privacy. The final affected-project run passes 568 admin tests, including twelve actual stalled-network checks and a real multipart RustFS round trip; backend static/build gates and fresh packaged OrbStack/RustFS/metrics/alerts/privacy/retention verification pass. The unchanged gateway/collector/dashboard retain issue #84's 1,263-test and 42-plus-seven-load browser checkpoint. Formal phase acceptance remains pending.
 - Alerting development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68), linked to [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), adds durable delivery and the Alerts dashboard.
@@ -720,24 +722,84 @@ rollups, later phases and formal acceptance remain open below.
 - External connections are **drafts**, `deliveryAvailable: false`; storing them is not proof of provider
   delivery, a modern Settings editor or phase acceptance.
 
+## Issue #91 — destination Settings editor
+
+- Added typed tenant API helpers and Settings → External export destinations with
+  mint/ivory/indigo surfaces, safe summary cards, explicit **Draft · not sending**
+  status and independent private archive/schedule controls.
+- Native workspace dialogs prepare S3-compatible (including temporary credentials
+  and path-style addresses), signed NDJSON webhooks and Datadog site/API-key drafts.
+  Access keys, signing/API/session secrets and private webhook URLs are masked;
+  saved secrets are never prefilled, cached in SWR summaries or browser persistence.
+- Metadata-only rename preserves saved connection details. Credential replacement
+  is explicit, complete and same-provider. Key re-encryption/removal require clear
+  confirmation. Errors and revision reload preserve typed input for review.
+- Missing-key drafts support repair; disabled operator configuration still allows
+  rename/removal. Capacity and stale-read/revision failures show recovery controls.
+  Reads have a ten-second deadline; writes have a fifteen-second deadline, with
+  browser transport cancellation on close/switch. Cancellation does not guarantee
+  rollback of a server transaction that has already been admitted.
+- Workspace remount clears unsaved credentials. Native Escape/Tab controls and
+  explicit focus restoration cover successful edits/rotation and logical focus
+  after removal. A first production-browser run failed the post-save focus assertion;
+  the UI now restores the initiating control after its cache update, before background
+  refresh. The unchanged assertion passes; no runtime/accessibility gates were relaxed.
+- Production browser evidence: **42 cold loads**, **sixfold CPU throttling**, six
+  hydration passes, **45,402 ms**, zero runtime errors and zero WCAG A/AA findings.
+  All provider forms, failed saves/reads, key availability/configuration, metadata
+  edits, complete replacement, concurrent revision reload, re-encryption/removal,
+  capacity, mobile/desktop and in-flight close/workspace transport cancellation pass.
+  Inspected desktop cards and mobile dialogs; the footer remains visible and
+  secret inputs are masked. Evidence: `.local-work/issue91-browser-first.log`
+  (failing focus check), `issue91-browser-focus.log` (fix),
+  `issue91-browser-final.log` and `issue91-browser-final-run.json` (42-load run).
+- Final browser evidence with explicit provider/cancellation/focus records passes seven
+  more cold loads under sixfold CPU throttling in **47,595 ms**; 11 accepted fixture
+  writes exercise all three providers, revision reload, secret-safe reads and two
+  interrupted writes. Runtime and WCAG A/AA arrays remain empty. Evidence:
+  `.local-work/issue91-browser-evidence.log` and `issue91-browser-evidence-run.json`.
+- All five projects’ lint/typecheck and four app builds pass. The complete admin suite
+  passes **650 tests** in the quiescent rerun; the retained full run passes **584 gateway,
+  114 control-plane and 10 dashboard tests**. Source and test budgets are unchanged.
+  Evidence: `.local-work/issue91-all-static.log`, `issue91-all-builds.log`,
+  `issue91-retention-quiescent.log` and `issue91-all-tests-restored.log`.
+- Preserved failed runs: the first had unavailable PostgreSQL because OrbStack was
+  stopped; the verification services were restored and checked healthy. The next
+  overlapped builds/browser work and hit the existing five-second retention-boundary
+  timeout, followed by extra event IDs in the next case. [Issue #92](https://github.com/mayank-rawat98/NovaGate/issues/92)
+  tracks reproduction and fixture/production ownership investigation. A quiescent
+  pass does not establish its cause or close it. No assertion/deadline was relaxed.
+- [PR #93](https://github.com/mayank-rawat98/NovaGate/pull/93) closes #91. The final affected
+  run on source commit **3c6bd0356d7d862cae7c3e6a9c9b8bad2bcf8147** passes all
+  **660 admin/dashboard tests** with real PostgreSQL/Redis/RustFS available; the
+  unchanged gateway/control-plane retain the 584/114-test full-run checkpoint.
+  Evidence: `.local-work/issue91-affected-final.log`. All final commands exit 0.
+  The configured administrator exception permits exact-head merging despite the
+  one-review ruleset; no ruleset or PR/dev CI trigger is changed.
+- External provider delivery, payload policy/history/retention, high-volume rollups,
+  later phases and full formal all-phase acceptance remain required. #69/#90/#92
+  stay open; passing runs do not close their independent investigations.
+
 ## Remaining work
 
-### Next: destination Settings/delivery; retain follow-ups #69 and #90
+### Next: external destination delivery; retain follow-ups #69, #90 and #92
 
 - Reproduce the intermittent server/session hydration recovery, identify the DOM/state
   mismatch and fix its source. Keep strict browser error gates and record a regression
   that demonstrates the failure before the fix. Successful reruns alone do not close it.
 - Resolve RustFS empty-bucket cleanup/orphan metadata in #90 with a real regression
   and verified fix; preserve strict lifecycle cleanup gates.
+- Reproduce and fix the retention-boundary deadline/following-case contamination in #92,
+  preserving the original limits, exact microsecond assertions and cleanup failures.
 - Continue later work through the issue → dev branch → tested PR → merge convention.
 - Provider/inbox acceptance and at-least-once receiver/provider deduplication remain
   explicit formal acceptance requirements, not locally proven provider guarantees.
 
 ### Remaining phase 4 work
 
-- Complete the Settings editor and delivery workers for stored external S3-compatible,
-  webhook NDJSON and Datadog drafts. Issue #88 supplies dedicated encrypted credentials
-  and revision-aware configuration; DNS-pinned egress, destination payload policies,
+- Complete delivery workers for stored external S3-compatible, webhook NDJSON and
+  Datadog drafts. Issues #88/#91 supply encrypted revision-aware configuration and
+  Settings controls; DNS-pinned egress, destination payload policies,
   delivery identity/retries/history and retention are still required. Issue #84 implements stored-metadata field selection.
 - High-volume per-consumer rollups, idempotent ingestion/backfill, retention and
   explicit coverage indicators beyond the bounded persisted-log usage view.
