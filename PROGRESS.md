@@ -1,12 +1,27 @@
 # NovaGate progress and remaining work
 
-Updated: **9 October 2026** (Asia/Calcutta).
+Updated: **11 October 2026** (Asia/Calcutta).
 
 This report distinguishes merged development work, the alerting foundation checkpoint,
 and formal acceptance. The detailed roadmap is [implementation.md](implementation.md).
 No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
+
+- Issue **#95 export delivery** is now separated into backend and UI commits
+  (`9012b6d`, `798bc53`) with an isolated-source verification record. **782 admin
+  tests / 42 suites**, **114 collector tests**, **10 dashboard tests**, five-project
+  static/build gates, four production images and **42 browser cold loads** pass.
+  Packaged transport, automatic receipt delivery, private archives, alerts,
+  privacy/retention and the 1,101-window capacity checks pass with clean shutdowns.
+  The retained gateway still has its one native intermediate-mTLS failure; there
+  is no full-workspace or formal acceptance claim. Export work is committed;
+  review/merge remain pending. Consumer rollups, declarative configuration and
+  the CLI remain separate local changes in the shared checkout.
+
+- Current local issue #95 continuation adds authenticated external delivery activation, payload-policy and metadata-only history controls in Settings. It passes **781 admin tests / 42 suites**, all five projects' lint/typecheck gates, four application builds and **42 cold browser loads under sixfold CPU throttling** with zero runtime/accessibility findings. Browser checks cover explicit activation, stopping without keys, revision/input preservation and cancellation of held reads/writes. Credential saves remain inactive drafts. Scheduled terminal history rolls off with exact workspace coverage while preserving caller identities and active retries. Discovery continues independently of provider latency and claims only scheduled work. Packaged authenticated activation/history, real-timer backlog across two workspaces/seven destinations, and **1,101 real receipt windows** pass alongside provider transport and existing metrics/alerts/RustFS/privacy/retention checks. Larger workload/replica acceptance, actual-provider acceptance and the remaining beyond-Kong roadmap remain open. Work is local and unmerged; the unchanged Node intermediate-mTLS gate prevents claiming full workspace verification.
+
+- Initial local issue #95 checkpoint (subsequent store/worker, receipt-scheduling and capacity checkpoints are recorded below): its existing development branch implements internal bounded S3, signed NDJSON webhook and Datadog transports. The post-reset workspace is restored with Node 24.21.0/npm 11.19.0 and local OrbStack PostgreSQL/Redis/pinned RustFS. All **695 admin tests** pass with real infrastructure, including 43 new controlled-receiver cases and one real S3 round trip. The dedicated non-root production image smoke passes all provider formats, privacy and shutdown. Five-project static/four-app build gates pass, and final admin/shared static checks include the verification fixture. This is unmerged local work, not phase acceptance. The unchanged gateway mTLS intermediate-chain test fails on this runtime and blocks a claim of full workspace verification; native diagnostics independently reproduce a verified socket lacking detailed issuer metadata. At this initial checkpoint, drafts remained inactive and durable workers/history/activation and the original beyond-Kong roadmap were pending.
 
 - Current [issue #92](https://github.com/mayank-rawat98/NovaGate/issues/92) fixes retention integration case ownership from merged `dev` **a3597969** / PR #93. An actual child Jest/PostgreSQL regression proves a timed-out body contaminates the following case without draining; with ownership tracking, the intentional timeout still fails while the next case passes. The 30 exact elapsed-time boundary cases retain their five-second budgets and assertions. All **1,359 tests** pass (651 admin, 584 gateway, 114 control-plane, 10 dashboard), all five static gates pass, and the admin build matches the prior production compilation. The final committed-source affected run passes all 651 admin tests; [PR #94](https://github.com/mayank-rawat98/NovaGate/pull/94) closes #92. Formal acceptance remains separate.
 
@@ -825,9 +840,525 @@ rollups, later phases and formal acceptance remain open below.
   within budget on an overloaded host. Resource-pressure timeouts remain failures.
   #69 hydration, #90 RustFS cleanup and the full remaining roadmap stay open.
 
+## Issue #95 — external provider transport development
+
+The existing remote issue/branch provided the recoverable handoff after the machine
+reset. Work starts from merged `dev` **b182b88**. No earlier conversation transcript is
+present locally. This section records current local implementation, not a merged PR.
+
+- Shared `LogExportDeliveryBatch` precedes sender changes. Copy only documented log
+  fields, validate bounded identities/times/outcomes and use the union of tenant and
+  optional destination omissions. No raw row serialization, receipt fields, arbitrary
+  bodies/headers or credentials. Bound 256 records, 16-KiB records and a final 1-MiB
+  provider body, including Datadog's envelope overhead.
+- Extract alert egress into a shared helper while retaining alert error/wire contracts,
+  origin isolation, all-answer public A/AAAA checks, 16-answer DNS admission, pinned
+  verified TLS, redirect refusal, 8-KiB header bounds and bounded response consumption.
+  Export allowance uses only `LOG_EXPORT_HTTP_TRUSTED_ORIGINS`; default remains public
+  HTTPS. The service's 15-second absolute budget covers projection/signing/DNS/network,
+  four admissions remain held through actual cancellation, and shutdown drains work.
+- Official S3 SigV4 signs one bounded `PutObjectCommand` with no SDK retry/region
+  redirect. Static/temporary credentials, stable private keys, content type, metadata,
+  payload hashes and path/virtual addressing are independently checked on real sockets.
+  Webhook signatures cover timestamp, delivery ID and exact NDJSON bytes. Datadog uses
+  all nine fixed regional endpoints, header-only API keys and explicit intake records.
+  Errors never contain remote bodies, paths or provider credential material.
+- `ExportTransportService` is constructed by `LogExportModule` but has no public send
+  endpoint, scheduler or activation. Draft CRUD/Settings continues to report inactive
+  connections. Durable receipt/batch admission, privacy/retention/destination fences,
+  worker retries/history and destination controls remain the next implementation.
+
+Verification evidence:
+
+- All **695 admin tests / 40 suites** pass in the final quiescent PostgreSQL/Redis/
+  RustFS run (42.270 seconds), retaining the original 651 tests and adding 43 controlled
+  provider/lifecycle cases plus one actual RustFS PUT/read/retry/delete check.
+- Earlier shared-boundary focus passes 181 tests; subsequent new TLS rejection and S3
+  cancellation cases are included in the final full admin run. The first new RustFS
+  test failed because its own SDK client decorated a reused credential object with an
+  internal extra field. The fixture now explicitly copies only credentials; strict
+  credential validation was preserved. A real isolated rerun and full admin run pass.
+- Five projects' lint/typecheck and four application builds pass. The final verification
+  fixture is included in the passing final admin/shared lint/typecheck gate; no frontend
+  source/UI behavior changed.
+- `admin-api:export-transport-smoke` passes in the actual non-root admin production image
+  (UID 1000), using its pruned dependencies and controlled loopback HTTP/TLS receivers.
+  It verifies signed NDJSON, temporary S3 path addressing, S3 virtual TLS, Datadog EU TLS,
+  private payloads and actual shutdown. This is packaged dependency/wire evidence,
+  not real Datadog indexing or third-party S3 operational acceptance.
+- Rebuilt gateway, control-plane and admin production images also pass the retained
+  `admin-api:runtime-smoke` OrbStack campaign: authenticated metrics/SSE/reconnect,
+  actual alert firing/retry/recovery, two private RustFS archives containing 97 rows,
+  consumer attribution, privacy ACK/erasure/revocation, irreversible receipt retention
+  and encrypted revision-aware destination drafts. Draft delivery remains unavailable.
+  All three services shut down with exit 0. Evidence is retained in
+  `.local-work/metrics-container-evidence.json` and `.local-work/issue95/runtime-smoke.log`.
+- The initial full workspace run also exposes the **unchanged** gateway intermediate
+  mTLS case: expected 200, observed 403; its isolated 15-case suite retains 14 passes and
+  that failure. Node 24.21.0/OpenSSL 3.5.8 native reproduction outside Jest shows
+  `authorized: true`, the expected intermediate-client leaf and no `issuerCertificate`
+  from `getPeerCertificate(true)`. Adding explicit fixture SKI/AKI did not repair it;
+  diagnostic edits were removed. Do not weaken tenant anchoring or claim all 1,403
+  workspace checks pass. The retained control-plane and dashboard suites pass.
+- Issue #90 remains open. Fresh successful object/bucket cleanup is not evidence of
+  repairing its historically retained orphan/reserved-delete state or provider restore.
+  Issue #69 and formal provider/inbox/phase acceptance also remain open.
+
+Local logs and generated fixtures live under `.local-work/issue95/` and
+`.local-work/export-transport-runtime/`; provider credentials are disposable fixtures.
+No production deployment, `main` change or external provider delivery is represented.
+
+## Durable delivery store/worker — local continuation
+
+The post-reset continuation adds internal durable admission and leased provider attempts
+alongside issue #95's transports. This remains unmerged local work. It does not enable
+drafts or complete phase 4.4.
+
+- Shared `LogExportDelivery` precedes storage/worker changes. History explicitly exposes
+  metadata only. Admission accepts source UUIDs, reads trusted tenant database records
+  under the receipt lock, preserves microseconds, applies tenant/destination omissions
+  and saves one immutable projected batch. Duplicate IDs with matching source/policy
+  reuse that snapshot; changed source/policy/tenant reuse conflicts.
+- New startup migration creates the independent outbox with indexed due/history/expiry
+  queries. Cross-replica admission enforces 20 pending batches per destination and 1,000
+  retained rows per tenant. SQL operations have eight admissions, three-second statement
+  and one-second lock limits. Payload expiry is the earlier of 24 hours and the oldest
+  receipt's remaining tenant lifetime. Terminal states erase payload immediately.
+- Row claims use random 30-second leases and `SKIP LOCKED`. Six charged attempts include
+  failed credential access and recovered leases; retry delays are 5/30/120/600/1,800
+  seconds. Stale leases cannot acknowledge or retry. Errors are fixed codes. Bounded
+  cleanup revokes/removes at most 500 rows per stage; history survives 168 elapsed hours
+  after completion, with capacity rejection rather than eviction of young identities.
+- Actual privacy/retention writes and destination edit/re-encryption/removal revoke
+  queued/processing leases and erase payloads in the same transaction. Worker attempts
+  check all revisions, live receipt eligibility and lease ownership before sending and
+  once per second without overlapping SQL polls. Revocation and shutdown close actual
+  sockets and drain owned work. External bytes/copies cannot be recalled.
+- The internal worker has four admissions and no bootstrap timer. The producer's cursor
+  must commit atomically with admission before activation: provider-aware batch splitting,
+  fair replica discovery, skipped coverage, public history, payload controls and activation
+  remain required. Existing destination API/Settings still reports inactive drafts.
+- Final full admin regression passes **726 tests / 41 suites** (81.945 seconds) with real
+  PostgreSQL/Redis/pinned RustFS, adding 31 real database/receiver/lifecycle checks to the
+  prior 695 checkpoint. Tests cover immutable retry bytes after worker reconstruction,
+  duplicate/capacity races, exact receipt floors, six attempts, lease recovery, real
+  revision saves, socket cancellation, worker shutdown and four owned admissions.
+  Affected admin/shared lint/typecheck and production build gates pass. Evidence:
+  `.local-work/issue95/delivery-admin-final.log` and
+  `.local-work/issue95/delivery-worker-gates-final.log`.
+- Rebuilt final admin image passes the retained three-image `admin-api:runtime-smoke`
+  campaign. Synthetic fixture-only queued/processing outbox rows prove packaged
+  migration, atomic payload/lease revocation through actual key rotation/removal, and
+  stale-write conflict preserving its lease. This supplements real source admission
+  and actual worker/socket integration tests; it does not prove automatic production
+  scheduling. Metrics/alerts/private archives/consumer attribution/privacy/retention
+  remain green and gateway/control-plane/admin each exit 0. Evidence:
+  `.local-work/issue95/delivery-runtime-smoke-final.log` and
+  `.local-work/metrics-container-evidence.json`. The first packaged attempt exposed
+  conflicting text/varchar inference in the new synthetic fixture's status parameter;
+  explicit casts fixed only the fixture. Its failure is preserved in
+  `.local-work/issue95/delivery-runtime-smoke.log`; production SQL was unchanged.
+
+The unchanged mTLS failure now has an upstream diagnosis: Node.js
+[issue #65579](https://github.com/nodejs/node/issues/65579) describes the same consumed
+peer-chain behavior and [PR #65602](https://github.com/nodejs/node/pull/65602) fixes it.
+The local Node 24.21.0 native implementation still calls `getPeerX509Certificate()`
+during server authorization, matching that failure mechanism. The fetched official
+release index lists 24.21.0 as the latest Node 24 release. Select and verify a runtime
+containing the fix before claiming full workspace/native intermediate-mTLS acceptance;
+do not weaken tenant anchoring or skip the strict test. No runtime upgrade is claimed.
+
+## Automatic external receipt producer/scheduler — local continuation
+
+The next issue #95 continuation adds the internal source-to-delivery scheduling path.
+This remains unmerged local work; authenticated draft APIs/Settings still report
+`deliveryAvailable: false`. This checkpoint supersedes the earlier store/worker note
+that the producer and bootstrap timer were pending.
+
+- Shared schedule/filter/payload-policy contracts precede implementation. Startup
+  migration adds independent receipt schedules, due/dispatch indexes, schedule-linked
+  batches and composite tenant/destination ownership constraints. Repeated migration
+  remains idempotent. First internal configuration starts at the database save receipt
+  under the ingestion lock and excludes existing logs; revision-aware saves preserve
+  the precise receipt/UUID cursor and refuse unreadable credentials/hidden filters.
+- UTC minute/hour windows settle for 15 seconds. Source selection, provider-envelope
+  byte sizing, immutable admission and cursor/counter updates commit together without
+  network work. SQL bounds legacy text before loading and reads at most 257 source rows;
+  processing admits at most 256 records/one 1 MiB final body. Datadog envelope/escaping
+  overhead and NDJSON newlines count. Partial batches retain microseconds/UUID position;
+  empty windows advance only before the next retained receipt. Request timestamps
+  never determine source windows or retention.
+- Admission, filtered and invalid records have separate counters. Retention advances
+  an expired source cursor to its inclusive floor and reports skipped elapsed seconds
+  without inventing deleted-row counts. Full queue/history preserves unprocessed
+  receipts. Hidden stored filter fields stop source inspection. Pause stops source
+  admission while queued attempts remain eligible; cadence/filter edits retain cursor
+  and queued bytes. Payload-policy changes fence/revoke previous destination bytes.
+- The scheduler owns a non-overlapping two-second timer, bounded cleanup and at most
+  four fair source reservations/four dispatch targets per sweep. Source reservations
+  recover after two seconds; delivery retains 30-second leases and six charged attempts.
+  Actual transaction failure for one destination does not block a healthy destination.
+  Standalone manually admitted draft batches without a schedule ID are not dispatched.
+  Shutdown closes real requests and drains the owned sweep. Dedicated encryption keys
+  are required before bootstrap; no public activation endpoint is introduced.
+- The first real-PostgreSQL run passed 21/25 scheduler checks and exposed a discovery
+  bug: TypeORM's `UPDATE ... RETURNING` result includes an affected-row tuple. Returning
+  a final `SELECT` from a modifying CTE restores the target array. Controlled-clock
+  dispatch also needed admission timestamps to use the same explicit database clock
+  as expiry; creation/next-attempt timestamps now do so. Initial test type errors were
+  corrected without weakening boundaries/timeouts. Failure logs are retained in
+  `receipt-tests-initial.log`, `receipt-tests-discovery-fix.log` and initial static logs
+  under `.local-work/issue95/`.
+- Full admin regression passes **753 tests / 42 suites** in **80.012 seconds**, adding
+  27 scheduler checks to the prior 726 checkpoint. PostgreSQL/Redis/pinned RustFS are
+  real. Coverage includes microsecond/UUID ties, settlement boundaries, partial/provider
+  batches, producer replicas, rollback, capacity, retention, malformed legacy rows,
+  pause/resume, minute-to-hour changes, healthy-destination isolation, strict config,
+  no-key bootstrap and actual HTTP shutdown. The earlier combined four-suite transport/
+  store/scheduler run passed all 100 checks before the final two added scheduler cases.
+  All five projects' lint/typecheck gates and four application builds pass. Evidence:
+  `.local-work/issue95/receipt-admin-final.log`, `receipt-focused.log` and
+  `receipt-workspace-gates.log`; final cleanup/static logs are retained alongside them.
+  After strengthening teardown to attempt every owned resource and preserve failures,
+  all 27 scheduler checks and affected lint/typecheck gates pass again; final fixture
+  lint and packaged runtime also pass without disabling unsafe-finally checks.
+- The rebuilt admin image `sha256:ee4baddb57cfad974d25d3e62c6af006127a50ddaa335a8dcb6cdd1c63b1c8fc`
+  passes the retained three-image OrbStack campaign. A fixture-only internally seeded
+  schedule, encrypted controlled endpoint and actual database source row exercise the
+  production application's bootstrap timer. Signed private NDJSON accepts a 2001
+  request timestamp by recent receipt; controlled 503→202 delivery retains the same
+  ID/bytes after source mutation and erases terminal payload. Two attempts/one record
+  are persisted. This proves packaged scheduling/retry, not actual-provider indexing
+  or public activation. The first packaged run was started before the build completed,
+  used the prior image and lacked the schedule table; it is retained separately in
+  `receipt-runtime-smoke.log`. Completed-image runs pass in
+  `.local-work/issue95/receipt-runtime-smoke-final.log`, the final teardown rerun
+  `.local-work/issue95/receipt-runtime-cleanup-final.log` and
+  `.local-work/metrics-container-evidence.json`.
+- The same packaged run retains metrics/SSE/reconnect, consumer attribution, stored
+  metadata privacy and irreversible retention, actual alert firing/retry/recovery and
+  two private RustFS archives containing all 97 exported records in the final run.
+  Alert firing acceptance takes **60.478 seconds**. Gateway/control-plane/admin each exit **0**.
+  These remain local fixture checks; #69, historical RustFS cleanup #90, unchanged
+  Node intermediate-mTLS failure and formal phase/provider acceptance remain open.
+- This checkpoint exposed a capacity constraint: its 1,000-row tenant history cap
+  with seven-day history could stall continuously nonempty minute-cadence exports.
+  The continuation below fixes that admission/history boundary. Sustained timer
+  throughput/backpressure, authenticated schedule/history/payload controls and
+  Settings UX remain required; phase 4.4 and the later roadmap are not complete.
+
+## Scheduled external delivery history capacity — local continuation of issue #95
+
+- The previous packaged image reproduces a continuously full-history stall: internally
+  configured scheduling reports `history_full` and sends no source row when 1,000
+  young terminal rows are present. Evidence is retained in
+  `.local-work/issue95/capacity-before-runtime.log`; the boundary is exercised without
+  adding a public activation endpoint or weakening private egress.
+- Selected-record caller identities now have an independent 1,000-row admission
+  budget and retain their existing 168-hour terminal lifetime. Automatic jobs have
+  a hard 1,200-row tenant budget: 1,000 terminal metadata rows plus 200 pending slots
+  across the ten permitted destinations. Both sources share the 20-pending-per-
+  destination bound. Producer admission and final acknowledgement serialize on the
+  tenant admission lock. Excess scheduled terminal metadata compacts in at most
+  500-row pages; queued/processing identities and caller rows are never selected.
+  If concurrent cleanup owns excess rows at the hard automatic limit, `history_busy`
+  preserves the source cursor and retries after five seconds. Legacy excess rows
+  drain in bounded pages before more automatic work is admitted.
+- A persisted scheduled marker survives schedule foreign-key removal/recreation;
+  repeated migration backfills existing scheduled jobs and retains the marker.
+  The committed receipt/UUID cursor prevents replay after terminal metadata rolls off.
+  Retention-floor advancement remains explicit; automatic metadata is no longer
+  promised for a minimum seven days. Receivers still need at-least-once deduplication
+  because an acknowledgement can be lost before persistence.
+- Deletion and workspace summary increments commit together, including age-based
+  cleanup. One fixed summary row counts removed scheduled delivered/failed/expired
+  batches and record occurrences. Records exported to multiple destinations count
+  multiple times; these are not unique-source totals. `historyState` returns at most
+  50 projected destination rows and workspace coverage in one statement snapshot,
+  with exact BIGINT decimal strings, the 168-hour maximum age, 1,000 terminal target,
+  read limit and last prune time. Neither source IDs nor payloads are returned.
+- Ten additional real-PostgreSQL checks bring the scheduler suite to **37 tests**:
+  full independent cohorts, active payload/lease preservation, replica serialization,
+  atomic coverage-write rollback, age cleanup, schedule removal/recreation, repeated
+  migration, exact counters beyond JavaScript's safe integer range, tenant isolation,
+  bounded legacy cleanup and actual row-lock ownership at the hard automatic limit.
+  All **763 admin tests / 42 suites** pass in **91.629 seconds** with real PostgreSQL,
+  Redis and pinned RustFS. Five-project lint/typecheck and four-app builds pass;
+  eight unchanged tasks reuse Nx cache. Logs:
+  `.local-work/issue95/capacity-admin-bounded-final.log`,
+  `capacity-locked-focused.log` and `capacity-gates-bounded-final.log`.
+- `admin-api:export-capacity-smoke` exercises actual source/store/worker/transport
+  code under UID 1000 with pruned production dependencies and an owned non-UTC
+  PostgreSQL database. Its **1,101** windows each produce an actual signed private
+  HTTP NDJSON delivery. An independently seeded **1,000-row caller history** stays
+  intact; reconstructing the worker/store midway causes no duplicate source or
+  delivery ID. The final run takes **19.988 seconds**, retains **1,000 scheduled +
+  1,000 caller** rows and **zero payloads**, and records **101** removed delivered
+  batches/record occurrences. Image:
+  `sha256:5ed5d8fc7b3ac5d48ca68f4a706c44428b78531e0e2314703cf2016667e9cefd`.
+  Evidence: `.local-work/issue95/capacity-sweep-bounded-evidence.json` and
+  `.local-work/issue95/capacity-sweep-bounded-final.log`. This direct loop is a
+  capacity regression, not a timer throughput or comparative provider benchmark.
+- Initial verification failures were corrected in fixtures without changing
+  production admission/privacy boundaries: caller deduplication must pass its saved
+  policy; concurrent producer reservations can legitimately defer one caller; the
+  runtime fixture uses an async entry point and the worker's delivery outcome enum;
+  the bootstrap receiver tracks its actual batch by ID rather than selecting seeded
+  terminal history. Initial logs remain under `.local-work/issue95/`. The retained
+  non-root transport smoke passes signed NDJSON, temporary-credential/path-style S3,
+  verified virtual-host TLS S3, Datadog EU TLS and actual shutdown drain against the
+  final image (`capacity-transport-bounded-final.log`).
+- The same final admin image passes the retained three-image OrbStack runtime check.
+  Its actual bootstrap timer starts with independently full caller/scheduled history,
+  admits the trusted recent receipt despite a 2001 request timestamp, and persists
+  the signed private **503→202** retry with stable ID/bytes after source mutation.
+  It erases terminal payload, preserves caller rows and records the removed scheduled
+  outcome. Metrics/SSE/reconnect, consumer attribution, stored metadata privacy,
+  irreversible retention, alert firing/retry/recovery and **two private RustFS archives
+  containing 96 rows** pass. Alert firing acceptance takes **59.730 seconds**;
+  gateway/control-plane/admin each exit **0**. All owned runtime containers are gone;
+  the retained verification infrastructure and unrelated services remain running.
+  Evidence: `.local-work/issue95/capacity-runtime-bounded-final.log` and
+  `.local-work/issue95/capacity-runtime-bounded-evidence.json`. These controlled local fixtures do
+  not close #69, historical RustFS cleanup #90, the unchanged Node intermediate-mTLS
+  failure, actual-provider acceptance or formal phase/release gates.
+
+## External delivery discovery under slow receivers — local continuation of issue #95
+
+- Real PostgreSQL/HTTP regression reproduces a stalled receiver holding the entire
+  discovery sweep: the fifth healthy destination does not dispatch despite free
+  worker slots (`.local-work/issue95/throughput-before.log`). Source/discovery now
+  owns its non-overlapping two-second timer separately from provider attempts.
+  It reserves only currently free worker slots, excludes its already-owned
+  destinations and holds at most four attempts, one per destination per instance.
+  Ownership includes claim, actual socket settlement, eligibility polling and final
+  persistence. Shutdown aborts and drains both source work and all owned attempts.
+  Capacity exhaustion waits for settlement instead of accumulating promises.
+- The strengthened regression gives the stalled destination four real immutable
+  source batches and verifies that subsequent discovery sends healthy backlog
+  while retaining exactly one processing slow batch and three untouched queued
+  batches. The bootstrap/shutdown check now takes a real ingestion advisory lock
+  to prove source sweeps cannot overlap, then releases it and verifies actual
+  socket drain and persisted cancellation. No assertion/deadline is weakened.
+- A second real HTTP regression reproduces automatic dispatch selecting older
+  caller work when both sources share an active destination. The timer now passes
+  an explicit scheduled-only claim: the job must be marked scheduled and still
+  have that destination's schedule ID. The caller batch remains queued with zero
+  attempts while the scheduled batch is acknowledged. Explicit internal worker
+  calls retain their existing behavior. Failure evidence:
+  `.local-work/issue95/throughput-scope-before.log`.
+- All **114 focused export checks / four suites** pass, including **39 receipt
+  scheduler checks**, the durable store and real transport/RustFS boundaries.
+  Full admin regression passes **765 tests / 42 suites** in **88.667 seconds** with
+  real PostgreSQL/Redis/RustFS. Five-project lint/typecheck/four-app builds pass;
+  current admin/shared gates pass again after the claim-scope change. New fixture
+  non-null assertions were replaced with explicit ownership checks; a network-boundary
+  stub now supplies free capacity and asserts the explicit scheduled claim argument.
+  Initial fixture lint warnings and the obsolete stub assertion remain recorded. Evidence:
+  `.local-work/issue95/throughput-combined-current.log`, `throughput-admin-current.log`,
+  `throughput-gates-final.log`, `throughput-gates-current.log` and
+  `throughput-backlog-final.log`.
+- `admin-api:export-scheduler-smoke` runs actual compiled source classes with pruned
+  production dependencies under UID 1000 and an owned non-UTC PostgreSQL database.
+  It starts the actual bootstrap timer with **zero manual ticks**, two workspaces,
+  seven destinations and six healthy receivers alongside a stalled receiver.
+  A fixture-owned real 20-batch slow queue tests pressure without cursor loss;
+  pause drains queued work, reconstruction preserves identities and resume admits
+  the remaining source windows. Signed/private bytes, tenant/filter isolation,
+  identical bytes for legitimate retries, no replay under a new delivery ID,
+  processing/socket bounds and terminal payload erasure are asserted. Initial run
+  delivers **73 batches/record occurrences from 41 distinct source records**,
+  begins delivery to all healthy destinations in **2.106 seconds**, and completes
+  in **56.291 seconds**. Its observed processing limit is **4** and destination
+  pending limit is **20**. This controlled workload does not establish production
+  scale, larger replica/load acceptance, external-provider indexing or Kong performance.
+- Final rebuilt admin image
+  `sha256:f76dfe356b768e2a64520cc3e718a27c137df56df83176989e4e5ddff0961972`
+  passes the updated timer fixture: **73 batches**, all six healthy destinations
+  receiving within **2.100 seconds**, **56.211 seconds** overall, at most **4 processing
+  jobs / 3 observed sockets / 20 pending batches per destination**, and zero terminal
+  payloads. The retained 1,101-window capacity fixture passes in **22.869 seconds**
+  with unchanged caller identities, 1,000 scheduled terminal rows and 101 removed
+  outcomes. The retained provider transport smoke covers signed NDJSON, S3 temporary
+  credentials/path addressing, verified virtual-host S3 TLS, Datadog EU TLS and
+  shutdown drain. The builder now emits all three fixtures; capacity/scheduler use
+  a shared bounded launcher that pins the inspected image and records compiled
+  fixture hashes. Evidence:
+  `.local-work/issue95/throughput-timer-final-evidence.json`,
+  `throughput-capacity-final-evidence.json`, `throughput-timer-final.log`,
+  `throughput-capacity-final.log` and `throughput-transport-final.log`.
+- The same final image passes the retained actual application bootstrap campaign
+  with stable signed **503→202** scheduling/retry despite full independent history,
+  packaged migration and transactional destination/key revocation. Metrics/SSE,
+  consumer attribution, privacy/retention and **three private RustFS archives
+  containing 96 rows** pass. Alert firing acceptance takes **59.638 seconds** and
+  all three application services exit **0**. Evidence:
+  `.local-work/issue95/throughput-runtime-final.log` and
+  `throughput-runtime-final-evidence.json`. Old capacity evidence is archived beside
+  its own logs rather than relying on the shared latest-evidence files. This remains
+  unmerged local development; public activation, larger workload/provider acceptance,
+  #69/#90, the unchanged Node intermediate-mTLS gate and later phases remain open.
+
+## Authenticated external delivery controls — local continuation of issue #95
+
+The external delivery path now has explicit tenant APIs and Settings controls. This
+remains unmerged local development, with formal phase/provider acceptance still open.
+
+- Saving credentials creates an inactive draft. The destination list reports the
+  installation's delivery capability and separate draft/enabled/paused configuration
+  state. Metadata/key writes preserve that state and revoke waiting bytes for the
+  previous destination revision. Enabled does not establish provider health/indexing.
+- Authenticated `GET/PUT/DELETE /tenants/:tenantId/log-export-destinations/:id/delivery`
+  expose safe state and strict revision-aware configuration/removal. The history
+  suffix returns at most 50 metadata rows with exact decimal workspace coverage.
+  No arbitrary source IDs, records, raw payloads or cursor writes are exposed.
+  The global tenant session guard binds the subject/path; foreign identifiers return 404. Responses are `no-store` and contain no credentials or provider responses.
+- First scheduling begins at database save receipt time, without backfill. Pause
+  keeps the cursor and queued retries; resume catches up within retained coverage.
+  Payload-policy changes fence old bytes. Pause and removal work without encryption
+  keys and when saved filters refer to now-omitted workspace metadata. Removal expires
+  only scheduled waiting leases/payloads, retains caller work and terminal history,
+  and recreation begins at its new save receipt. Owned history remains readable by
+  destination ID after credential removal; delivered external copies cannot be recalled.
+- The shared contracts and typed client precede the native Settings dialog. Controlled
+  cadence/status/prefix/consumer/privacy inputs retain selections on write or revision
+  failures. History separates source and acknowledgement from indexing, reports bounded
+  retention/compaction and keeps large decimal counters exact. Reads/mutations have
+  owned deadlines and cancel on close/workspace changes, without promising rollback.
+  The editor initializes from its own completed state read; it never starts from an
+  older cached revision. Background refreshes retain current selections. Browser
+  regressions caught and corrected the modal wrapper, select labels and reopening
+  race; those failing logs remain under `.local-work/issue95/activation-browser-*`.
+- Real PostgreSQL/Nest HTTP checks cover explicit activation/start time, strict DTOs,
+  session/tenant boundaries, stale writes, unavailable keys, preserved hidden filters,
+  scheduled-only lease removal, safe retained history and enabled metadata/key writes.
+  All **781 admin tests / 42 suites** pass in **87.883 seconds** with local
+  PostgreSQL/Redis/RustFS. The focused final lease check passes **34 tests / two suites**.
+  Existing dashboard regression passes **10 tests / three suites**. All five projects'
+  lint/typecheck and four application builds pass; current dashboard/admin/shared
+  gates pass again after the reopening correction. Evidence:
+  `.local-work/issue95/activation-admin-regression.log`,
+  `activation-http-lease-final.log`, `activation-dashboard-regression.log`,
+  `activation-static-feedback-final.log`, `activation-other-static.log`,
+  `activation-backend-builds.log` and `activation-plane-build.log`.
+- The initial passing production browser suite completes **seven cold loads**, all
+  three providers' explicit delivery activation, retained filters/privacy, revision
+  recovery, pause/resume, enabled metadata edits, stopping without keys,
+  removal/recreation, two interrupted writes and workspace/focus/Escape/Tab checks.
+  Desktop/mobile axe checks and runtime errors are empty. Evidence:
+  `.local-work/issue95/activation-browser-seventh.log` and
+  `activation-browser-seven-evidence.json`. The final campaign completes **42 cold
+  loads under sixfold CPU throttling** and adds two held read cancellations, with
+  **zero runtime/accessibility findings** and a finalized trace. Both reads and errors
+  now belong to the current dialog: an earlier canceled request's cached error cannot
+  replace its loading/feedback state. The held-read fixture also owns pending event
+  waits so teardown retains the original assertion failure instead of an unhandled
+  rejection. Evidence: `activation-browser-stress-owned-final.log` and
+  `activation-browser-stress-final-evidence.json`. The earlier failed stress run is
+  retained; a passing hydration campaign does not close #69.
+- Rebuilt admin image
+  `sha256:58786256e5a51aac9f45958bf427693933067be6ffba4111c2b23b20b2a98d95`
+  passes the actual application bootstrap check. Only the operator-trusted encrypted
+  local receiver uses fixture SQL; scheduling is enabled through authenticated HTTP
+  before inserting a fresh database-receipted source. Its signed **503→202** retry
+  retains identity/bytes despite source mutation and full separate histories.
+  Public history returns 50 safe rows and compaction coverage; public pause/removal
+  retain history. Packaged migration, stale-write/lease preservation, revocation,
+  metrics/SSE, consumer attribution, privacy/retention and **two private RustFS
+  archives containing 96 rows** pass. Alert firing acceptance takes **59.773 seconds**;
+  all three application services exit **0**. Evidence:
+  `.local-work/issue95/activation-runtime-initial.log` and
+  `activation-metrics-container-evidence.json`.
+- The same image passes the retained actual bootstrap timer with two workspaces,
+  seven destinations, zero manual ticks and **73 signed batches/record occurrences
+  from 41 distinct sources**. All six healthy destinations receive within **2.103
+  seconds**, with **54.299 seconds** overall, at most **4 processing jobs / 2 observed
+  sockets / 20 pending batches**, and zero terminal payloads. The 1,101-window capacity
+  fixture completes in **23.984 seconds**, preserves all 1,000 caller identities and
+  1,000 scheduled terminal rows, and records 101 removed outcomes. UID 1000 transport
+  checks retain signed NDJSON, S3 temporary/path and verified virtual-host TLS,
+  Datadog EU TLS and shutdown drain. Evidence:
+  `.local-work/issue95/activation-export-scheduler-evidence.json`,
+  `activation-export-capacity-evidence.json`, `activation-timer-final.log`,
+  `activation-capacity-final.log` and `activation-provider-final.log`.
+
+Larger workload/replica and actual-provider acceptance, scalable consumer rollups,
+#69/#90, the unchanged Node intermediate-mTLS gate, later phases and formal release
+acceptance remain open. No production deployment or comparative Kong claim is made.
+
+## Issue #95 review preparation — 11 October 2026
+
+The export work is separated from the later consumer-rollup, declarative import
+and CLI changes. Those later features remain in the shared working checkout and
+are not part of this issue's committed source. The personal SSH alias
+`github-personal` authenticates as `mayank-rawat98`; the repository uses the matching
+commit identity and push URL.
+
+- Backend commit `9012b6d` contains bounded provider transports, immutable durable
+  delivery, receipt scheduling, capacity/history controls, public authenticated APIs
+  and their actual receiver/PostgreSQL regressions.
+- UI commit `798bc53` contains explicit activation, pause/resume, filters, payload
+  policy and metadata-only history. Credential saves remain inactive drafts.
+- An isolated checkout with its own `npm ci` verifies these exact source blobs.
+  It starts at snapshot `4ba599debb390f14c80210786c6914918cc627b9`; every committed
+  backend/UI source, test and configuration blob matches that snapshot. Final docs
+  add the new verification record without changing tested source.
+- All five projects pass lint, typecheck and application builds. All four production
+  images are rebuilt from the isolated snapshot; image IDs are retained in
+  `.local-work/issue95/commit-preparation/isolated-image-evidence.json`.
+- Structured quiescent admin verification passes **782 tests / 42 suites**, with
+  zero skipped tests, in **85.832 seconds**. A preceding loaded run recorded two
+  five-second alert setup-hook timeouts; the failure remains retained. No timeout
+  or assertion was weakened.
+- The isolated production browser campaign passes **42 cold loads**, sixfold CPU
+  throttling, all three providers and activation/revision/stop/recreation/cancellation
+  flows with zero runtime/accessibility findings. The first nested-checkout preview
+  failed because Next.js selected its parent workspace; relocating the checkout
+  outside the repository and rebuilding corrected verification isolation.
+- Evidence lives under `.local-work/issue95/commit-preparation/`: `isolated-static-build.log`,
+  `isolated-admin-results.json` (the loaded failure),
+  `isolated-admin-quiescent-results.json`, `isolated-admin-quiescent.log`,
+  `isolated-dashboard-final.log`, `isolated-browser-evidence.json` and image logs.
+
+- The final isolated three-application pipeline passes real gateway traffic,
+  metrics within two seconds, reconnect/history, private archives, privacy/retention,
+  signed automatic delivery/retry, authenticated activation/history and revision
+  revocation. Gateway, collector and admin all exit **0**. Actual alert firing
+  acceptance takes **59.307 seconds**. The initial runtime under concurrent builds
+  failed an exact 10-success response assertion with 8; its failure remains retained,
+  and the quiescent repeat passes unchanged assertions.
+- The non-root transport fixture passes signed NDJSON, temporary-credential path S3,
+  virtual-host TLS S3, regional Datadog TLS and actual-work shutdown. The automatic
+  two-workspace/seven-destination scheduler delivers **73 batches / 41 distinct
+  sources**, progresses all six healthy destinations in **2.106 seconds** and
+  preserves four-slot/20-pending bounds, pause/resume and reconstruction.
+  There are **zero manual timer ticks**. The capacity fixture delivers **1,101 real
+  windows in 21.650 seconds**, retains 1,000 caller plus 1,000 scheduled rows,
+  reports exact 101-row/record compaction and leaves no terminal payloads.
+- The fourth production image returns **HTTP 200** for login and exits **0**.
+  Image login is separate from the full production browser campaign above.
+- Additional evidence: `isolated-runtime-evidence.json`, `isolated-runtime-quiescent.log`,
+  `isolated-runtime.log` (the initial failure), `isolated-export-runtimes.log`,
+  `isolated-scheduler-evidence.json`, `isolated-capacity-evidence.json` and
+  `isolated-dashboard-image-evidence.json` in the same directory.
+
+- Retained collector and dashboard regressions pass **114 / 7 suites** and
+  **10 / 3 suites**, respectively. Gateway verification passes **583 of 584**;
+  the unchanged native intermediate-chain mTLS case still returns **403** where
+  **200** is required. The gateway source has not changed in this PR. This is an
+  explicit failing gate, not a full-workspace pass. Structured results and
+  `isolated-retained-final.log` preserve the failure. The first report-writing
+  attempt also failed because its output directories were absent; directories
+  were created and the final commands leave only the native mTLS failure.
+
+Issue-level verification does not complete formal provider, comparative or release
+acceptance. The unchanged intermediate-mTLS limitation, #69, #90, scalable consumer
+analytics, phases 5–6 and enterprise requirements remain open. The branch stays
+unmerged while the required review is pending; no main deployment is authorized.
+
 ## Remaining work
 
-### Next: external destination delivery; retain follow-ups #69 and #90
+### Next: scalable consumer analytics and developer tooling; retain follow-ups #69 and #90
 
 - Reproduce the intermittent server/session hydration recovery, identify the DOM/state
   mismatch and fix its source. Keep strict browser error gates and record a regression
@@ -842,10 +1373,10 @@ rollups, later phases and formal acceptance remain open below.
 
 ### Remaining phase 4 work
 
-- Complete delivery workers for stored external S3-compatible, webhook NDJSON and
-  Datadog drafts. Issues #88/#91 supply encrypted revision-aware configuration and
-  Settings controls; DNS-pinned egress, destination payload policies,
-  delivery identity/retries/history and retention are still required. Issue #84 implements stored-metadata field selection.
+- Verify larger external delivery workloads/replicas and actual-provider acceptance.
+  Transports, immutable snapshots, bounded durable retries, receipt scheduling,
+  authenticated activation, stricter payload policies and metadata-only history
+  are implemented locally in issue #95; formal acceptance remains open.
 - High-volume per-consumer rollups, idempotent ingestion/backfill, retention and
   explicit coverage indicators beyond the bounded persisted-log usage view.
 - Formal acceptance for tracing, two-second live metrics, 90-second actual alert delivery,

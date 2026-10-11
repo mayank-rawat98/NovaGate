@@ -359,3 +359,54 @@ Use only the shared bounded field inventory; unknown or duplicate field selectio
 are invalid. Collectors and current historical reads enforce persisted policy before
 exposing records. Consumer attribution and path grouping must respect current privacy
 while erasure is pending. Separate trace/error storage has separate policies.
+
+## Rule 24 — External export identities and lifetime are part of delivery correctness
+
+External log transports serialize only the bounded documented record shape after
+applying the stricter tenant/destination privacy policy. Webhook HMAC authenticates
+timestamp, stable delivery ID and exact NDJSON bytes together. S3 uses the official
+SigV4 signer, one PUT and a stable tenant/destination/delivery object key. Datadog
+correlation IDs do not establish provider deduplication. A provider HTTP acknowledgement
+cannot establish indexing, inbox delivery or exactly-once behavior.
+
+Use the shared all-answer DNS-pinned boundary with verified TLS, no redirects and a
+dedicated operator-owned export trust allowlist. Never inherit alert trust exceptions
+or platform storage credentials. Hold transport admission through actual resolver and
+socket settlement, including cancellation/shutdown; workers own durable retries and
+must fence destination, privacy and retention revisions. Transport availability alone
+never enables stored draft connections.
+
+Receipt scheduling commits the precise receipt/UUID cursor and immutable provider-sized
+batch in one transaction under the ingestion lock. Use settled UTC minute/hour windows,
+bounded source text reads and pages, fair replica discovery and durable capacity checks.
+Queue/history pressure preserves unprocessed receipts. Retention advancement records
+skipped elapsed time; invalid/filtered records have separate counters. Pause stops new
+admission while already queued batches retain their retry identity. Cadence/filter saves
+preserve the cursor; payload-policy changes revoke old bytes through destination revision
+fencing. No network operation belongs inside the source transaction.
+
+Bound scheduled metadata independently of selected-record caller identities. Compact
+only terminal scheduled rows in bounded pages; never remove queued/processing retry
+identities or young caller identities to admit an automatic batch. Serialize admission
+and final acknowledgement with the tenant admission lock, and preserve the cursor when
+concurrent cleanup owns excess rows at the hard automatic limit. Scheduled source kind
+survives schedule removal. Commit deletion and workspace outcome/record-occurrence
+coverage together in one fixed summary row; expose exact decimal counters and the
+history age/row/read limits. Do not imply complete per-delivery history after compaction,
+unique exported records across destinations, or provider deduplication.
+
+Do not hold the discovery timer while waiting for provider responses. Reserve only
+free worker slots, keep at most one owned attempt per destination per instance and
+hold that ownership through actual socket/poll/final-write settlement. Source sweeps
+must remain non-overlapping; shutdown drains both sweeps and independent attempts.
+Automatic dispatch must claim only scheduled batches still bound to the current
+schedule, even if older caller batches share the same destination.
+
+Public activation requires the tenant session, strict supported configuration and
+both destination/schedule revisions. Credential storage never enables delivery.
+Expose only safe metadata and bounded history/coverage, not arbitrary enqueue,
+payloads, source IDs, provider bodies or credentials. Permit pause/removal when keys
+are unavailable or saved filters became private. Automatic schedule removal revokes
+only scheduled pending leases/bytes; retain caller identities and terminal source
+markers. Recreating starts at the new database save receipt. Enabled means configured;
+provider acknowledgement does not establish health or indexing.

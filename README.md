@@ -1,6 +1,6 @@
 # NovaGate — Self-Hosted API Gateway
 
-> A production-grade, multi-tenant API gateway where **live traffic never touches the SaaS servers**. Tenants deploy the gateway binary on their own VPS; the SaaS control plane handles config, analytics, and routing rules only.
+> A multi-tenant API gateway where **API proxy traffic stays on the customer's data plane**. Tenants deploy the gateway binary on their own VPS; the control plane manages configuration and recorded telemetry. Production acceptance and remaining capabilities are tracked in [PROGRESS.md](PROGRESS.md).
 
 **Live:** [novagate.dev](https://novagate.dev) &nbsp;·&nbsp; **Docs:** [novagate.dev/docs](https://novagate.dev/docs) &nbsp;·&nbsp; **Dashboard:** [app.novagate.dev](https://app.novagate.dev)
 
@@ -8,11 +8,13 @@
 
 ## Why this exists
 
-Most API gateway SaaS products (Kong Cloud, Zuplo, etc.) proxy your production traffic through their servers — introducing latency, per-request costs, and data-sovereignty concerns. NovaGate separates the **data plane** (traffic) from the **control plane** (configuration), so:
+NovaGate separates the **data plane** (API traffic) from the **control plane** (configuration and recorded telemetry):
 
-- Live traffic is proxied directly on the customer's own server — zero latency added by SaaS hops
-- SaaS server cost scales with number of tenants, not request volume
-- If the control plane goes offline, the gateway keeps serving from its local Redis warm-start cache
+- The customer's gateway proxies requests directly to downstream services.
+- Shared control-plane services manage configuration and recorded telemetry; telemetry storage and processing still scale with recorded volume.
+- A valid local Redis configuration cache lets a gateway warm-start while the control plane is unavailable.
+
+Kong also supports [separate control and data planes](https://developer.konghq.com/gateway/hybrid-mode/) and [self-managed data-plane hosting](https://developer.konghq.com/gateway/topology-hosting-options/). Our beyond-Kong roadmap requires verified capabilities, reliability, operator workflows and comparative acceptance; this deployment model alone does not establish an advantage.
 
 ---
 
@@ -305,7 +307,7 @@ The Services form also exposes HTTP/2 upstream connections and WebSocket upgrade
 
 The gateway data plane uses Redis and tenant configuration from the control plane. It has no PostgreSQL connection or local administrative CRUD; manage services through the authenticated tenant admin API. `DATABASE_URL` is required by the admin API and control plane, and is ignored by the gateway.
 
-Use `docker/gateway.env.example` as a non-secret gateway configuration template. Only list reverse proxies you control in `TRUSTED_PROXY_CIDRS`; do not use a broad network to make client IP detection appear to work. Route IP restrictions support IPv4 and IPv6.
+Configure the gateway using the environment variable reference below; keep local env files out of Git. Only list reverse proxies you control in `TRUSTED_PROXY_CIDRS`; do not use a broad network to make client IP detection appear to work. Route IP restrictions support IPv4 and IPv6.
 
 ## Local regression verification
 
@@ -458,13 +460,15 @@ TEST_OBJECT_STORAGE_ENDPOINT=http://127.0.0.1:19000 \
 NX_DAEMON=false NX_NO_CLOUD=true npm exec nx run admin-api:test -- --skipNxCache
 ```
 
-Production storage is disabled until configured. [docker/object-storage.env.example](docker/object-storage.env.example) lists the settings; choose real credentials in the deployment environment rather than editing tracked examples. `COMPOSE_PROFILES=object-storage` enables the bundled RustFS service (Compose 2.20+ is required for its optional dependency). It has persistent data/log volumes and readiness checks, joins only the internal gateway network, and publishes neither S3 nor console ports. External S3-compatible storage can use the same API settings without enabling that profile. Startup checks the bucket policy and ACL and refuses public grants; the adapter never adds a public policy or ACL. Keep AWS S3 Block Public Access enabled as an additional operator control.
+Production storage is disabled until configured. Set the documented `OBJECT_STORAGE_*` variables in the deployment environment; all env files and env templates are ignored by Git. `COMPOSE_PROFILES=object-storage` enables the bundled RustFS service (Compose 2.20+ is required for its optional dependency). It has persistent data/log volumes and readiness checks, joins only the internal gateway network, and publishes neither S3 nor console ports. External S3-compatible storage can use the same API settings without enabling that profile. Startup checks the bucket policy and ACL and refuses public grants; the adapter never adds a public policy or ACL. Keep AWS S3 Block Public Access enabled as an additional operator control.
 
-External S3-compatible, webhook and Datadog connections can be prepared in **Settings → External export destinations** and stored as encrypted drafts through the tenant API. They do not deliver yet. Dedicated export keys, safe reads, revision-aware edits/removal and key rotation are documented in [the destination guide](apps/admin-api/src/log-export/README.md). The Settings editor supports masked complete credential replacement, metadata-only edits, revision-aware removal and saved-credential re-encryption. Provider transports and delivery history remain pending.
+External S3-compatible, webhook and Datadog connections start as encrypted drafts in **Settings → External export destinations**. Choose **Delivery & history** to explicitly enable receipt scheduling, select filters and stricter payload omissions, pause/resume, remove automatic delivery or inspect metadata-only history. Saving credentials never enables delivery. First configuration starts at database save time; resume catches up with retained receipts and pause lets queued batches finish. Removal revokes scheduled waiting bytes and preserves history; external copies cannot be recalled. Enabled is a saved configuration state, and provider acknowledgement does not establish indexing or health. Dedicated keys, safe reads, revision-aware controls and rotation are documented in [the destination guide](apps/admin-api/src/log-export/README.md).
+
+Issue #95's unmerged local continuation includes bounded transports, immutable snapshots, leased attempts and authenticated receipt scheduling controls. Scheduled terminal history rolls off with exact workspace coverage while preserving caller identities and active retries. Discovery continues independently of provider latency within free worker slots and claims only scheduled batches. Controlled runtime checks cover signed retries, full history, slow receivers, queue pressure, pause/resume and reconstruction. Larger workload/replica acceptance, actual-provider acceptance and formal phase/release acceptance remain pending.
 
 Keep RustFS root credentials separate from the application's archive service account. Pre-create a private archive bucket, or use `OBJECT_STORAGE_CREATE_BUCKET=true` once with a provisioning identity and disable it afterward. The application account needs bucket location/list, policy/ACL read and multipart listing permissions, plus object get/put/delete and multipart abort permissions scoped to the archive bucket. It does not need to modify policies or ACLs. Use a TLS endpoint for external storage and restrict credential access. RustFS installation/readiness guidance: [official container documentation](https://docs.rustfs.com/en/installation/container) and [health endpoints](https://docs.rustfs.com/en/operations/status-check).
 
-The bundled single-node storage has no distributed redundancy. Back up PostgreSQL job metadata and RustFS objects together, protect backup credentials and preserve the bucket/object paths. Restore both into an isolated environment first; verify a known archive through the authenticated download endpoint and confirm anonymous access is denied. Expired objects will be removed when the restored worker starts. Distributed storage, restore drills, configurable external tenant destinations and redaction controls remain roadmap work; local and CI evidence does not establish final production acceptance.
+The bundled single-node storage has no distributed redundancy. Back up PostgreSQL job metadata and RustFS objects together, protect backup credentials and preserve the bucket/object paths. Restore both into an isolated environment first; verify a known archive through the authenticated download endpoint and confirm anonymous access is denied. Expired objects will be removed when the restored worker starts. Distributed storage and restore drills remain roadmap work; local and CI evidence does not establish final production acceptance.
 
 The packaged runtime check verifies actual gateway traffic and a separately authenticated late log through the control plane, automatic scheduling, private RustFS downloads, live metrics/alerting and service shutdown. Rebuild the three verification images before running it:
 
@@ -603,7 +607,7 @@ Manual tracing uses the pinned OpenTelemetry JavaScript SDK and validated W3C tr
 
 The shared trace wire contract allows 16 whitelisted scalar attributes, at most 256 UTF-8 bytes each, 8192 bytes per span, and 128 spans/65536 bytes per batch. Capacity and transport drops have bounded reason labels in Prometheus. Logs retain integer milliseconds for existing PostgreSQL schemas; trace spans preserve fractional timing. See the [OpenTelemetry trace SDK](https://github.com/open-telemetry/opentelemetry-js/blob/main/packages/sdk-trace/README.md) for manual instrumentation concepts.
 
-Control-plane and admin query limits are documented in [docker/tracing.env.example](docker/tracing.env.example). By default each tenant retains up to 100,000 spans for seven days; ingestion admits eight concurrent transactions with 5-second statement/1-second lock deadlines. Idle cleanup visits up to 64 tenant tables each minute. Admin trace queries admit eight concurrent transactions, use a 3-second statement deadline, allow seven-day ranges, return 50 traces per page and at most 256 detail spans. `TRACE_RETENTION_DAYS` must match across the control plane and admin API. Queries immediately hide expired spans; background physical deletion can take multiple ticks. Trace delivery is best effort, so use durable audit facilities for audit requirements.
+Control-plane and admin query limits are defined by [collector tracing configuration](apps/control-plane/src/config/tracing.configuration.ts) and [admin trace query configuration](apps/admin-api/src/proxy-config/traces.configuration.ts). By default each tenant retains up to 100,000 spans for seven days; ingestion admits eight concurrent transactions with 5-second statement/1-second lock deadlines. Idle cleanup visits up to 64 tenant tables each minute. Admin trace queries admit eight concurrent transactions, use a 3-second statement deadline, allow seven-day ranges, return 50 traces per page and at most 256 detail spans. `TRACE_RETENTION_DAYS` must match across the control plane and admin API. Queries immediately hide expired spans; background physical deletion can take multiple ticks. Trace delivery is best effort, so use durable audit facilities for audit requirements.
 
 ## Live HTTP metrics
 
@@ -634,9 +638,8 @@ Metric ingestion admits 32 concurrent transactions with 3-second statement and
 1-second lock deadlines. Each tenant keeps at most 100,000 samples for seven days;
 the row cap can shorten that history. Idle expiry visits at most 64 tenant tables
 per minute. Queries immediately filter expired data. Keep `METRICS_RETENTION_DAYS`
-consistent between admin and control plane. Gateway budgets are in
-[docker/gateway.env.example](docker/gateway.env.example); ingestion, stream and
-history budgets are in [docker/tracing.env.example](docker/tracing.env.example).
+consistent between admin and control plane. Gateway budgets are listed above; ingestion, stream and
+history budgets are documented in [the analytics guide](apps/admin-api/src/proxy-config/README.md).
 
 After building the three production images locally with OrbStack, run the complete
 pipeline verifier:
@@ -668,7 +671,7 @@ Rule/channel changes use revision checks; saved secrets remain hidden and rotati
 requires explicit replacement. Empty channel selection records history only.
 
 Operators configure dedicated encryption keys and optional Mailtr credentials using
-[docker/alerting.env.example](docker/alerting.env.example). Default notification egress
+[the alerting configuration guide](apps/admin-api/src/alerts/README.md). Default notification egress
 uses validated public HTTPS; intentional private receivers require exact trusted
 origins. Read the [alerting guide](apps/admin-api/src/alerts/README.md) for key rotation,
 webhook signature verification, finite retries and at-least-once delivery semantics.
