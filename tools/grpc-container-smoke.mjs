@@ -127,8 +127,12 @@ function certificate(name) {
       '/CN=localhost',
       '-addext',
       'subjectAltName=IP:127.0.0.1,DNS:host.docker.internal',
+      '-addext',
+      'basicConstraints=critical,CA:TRUE,pathlen:1',
+      '-addext',
+      'keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign,cRLSign',
     ],
-    { stdio: 'ignore', timeout: 15000 },
+    { cwd: directory, stdio: 'ignore', timeout: 15000 },
   );
   chmodSync(key, 0o644); // Allow the non-root container to read its disposable fixture.
   return { key: readFileSync(key), cert: readFileSync(cert) };
@@ -297,7 +301,7 @@ try {
       '-subj',
       '/CN=Packaged client',
     ],
-    { stdio: 'ignore', timeout: 15000 },
+    { cwd: directory, stdio: 'ignore', timeout: 15000 },
   );
   writeFileSync(
     resolve(directory, 'client.ext'),
@@ -315,6 +319,8 @@ try {
       '-CAkey',
       resolve(directory, 'trusted.key.pem'),
       '-CAcreateserial',
+      '-CAserial',
+      resolve(directory, 'trusted.srl'),
       '-out',
       resolve(directory, 'client.cert.pem'),
       '-days',
@@ -322,7 +328,7 @@ try {
       '-extfile',
       resolve(directory, 'client.ext'),
     ],
-    { stdio: 'ignore', timeout: 15000 },
+    { cwd: directory, stdio: 'ignore', timeout: 15000 },
   );
   execFileSync(
     'openssl',
@@ -336,6 +342,8 @@ try {
       '-CAkey',
       resolve(directory, 'untrusted.key.pem'),
       '-CAcreateserial',
+      '-CAserial',
+      resolve(directory, 'untrusted.srl'),
       '-out',
       resolve(directory, 'rotated-client.cert.pem'),
       '-days',
@@ -343,7 +351,7 @@ try {
       '-extfile',
       resolve(directory, 'client.ext'),
     ],
-    { stdio: 'ignore', timeout: 15000 },
+    { cwd: directory, stdio: 'ignore', timeout: 15000 },
   );
   const clientCredentials = {
     key: readFileSync(resolve(directory, 'client.key.pem')),
@@ -365,7 +373,7 @@ try {
       '-subj',
       '/CN=Packaged intermediate',
     ],
-    { stdio: 'ignore', timeout: 15000 },
+    { cwd: directory, stdio: 'ignore', timeout: 15000 },
   );
   writeFileSync(
     resolve(directory, 'intermediate.ext'),
@@ -383,6 +391,8 @@ try {
       '-CAkey',
       resolve(directory, 'trusted.key.pem'),
       '-CAcreateserial',
+      '-CAserial',
+      resolve(directory, 'trusted.srl'),
       '-out',
       resolve(directory, 'intermediate.cert.pem'),
       '-days',
@@ -390,7 +400,7 @@ try {
       '-extfile',
       resolve(directory, 'intermediate.ext'),
     ],
-    { stdio: 'ignore', timeout: 15000 },
+    { cwd: directory, stdio: 'ignore', timeout: 15000 },
   );
   execFileSync(
     'openssl',
@@ -404,6 +414,8 @@ try {
       '-CAkey',
       resolve(directory, 'intermediate.key.pem'),
       '-CAcreateserial',
+      '-CAserial',
+      resolve(directory, 'intermediate.srl'),
       '-out',
       resolve(directory, 'intermediate-client.cert.pem'),
       '-days',
@@ -411,7 +423,7 @@ try {
       '-extfile',
       resolve(directory, 'client.ext'),
     ],
-    { stdio: 'ignore', timeout: 15000 },
+    { cwd: directory, stdio: 'ignore', timeout: 15000 },
   );
   const directClientCredentials = { ...clientCredentials };
   clientCredentials.cert = Buffer.concat([
