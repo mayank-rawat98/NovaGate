@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import * as http2 from 'node:http2';
+import { TLSSocket } from 'node:tls';
+import { X509Certificate } from 'node:crypto';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import WebSocket, { WebSocketServer } from 'ws';
@@ -167,6 +169,90 @@ describe('real native TLS and proxy certificate assertions', () => {
         })
       ).status,
     ).toBe(200);
+  });
+  it('retains intermediate issuers after X509 and repeated detailed peer reads', async () => {
+    const port = await listen(
+      https.createServer(tlsOptions(), (req, res) => {
+        const socket = req.socket as TLSSocket;
+        const x509 = socket.getPeerX509Certificate();
+        const first = socket.getPeerCertificate(true);
+        const second = socket.getPeerCertificate(true);
+        const context = ctx(req, res);
+        void plugin.onRequest(context).then((denied) => {
+          res.statusCode = denied?.status ?? 200;
+          res.end(
+            JSON.stringify({
+              x509Leaf: x509?.fingerprint256,
+              firstIssuer: first.issuerCertificate?.fingerprint256,
+              secondIssuer: second.issuerCertificate?.fingerprint256,
+              authentication: context.authentication,
+            }),
+          );
+        });
+      }),
+    );
+    const result = await request(port, {
+      key: fixture.read('intermediate-client.key'),
+      cert: Buffer.concat([
+        fixture.read('intermediate-client.pem'),
+        fixture.read('intermediate.pem'),
+      ]),
+    });
+    const leaf = new X509Certificate(fixture.read('intermediate-client.pem'));
+    const issuer = new X509Certificate(fixture.read('intermediate.pem'));
+    expect(result.status).toBe(200);
+    expect(result.body.x509Leaf).toBe(leaf.fingerprint256);
+    expect(result.body.firstIssuer).toBe(issuer.fingerprint256);
+    expect(result.body.secondIssuer).toBe(issuer.fingerprint256);
+    expect(result.body.authentication).toEqual({
+      method: 'mtls',
+      subject: leaf.fingerprint256,
+    });
+  });
+  it('rechecks current tenant anchors on an existing intermediate-client TLS connection', async () => {
+    const options = tlsOptions();
+    const peers = new Set<TLSSocket>();
+    const server = https.createServer(options, (req, res) => {
+      peers.add(req.socket as TLSSocket);
+      void handler(req, res);
+    });
+    let refresh!: () => void;
+    bindTenantClientTrust(server, options, {
+      getConfig: () => ({ caCertPem: ca }),
+      subscribeConfig: (listener: () => void) => {
+        refresh = listener;
+        return () => {
+          /* Fixture cleanup. */
+        };
+      },
+    });
+    const port = await listen(server);
+    const agent = new https.Agent({
+      keepAlive: true,
+      maxSockets: 1,
+      maxFreeSockets: 1,
+    });
+    const identity = {
+      agent,
+      key: fixture.read('intermediate-client.key'),
+      cert: Buffer.concat([
+        fixture.read('intermediate-client.pem'),
+        fixture.read('intermediate.pem'),
+      ]),
+    };
+    try {
+      expect((await request(port, identity)).status).toBe(200);
+      ca = fixture.read('other-ca.pem').toString();
+      refresh();
+      expect((await request(port, identity)).status).toBe(403);
+      ca = fixture.read('ca.pem').toString();
+      refresh();
+      expect((await request(port, identity)).status).toBe(200);
+      expect(peers.size).toBe(1);
+      expect([...peers][0].authorized).toBe(true);
+    } finally {
+      agent.destroy();
+    }
   });
   it.each(['missing', 'wrong-client', 'wrong-purpose'])(
     'denies an unverified native peer: %s',
