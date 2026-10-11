@@ -91,6 +91,42 @@
           ],
           "parallel": false
         }
+      },
+      "export-capacity-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/build-export-transport-fixture.mjs tools/export-delivery-container-smoke.mjs",
+            "node tools/build-export-transport-fixture.mjs",
+            "node tools/export-delivery-container-smoke.mjs capacity"
+          ],
+          "parallel": false
+        }
+      },
+      "export-transport-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/build-export-transport-fixture.mjs tools/export-transports-container-smoke.mjs",
+            "node tools/build-export-transport-fixture.mjs",
+            "node tools/export-transports-container-smoke.mjs"
+          ],
+          "parallel": false
+        }
+      },
+      "export-scheduler-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/build-export-transport-fixture.mjs tools/export-delivery-container-smoke.mjs",
+            "node tools/build-export-transport-fixture.mjs",
+            "node tools/export-delivery-container-smoke.mjs scheduler"
+          ],
+          "parallel": false
+        }
       }
     }
   },

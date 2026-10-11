@@ -10,6 +10,9 @@ import { DataSource } from 'typeorm';
 import type {
   LogExportDestination,
   LogExportDestinationList,
+  LogExportDeliverySchedule,
+  LogExportDeliveryState,
+  LogExportDeliveryHistory,
 } from '@api-gateway/shared-types';
 import { TenantAuthGuard } from '../auth/tenant-auth.guard';
 import { MigrationService } from '../database/migration.service';
@@ -20,6 +23,9 @@ import {
   EXPORT_DESTINATION_LIMIT,
 } from './export-destinations.service';
 import { ExportDestinationCredentialCipher } from './export-destination-credentials';
+import { ExportDeliveryController } from './export-delivery.controller';
+import { ExportDeliveryStoreService } from './export-delivery-store.service';
+import { tenantSchema } from '../tenants/tenant-schema';
 
 const integration = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 const first = Buffer.alloc(32, 1).toString('base64');
@@ -45,9 +51,10 @@ integration(
     async function start(keys: Record<string, unknown> = initialKeys) {
       if (app) await app.close();
       const module = await Test.createTestingModule({
-        controllers: [ExportDestinationsController],
+        controllers: [ExportDestinationsController, ExportDeliveryController],
         providers: [
           ExportDestinationsService,
+          ExportDeliveryStoreService,
           { provide: APP_GUARD, useClass: TenantAuthGuard },
           { provide: DataSource, useValue: db },
           { provide: ConfigService, useValue: new ConfigService(keys) },
@@ -149,10 +156,17 @@ integration(
         );
     }, 30000);
     beforeEach(async () => {
-      await db.query('DELETE FROM public.log_export_destinations');
+      await db.query(
+        'DELETE FROM public.log_export_deliveries;DELETE FROM public.log_export_destinations;DELETE FROM public.log_export_delivery_history_totals',
+      );
+      await db.query(`DELETE FROM ${tenantSchema(tenant)}.request_logs`);
+      await db.query(
+        `UPDATE public.tenants SET "logPrivacy"='{"clientIp":"omit","userAgent":"omit"}' WHERE id=$1`,
+        [tenant],
+      );
       await start();
     });
-    it('stores all webhook secrets encrypted and never claims delivery is active', async () => {
+    it('stores all webhook secrets encrypted without activating a draft', async () => {
       const created = await create();
       const [{ credentials }]: Array<{ credentials: unknown }> = await db.query(
         'SELECT credentials FROM public.log_export_destinations WHERE id=$1',
@@ -176,7 +190,7 @@ integration(
       expect(response.headers.get('cache-control')).toBe('no-store');
       expect(output).toEqual({
         configurationAvailable: true,
-        deliveryAvailable: false,
+        deliveryAvailable: true,
         limit: 10,
         destinations: [created],
       });
@@ -188,6 +202,373 @@ integration(
       expect(JSON.stringify(output)).not.toMatch(
         /private-path|private-query|private-signing|nonce|ciphertext/,
       );
+    });
+    function delivery(
+      id: string,
+      method = 'GET',
+      suffix = '',
+      body?: unknown,
+      owner = tenant,
+      session: string | null = tenant,
+    ) {
+      return request(method, `/${id}/delivery${suffix}`, body, owner, session);
+    }
+    async function state(id: string) {
+      const response = await delivery(id);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      return (await response.json()) as LogExportDeliveryState;
+    }
+    async function configure(
+      id: string,
+      enabled = true,
+      overrides: Record<string, unknown> = {},
+    ) {
+      const current = await state(id);
+      const response = await delivery(id, 'PUT', '', {
+        enabled,
+        cadence: current.schedule?.cadence ?? 'near_real_time',
+        filter: current.schedule?.filter ?? {},
+        payloadPrivacy: current.schedule?.payloadPrivacy ?? {
+          clientIp: 'omit',
+          userAgent: 'omit',
+        },
+        expectedRevision: current.schedule?.revision ?? null,
+        expectedDestinationRevision: current.destinationRevision,
+        ...overrides,
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      return (await response.json()) as LogExportDeliverySchedule;
+    }
+    it('enables only through an authenticated revision-aware save and starts without backfill', async () => {
+      const created = await create();
+      const id = randomUUID();
+      await db.query(
+        `INSERT INTO ${tenantSchema(tenant)}.request_logs (id,method,path,"statusCode","responseTimeMs","requestId",timestamp,"receivedAt") VALUES ($1,'GET','/old',200,1,$2,'2001-01-01T00:00:00Z',clock_timestamp()-INTERVAL '1 minute')`,
+        [id, randomUUID()],
+      );
+      expect(await state(created.id)).toMatchObject({
+        available: true,
+        credentialStatus: 'available',
+        schedule: null,
+        pendingBatches: 0,
+        processingBatches: 0,
+        limits: {
+          pendingBatches: 20,
+          settlementSeconds: 15,
+          maxAttempts: 6,
+          payloadLifetimeHours: 24,
+        },
+      });
+      const enabled = await configure(created.id);
+      expect(enabled.enabled).toBe(true);
+      const [{ after }] = await db.query(`SELECT clock_timestamp() AS after`);
+      expect(Date.parse(enabled.startedAt)).toBeLessThanOrEqual(
+        after.getTime(),
+      );
+      expect(enabled.cursor).toBe(enabled.startedAt);
+      expect(enabled.admittedRecords).toBe(0);
+      expect(
+        (
+          await app
+            .get(ExportDeliveryStoreService)
+            .getSchedule(tenant, created.id)
+        )?.cursor,
+      ).toBe(enabled.cursor);
+      expect(
+        ((await (await request('GET')).json()) as LogExportDestinationList)
+          .destinations[0].state,
+      ).toBe('enabled');
+      const paused = await configure(created.id, false);
+      expect(paused.cursor).toBe(enabled.cursor);
+      expect(
+        ((await (await request('GET')).json()) as LogExportDestinationList)
+          .destinations[0].state,
+      ).toBe('paused');
+      const resumed = await configure(created.id, true);
+      expect(resumed.cursor).toBe(enabled.cursor);
+      expect(JSON.stringify(await state(created.id))).not.toMatch(
+        /private-path|private-query|private-signing|ciphertext|nonce|source_ids/,
+      );
+    });
+    it.each(['GET', 'PUT', 'DELETE'])(
+      'authorizes every %s delivery operation and isolates destination identifiers',
+      async (method) => {
+        const created = await create();
+        expect(
+          (
+            await delivery(
+              created.id,
+              method,
+              '',
+              method === 'GET' ? undefined : {},
+              tenant,
+              null,
+            )
+          ).status,
+        ).toBe(401);
+        expect(
+          (
+            await delivery(
+              created.id,
+              method,
+              '',
+              method === 'GET' ? undefined : {},
+              other,
+              tenant,
+            )
+          ).status,
+        ).toBe(403);
+        expect(
+          (await delivery(created.id, 'GET', '', undefined, other, other))
+            .status,
+        ).toBe(404);
+        expect(
+          (
+            await delivery(
+              created.id,
+              'GET',
+              '/history',
+              undefined,
+              other,
+              other,
+            )
+          ).status,
+        ).toBe(404);
+        expect(
+          (
+            await delivery(
+              created.id,
+              'GET',
+              '/history',
+              undefined,
+              tenant,
+              null,
+            )
+          ).status,
+        ).toBe(401);
+      },
+    );
+    it.each([
+      'records',
+      'receiptFrom',
+      'credentials',
+      'payload',
+      'expectedRevision',
+      'cadence',
+      'payloadPrivacy',
+      'filter',
+    ])(
+      'rejects invalid %s before mutating delivery configuration',
+      async (field) => {
+        const created = await create();
+        const values: Record<string, unknown> = {
+          records: [],
+          receiptFrom: '2001-01-01',
+          credentials: webhook,
+          payload: {},
+          expectedRevision: 'stale',
+          cadence: 'daily',
+          payloadPrivacy: {
+            clientIp: 'retain',
+            userAgent: 'retain',
+            headers: true,
+          },
+          filter: { rawBody: true },
+        };
+        const response = await delivery(created.id, 'PUT', '', {
+          enabled: true,
+          cadence: 'hourly',
+          filter: {},
+          payloadPrivacy: { clientIp: 'omit', userAgent: 'omit' },
+          expectedRevision: null,
+          expectedDestinationRevision: created.revision,
+          [field]: values[field],
+        });
+        expect(response.status).toBe(400);
+        expect((await state(created.id)).schedule).toBeNull();
+      },
+    );
+    it('preserves schedule and leases on stale edits and allows pause/removal without readable keys', async () => {
+      const created = await create();
+      const enabled = await configure(created.id);
+      expect(
+        (
+          await delivery(created.id, 'PUT', '', {
+            ...enabled,
+            expectedRevision: randomUUID(),
+            expectedDestinationRevision: enabled.destinationRevision,
+          })
+        ).status,
+      ).toBe(400);
+      const stale = await delivery(created.id, 'PUT', '', {
+        enabled: false,
+        cadence: enabled.cadence,
+        filter: enabled.filter,
+        payloadPrivacy: enabled.payloadPrivacy,
+        expectedRevision: randomUUID(),
+        expectedDestinationRevision: enabled.destinationRevision,
+      });
+      expect(stale.status).toBe(409);
+      expect((await state(created.id)).schedule?.revision).toBe(
+        enabled.revision,
+      );
+      await start({});
+      expect((await state(created.id)).available).toBe(false);
+      const paused = await configure(created.id, false);
+      expect(paused.cursor).toBe(enabled.cursor);
+      const unavailable = await delivery(created.id, 'PUT', '', {
+        enabled: true,
+        cadence: paused.cadence,
+        filter: paused.filter,
+        payloadPrivacy: paused.payloadPrivacy,
+        expectedRevision: paused.revision,
+        expectedDestinationRevision: paused.destinationRevision,
+      });
+      expect(unavailable.status).toBe(503);
+      const removed = await delivery(created.id, 'DELETE', '', {
+        expectedRevision: paused.revision,
+        expectedDestinationRevision: paused.destinationRevision,
+      });
+      expect(removed.status).toBe(200);
+      expect(await removed.json()).toEqual({ removed: true });
+      expect((await state(created.id)).schedule).toBeNull();
+    });
+    it('stops only automatic leases on schedule removal, retains safe history and starts anew on recreation', async () => {
+      const created = await create();
+      const enabled = await configure(created.id);
+      const [{ receipt }] = await db.query(
+        `SELECT clock_timestamp() AS receipt`,
+      );
+      const source = randomUUID();
+      await db.query(
+        `INSERT INTO ${tenantSchema(tenant)}.request_logs (id,method,path,"statusCode","responseTimeMs","requestId",timestamp,"receivedAt") VALUES ($1,'GET','/scoped',200,1,$2,'2001-01-01T00:00:00Z',$3)`,
+        [source, randomUUID(), receipt],
+      );
+      const store = app.get(ExportDeliveryStoreService);
+      const caller = await store.admit(
+        tenant,
+        created.id,
+        randomUUID(),
+        [source],
+        enabled.payloadPrivacy,
+      );
+      const automatic = await store.admit(
+        tenant,
+        created.id,
+        randomUUID(),
+        [source],
+        enabled.payloadPrivacy,
+      );
+      await db.query(
+        `UPDATE public.log_export_deliveries SET is_scheduled=true,schedule_id=$2 WHERE id=$1`,
+        [automatic.id, created.id],
+      );
+      const lease = await store.claim(tenant, created.id, true);
+      expect(lease?.id).toBe(automatic.id);
+      const denied = await delivery(created.id, 'DELETE', '', {
+        expectedRevision: randomUUID(),
+        expectedDestinationRevision: enabled.destinationRevision,
+      });
+      expect(denied.status).toBe(409);
+      const [unchanged] = await db.query(
+        'SELECT status,payload,lease_id FROM public.log_export_deliveries WHERE id=$1',
+        [automatic.id],
+      );
+      expect(unchanged.status).toBe('processing');
+      expect(unchanged.payload).not.toBeNull();
+      expect(unchanged.lease_id).toBe(lease?.leaseId);
+      const removed = await delivery(created.id, 'DELETE', '', {
+        expectedRevision: enabled.revision,
+        expectedDestinationRevision: enabled.destinationRevision,
+      });
+      expect(removed.status).toBe(200);
+      const [{ payload, status, lease_id }] = await db.query(
+        'SELECT payload,status,lease_id FROM public.log_export_deliveries WHERE id=$1',
+        [automatic.id],
+      );
+      expect({ payload, status, lease_id }).toEqual({
+        payload: null,
+        status: 'expired',
+        lease_id: null,
+      });
+      const response = await delivery(created.id, 'GET', '/history');
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      const history = (await response.json()) as LogExportDeliveryHistory;
+      expect(
+        history.deliveries.find((r: { id: string }) => r.id === caller.id),
+      ).toMatchObject({
+        status: 'queued',
+        source: 'selected_records',
+        attempts: 0,
+      });
+      expect(
+        history.deliveries.find((r: { id: string }) => r.id === automatic.id),
+      ).toMatchObject({
+        status: 'expired',
+        source: 'scheduled',
+        error: 'schedule_removed',
+      });
+      expect(JSON.stringify(history)).not.toMatch(
+        /source_ids|payload|credentials|private-|lease_id/,
+      );
+      const renewed = await configure(created.id);
+      expect(Date.parse(renewed.startedAt)).toBeGreaterThanOrEqual(
+        Date.parse(enabled.startedAt),
+      );
+      expect(renewed.cursor).toBe(renewed.startedAt);
+      expect(renewed.admittedRecords).toBe(0);
+      expect(
+        (
+          await request('DELETE', `/${created.id}`, {
+            expectedRevision: renewed.destinationRevision,
+          })
+        ).status,
+      ).toBe(204);
+      expect((await delivery(created.id)).status).toBe(404);
+      expect((await delivery(created.id, 'GET', '/history')).status).toBe(200);
+    });
+    it('preserves enabled configuration state on destination rename and key re-encryption', async () => {
+      const created = await create();
+      const enabled = await configure(created.id);
+      const renamed = await request('PUT', `/${created.id}`, {
+        name: 'Enabled metadata',
+        expectedRevision: enabled.destinationRevision,
+      });
+      expect(renamed.status).toBe(200);
+      const row = (await renamed.json()) as LogExportDestination;
+      expect(row.state).toBe('enabled');
+      const rotated = await request('POST', `/${created.id}/rotate-key`, {
+        expectedRevision: row.revision,
+      });
+      expect(rotated.status).toBe(200);
+      expect(((await rotated.json()) as LogExportDestination).state).toBe(
+        'enabled',
+      );
+    });
+    it('allows pausing a preserved filter after workspace privacy makes it unavailable', async () => {
+      const created = await create();
+      const enabled = await configure(created.id, true, {
+        filter: { pathPrefix: '/private-prefix' },
+      });
+      await db.query(
+        `UPDATE public.tenants SET "logPrivacy"='{"clientIp":"omit","userAgent":"omit","redactedFields":["path"]}' WHERE id=$1`,
+        [tenant],
+      );
+      const paused = await configure(created.id, false);
+      expect(paused.filter).toEqual(enabled.filter);
+      expect(paused.enabled).toBe(false);
+      const response = await delivery(created.id, 'PUT', '', {
+        enabled: true,
+        cadence: paused.cadence,
+        filter: paused.filter,
+        payloadPrivacy: paused.payloadPrivacy,
+        expectedRevision: paused.revision,
+        expectedDestinationRevision: paused.destinationRevision,
+      });
+      expect(response.status).toBe(400);
     });
     it('stores S3 session credentials and Datadog API keys without exposing them', async () => {
       for (const credentials of [

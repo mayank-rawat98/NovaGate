@@ -16,6 +16,7 @@ import {
 } from '@api-gateway/shared-types';
 import { tenantSchema } from '../tenants/tenant-schema';
 import { ConfigPushService } from '../config-push/config-push.service';
+import { REVOKE_TENANT_DELIVERIES_SQL } from '../log-export/export-delivery-schema';
 
 @Injectable()
 export class LogPrivacyService
@@ -168,6 +169,7 @@ export class LogPrivacyService
           [id],
         );
         const payload = await this.push.persistUpdate(id, manager);
+        await manager.query(REVOKE_TENANT_DELIVERIES_SQL, [id]);
         return { state: await this.state(manager, id), payload };
       });
       // A failed Redis publication cannot turn a committed save into a misleading failure.

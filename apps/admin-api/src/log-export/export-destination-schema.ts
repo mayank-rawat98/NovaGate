@@ -16,4 +16,5 @@ CREATE TABLE IF NOT EXISTS public.log_export_destinations (
          (deleted_at IS NOT NULL AND credentials IS NULL))
 );
 CREATE INDEX IF NOT EXISTS log_export_destinations_tenant ON public.log_export_destinations (tenant_id, created_at, id) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS log_export_destinations_identity ON public.log_export_destinations (tenant_id,id);
 `;

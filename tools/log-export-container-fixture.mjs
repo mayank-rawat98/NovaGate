@@ -159,6 +159,8 @@ export async function configureArchiveFixture({ adminUrl, tenant, headers }) {
             row.clientIp === '[redacted]' &&
             !('userAgent' in row) &&
             !('receivedAt' in row) &&
+            !('usageRollupVersion' in row) &&
+            !('pathRollupVersion' in row) &&
             !('export_cursor' in row),
         ),
       );

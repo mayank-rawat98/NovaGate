@@ -16,6 +16,8 @@ import type {
 } from '@api-gateway/shared-types';
 import { tenantSchema } from '../tenants/tenant-schema';
 import { ExportDestinationCredentialCipher } from './export-destination-credentials';
+import { REVOKE_DESTINATION_DELIVERIES_SQL } from './export-delivery-schema';
+import { outboundTrustedOrigins } from '../shared/outbound-egress-policy';
 import {
   destinationCredentials,
   destinationName,
@@ -33,18 +35,24 @@ interface DestinationRow {
   credentials: unknown;
   created_at: Date;
   updated_at: Date;
+  schedule_enabled?: boolean | null;
 }
 
 /** Credentials remain private to this service; controllers return explicit projections. */
 @Injectable()
 export class ExportDestinationsService implements OnModuleDestroy {
   private readonly cipher: ExportDestinationCredentialCipher;
+  private readonly trustedOrigins: ReadonlySet<string>;
   private stopping = false;
   private readonly operations = new Set<Promise<unknown>>();
   constructor(
     private readonly db: DataSource,
     config: ConfigService,
   ) {
+    this.trustedOrigins = outboundTrustedOrigins(
+      config.get('LOG_EXPORT_HTTP_TRUSTED_ORIGINS'),
+      'LOG_EXPORT_HTTP_TRUSTED_ORIGINS',
+    );
     this.cipher = new ExportDestinationCredentialCipher({
       LOG_EXPORT_DESTINATION_KEYS: config.get('LOG_EXPORT_DESTINATION_KEYS'),
       LOG_EXPORT_DESTINATION_ACTIVE_KEY: config.get(
@@ -98,6 +106,7 @@ export class ExportDestinationsService implements OnModuleDestroy {
     try {
       const normalized = destinationCredentials(
         this.cipher.decrypt(tenant, row.id, row.type, row.credentials),
+        this.trustedOrigins,
       );
       if (normalized.credentials.type !== row.type) throw new Error();
       return normalized.credentials;
@@ -121,7 +130,12 @@ export class ExportDestinationsService implements OnModuleDestroy {
       name: row.name,
       type: row.type,
       destination: row.destination,
-      state: 'draft',
+      state:
+        row.schedule_enabled == null
+          ? 'draft'
+          : row.schedule_enabled
+            ? 'enabled'
+            : 'paused',
       credentialStatus,
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
@@ -133,13 +147,14 @@ export class ExportDestinationsService implements OnModuleDestroy {
       this.db.transaction(async (manager) => {
         await this.bounded(manager);
         const rows: DestinationRow[] = await manager.query(
-          `SELECT id,revision,name,type,destination,credentials,created_at,updated_at FROM public.log_export_destinations
-         WHERE tenant_id=$1 AND deleted_at IS NULL ORDER BY created_at,id LIMIT $2`,
+          `SELECT d.id,d.revision,d.name,d.type,d.destination,d.credentials,d.created_at,d.updated_at,s.enabled AS schedule_enabled
+          FROM public.log_export_destinations d LEFT JOIN public.log_export_delivery_schedules s ON s.destination_id=d.id AND s.tenant_id=d.tenant_id
+         WHERE d.tenant_id=$1 AND d.deleted_at IS NULL ORDER BY d.created_at,d.id LIMIT $2`,
           [tenant, EXPORT_DESTINATION_LIMIT],
         );
         return {
           configurationAvailable: this.cipher.enabled,
-          deliveryAvailable: false,
+          deliveryAvailable: this.cipher.enabled,
           limit: EXPORT_DESTINATION_LIMIT,
           destinations: rows.map((row) => this.view(tenant, row)),
         };
@@ -199,7 +214,8 @@ export class ExportDestinationsService implements OnModuleDestroy {
     expected: string,
   ) {
     const [row]: DestinationRow[] = await manager.query(
-      'SELECT * FROM public.log_export_destinations WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE',
+      `SELECT d.*,(SELECT s.enabled FROM public.log_export_delivery_schedules s WHERE s.tenant_id=d.tenant_id AND s.destination_id=d.id) AS schedule_enabled
+       FROM public.log_export_destinations d WHERE d.tenant_id=$1 AND d.id=$2 AND d.deleted_at IS NULL FOR UPDATE OF d`,
       [tenant, id],
     );
     if (!row) throw new NotFoundException('Export destination not found.');
@@ -255,7 +271,11 @@ export class ExportDestinationsService implements OnModuleDestroy {
             JSON.stringify(encrypted),
           ],
         );
-        return this.view(tenant, row);
+        await manager.query(REVOKE_DESTINATION_DELIVERIES_SQL, [tenant, id]);
+        return this.view(tenant, {
+          ...row,
+          schedule_enabled: current.schedule_enabled,
+        });
       }),
     );
   }
@@ -285,7 +305,11 @@ export class ExportDestinationsService implements OnModuleDestroy {
          WHERE tenant_id=$1 AND id=$2 RETURNING *) SELECT * FROM changed`,
           [tenant, id, JSON.stringify(encrypted), randomUUID()],
         );
-        return this.view(tenant, row);
+        await manager.query(REVOKE_DESTINATION_DELIVERIES_SQL, [tenant, id]);
+        return this.view(tenant, {
+          ...row,
+          schedule_enabled: current.schedule_enabled,
+        });
       }),
     );
   }
@@ -308,6 +332,7 @@ export class ExportDestinationsService implements OnModuleDestroy {
          WHERE tenant_id=$1 AND id=$2`,
           [tenant, id, randomUUID()],
         );
+        await manager.query(REVOKE_DESTINATION_DELIVERIES_SQL, [tenant, id]);
       }),
     );
   }
