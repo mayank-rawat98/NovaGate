@@ -149,6 +149,17 @@
           ],
           "parallel": false
         }
+      },
+      "dependency-install-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/npm-verified.mjs tools/npm-extraction-smoke.mjs tools/npm-extraction-fault.cjs",
+            "node tools/npm-extraction-smoke.mjs"
+          ],
+          "parallel": false
+        }
       }
     }
   },

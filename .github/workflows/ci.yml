@@ -55,7 +55,10 @@ jobs:
           node-version-file: '.nvmrc'
           cache: 'npm'
 
-      - run: npm ci --no-audit --no-fund
+      - run: node tools/npm-verified.mjs ci --no-audit --no-fund
+
+      - name: Reject failed npm extraction
+        run: npm exec -- nx run admin-api:dependency-install-smoke
 
       - name: Lint
         run: npm exec nx run-many -- -t lint

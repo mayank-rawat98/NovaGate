@@ -6,12 +6,13 @@ COPY apps/api/package.json ./apps/api/package.json
 COPY apps/admin-api/package.json ./apps/admin-api/package.json
 COPY apps/control-plane/package.json ./apps/control-plane/package.json
 COPY apps/dashboard/package.json ./apps/dashboard/package.json
+COPY tools/npm-verified.mjs ./tools/npm-verified.mjs
 ENV NX_DAEMON=false NX_NO_CLOUD=true
-RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund --ignore-scripts
+RUN --mount=type=cache,target=/root/.npm node tools/npm-verified.mjs ci --no-audit --no-fund --ignore-scripts
 COPY . .
 RUN npm exec nx build admin-api
 
-RUN --mount=type=cache,target=/root/.npm npm prune --omit=dev --ignore-scripts --no-audit --no-fund --offline
+RUN --mount=type=cache,target=/root/.npm node tools/npm-verified.mjs prune --omit=dev --ignore-scripts --no-audit --no-fund --offline
 
 FROM node:26.11.1-alpine
 WORKDIR /app
