@@ -201,3 +201,18 @@ following successful writes, including a logical target after removal. Productio
 browser checks cover all providers, failed reads/writes, stale revisions, retained
 input, unavailable keys/configuration, capacity, interrupted writes, workspace resets,
 mobile/desktop accessibility and absence of secrets in browser persistence/summaries.
+
+Issue #95's local continuation adds Delivery & history to those destination cards.
+Saving credentials keeps an unscheduled destination in draft state; only the explicit
+delivery form can enable automatic receipt scheduling. Show enabled/paused as saved
+configuration, never provider health or indexing. Expose cadence, status/prefix/consumer
+filters, stricter payload omissions, queue/source counters and metadata-only history
+with exact decimal workspace compaction coverage. Explain save-time start, retained
+resume cursor, queued completion during pause, policy-change revocation, schedule
+removal and external copies that cannot be recalled. Pause/removal work without keys.
+Keep both revisions, controlled input on failures/reload, workspace-keyed state and
+abort reads/writes on close/switch without promising server rollback. Production
+browser verification covers all providers' explicit activation, pause/resume,
+removal/recreation, read/write failures, stale revisions, unavailable credentials,
+exact large coverage counts, interrupted writes, focus/Escape/Tab and mobile/desktop
+accessibility. No arbitrary source/payload enqueue is exposed by this UI.

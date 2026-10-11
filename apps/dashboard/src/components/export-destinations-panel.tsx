@@ -27,6 +27,7 @@ import {
 } from '../lib/api-client';
 import { DataLoadNotice } from './data-load-notice';
 import { WorkspaceDialog } from './workspace-dialog';
+import { ExportDeliveryDialog } from './export-delivery-dialog';
 
 const PROVIDERS: Record<LogExportDestinationType, string> = {
   s3: 'S3-compatible storage',
@@ -37,9 +38,12 @@ const control =
   'mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm text-slate-900 disabled:bg-slate-100 disabled:text-slate-600';
 const secondary =
   'rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 disabled:opacity-60';
-type Action =
+type DestinationAction =
   | { kind: 'create' }
   | { kind: 'edit' | 'remove' | 'rotate'; row: LogExportDestination };
+type Action =
+  | DestinationAction
+  | { kind: 'delivery'; row: LogExportDestination };
 
 export function ExportDestinationsPanel({ tenantId }: { tenantId: string }) {
   return tenantId ? (
@@ -88,8 +92,12 @@ function DestinationWorkspace({ tenantId }: { tenantId: string }) {
       currentAction.kind === 'remove'
         ? 'Destination removed. Saved credentials have been cleared.'
         : currentAction.kind === 'rotate'
-          ? 'Saved credentials re-encrypted. The destination remains a draft.'
-          : 'Destination draft saved. It is not sending logs.',
+          ? row?.state === 'draft'
+            ? 'Saved credentials re-encrypted. The destination remains a draft.'
+            : 'Saved credentials re-encrypted. Queued batches using the previous version were cancelled.'
+          : row?.state === 'draft'
+            ? 'Destination draft saved. It is not sending logs.'
+            : 'Destination settings saved. Queued batches using the previous version were cancelled.',
     );
     void mutate(
       (current) =>
@@ -136,8 +144,8 @@ function DestinationWorkspace({ tenantId }: { tenantId: string }) {
               External export destinations
             </h2>
             <p className="mt-1 max-w-xl text-sm text-slate-600">
-              Prepare external connections. Drafts do not send logs yet; your
-              private archives continue to work.
+              Save connections as inactive drafts, then choose automatic
+              delivery and payload privacy for each destination.
             </p>
           </div>
         </div>
@@ -221,7 +229,13 @@ function DestinationWorkspace({ tenantId }: { tenantId: string }) {
                     {row.name}
                   </h3>
                   <span className="rounded-full bg-indigo-100 px-3 py-1 text-xs font-medium text-indigo-900">
-                    Draft · not sending
+                    {row.state === 'draft'
+                      ? 'Draft · not sending'
+                      : row.state === 'paused'
+                        ? 'Paused · queued batches may finish'
+                        : row.credentialStatus === 'available'
+                          ? 'Enabled · automatic'
+                          : 'Enabled · needs credentials'}
                   </span>
                 </div>
                 <p className="mt-2 text-sm text-slate-700">
@@ -238,6 +252,19 @@ function DestinationWorkspace({ tenantId }: { tenantId: string }) {
                     : 'Saved credentials are unavailable. Replace them or ask your administrator to restore access.'}
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    aria-label={`Delivery for ${row.name}`}
+                    disabled={!!error}
+                    onClick={(event) => {
+                      opener.current = event.currentTarget;
+                      setNotice('');
+                      setAction({ kind: 'delivery', row });
+                    }}
+                    className={secondary}
+                  >
+                    Delivery &amp; history
+                  </button>
                   <button
                     type="button"
                     aria-label={`Edit ${row.name}`}
@@ -307,19 +334,36 @@ function DestinationWorkspace({ tenantId }: { tenantId: string }) {
           {notice}
         </p>
       )}
-      {action && (
-        <DestinationDialog
-          key={`${action.kind}-${action.kind === 'create' ? 'new' : action.row.id}`}
-          tenantId={tenantId}
-          action={action}
-          available={available}
-          onClose={() => {
-            setAction(null);
-            restoreFocus();
-          }}
-          onSaved={saved}
-        />
-      )}
+      {action &&
+        (action.kind === 'delivery' ? (
+          <ExportDeliveryDialog
+            tenantId={tenantId}
+            row={action.row}
+            onClose={() => {
+              setAction(null);
+              restoreFocus();
+            }}
+            onSaved={(message) => {
+              setAction(null);
+              setNotice(message);
+              void mutate()
+                .then(() => restoreFocus())
+                .catch(() => restoreFocus());
+            }}
+          />
+        ) : (
+          <DestinationDialog
+            key={`${action.kind}-${action.kind === 'create' ? 'new' : action.row.id}`}
+            tenantId={tenantId}
+            action={action}
+            available={available}
+            onClose={() => {
+              setAction(null);
+              restoreFocus();
+            }}
+            onSaved={saved}
+          />
+        ))}
     </section>
   );
 }
@@ -369,7 +413,7 @@ function DestinationDialog({
   onSaved,
 }: {
   tenantId: string;
-  action: Action;
+  action: DestinationAction;
   available: boolean;
   onClose: () => void;
   onSaved: (row?: LogExportDestination) => void;
@@ -531,8 +575,9 @@ function DestinationDialog({
         </div>
         <div className="flex-1 space-y-5 overflow-y-auto p-5">
           <p className="rounded-2xl border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-900">
-            This is a draft connection. Saving or re-encrypting it does not
-            start log delivery.
+            {base?.state === 'enabled'
+              ? 'Automatic delivery is enabled. Editing or re-encrypting cancels queued batches using the previous destination version; future windows use the saved configuration.'
+              : 'Saving credentials does not enable automatic delivery. Choose delivery settings separately when ready.'}
           </p>
           {editing ? (
             <>
@@ -637,7 +682,7 @@ function DestinationDialog({
               </p>
               <p className="text-sm text-slate-700">
                 {action.kind === 'remove'
-                  ? 'Remove this draft and clear its saved credentials? This does not remove your private archives.'
+                  ? 'Remove this destination and clear its saved credentials? Waiting deliveries will be cancelled. Private archives remain available; delivered external copies cannot be recalled.'
                   : 'Protect this saved connection with the installation’s current encryption key. Its provider credentials stay the same.'}
               </p>
             </>
@@ -690,7 +735,9 @@ function DestinationDialog({
                 ? 'Remove destination'
                 : action.kind === 'rotate'
                   ? 'Re-encrypt credentials'
-                  : 'Save destination draft'}
+                  : base && base.state !== 'draft'
+                    ? 'Save destination'
+                    : 'Save destination draft'}
           </button>
         </div>
       </form>
