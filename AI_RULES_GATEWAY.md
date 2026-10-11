@@ -410,3 +410,47 @@ are unavailable or saved filters became private. Automatic schedule removal revo
 only scheduled pending leases/bytes; retain caller identities and terminal source
 markers. Recreating starts at the new database save receipt. Enabled means configured;
 provider acknowledgement does not establish health or indexing.
+
+## Rule 25 — Consumer rollups preserve source identity, privacy and receipt expiry
+
+Materialize only inserted persisted-log IDs; row markers and aggregate updates
+commit with ingestion. Replayed IDs cannot increment counts. Admin owns all schema
+and hook installation; collectors keep receipt locks, batch/byte limits and reject
+failed log transactions. Indexed legacy backfill, cleanup and replica discovery
+remain bounded and owned through shutdown. Capacity leaves raw records pending;
+it cannot silently drop source records or publish complete coverage.
+
+Use versioned fixed histograms and integer merge/rank arithmetic. Label upper-bound
+estimates separately from interpolated observed percentiles. Consumer omission
+stops attribution immediately and old aggregate identities must be erased before
+omission can be reversed. Keep internal source markers out of reads and archives.
+Retention follows trusted receipt floors. Reads must reconcile mixed minute
+cells at exact request/receipt boundaries and validate current policy revisions;
+whole-cell sums must not include expired observations. Backfill completion only
+describes available persisted records, never guaranteed traffic or billing coverage.
+Excess cell/raw reconciliation and unsafe integer totals fail without partial
+publication. Preserve source/method/coverage metadata in filtered REST metrics;
+missing latency samples remain distinguishable from measured zero. UTC edge rates
+use actual observed durations. Legacy unavailable path aggregation must be explicit.
+
+Path dimensions use an independent marker and cap so count ingestion can continue
+under path pressure. Strip query strings and bound path/method prefixes before
+storage. Fresh omitted paths are projected before materialization; historical
+redaction must merge exact counts/histograms into redacted groups in bounded pages,
+without resetting markers or permitting metadata resurrection. Consumer omission
+and receipt expiry clean both stores. Path reads reconcile their own pending/edge
+records in the count reader's snapshot and validate all grouped counts and histogram
+bins before publication. Select the global top ten after summing all groups, never
+per-cell top-ten candidates. Project current path privacy before grouping historical
+cells and raw edges. Query limits refuse the entire response without partial totals;
+coverage reports all groups and independent path capacity/backfill state. Receipt
+lock contention gets a bounded short retry; actual aggregate failures keep their
+one-minute cooldown and every transaction retains its SQL and lock budgets.
+Pending ingestion must wake recently idle tenants through the durable one-row
+notification, not by updating the public tenant row while holding the receipt
+fence. Discovery must not lock notifications before that fence. Acknowledgement,
+source markers, aggregates and pending state remain atomic; startup recovers
+indexed pending notifications and queue-write failure rolls back ingestion.
+Privacy discovery must also fall back to a bounded wait when all pending tenants
+are briefly locked. Preserve current cursor/revision ownership and source-row
+erasure; aligned replica timers cannot silently discard every cleanup sweep.
