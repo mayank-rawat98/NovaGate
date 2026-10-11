@@ -42,8 +42,8 @@ function UsageDetails({ data }: { data: ConsumerUsageStats }) {
           Counts include all available retained observations in this window.
           Latency percentiles are estimated histogram bucket upper bounds.
           Intervals align to UTC; the first and last may cover shorter periods.{' '}
-          {number(data.rollup.lateRecords)} observations arrived more than 15
-          seconds after their request minute ended.
+          {number(data.rollup.lateRecords)} observations arrived 15 seconds or
+          more after their request minute ended.
           {data.rollup.materialization === 'capacity_limited'
             ? ' Rollup storage is at capacity; counts include pending observations from retained logs.'
             : data.rollup.materialization === 'backfilling'
