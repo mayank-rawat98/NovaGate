@@ -104,6 +104,17 @@ Docker Compose template and env var reference are static.
 
 Settings also includes `LogExportPanel`: private NDJSON exports with UTC range/status/path filters, durable job states and authenticated downloads. Keep storage credentials and object keys out of the browser. Refresh is 30 seconds; failed reads, queue submissions and downloads must show recovery feedback. The browser verifier covers disabled/enabled storage, job states, failed submissions/downloads and an actual downloaded fixture.
 
+`ConfigImportPanel` downloads YAML and opens a workspace-keyed native dialog for
+file/editor input, preview and explicitly reviewed apply. Keep the opaque revision
+bound to unchanged editor content; editing or a conflict requires another preview.
+Label removal/revocation and queued gateway delivery accurately. Newly created
+consumer keys return once and stay only in component memory. Closing or changing
+workspaces clears documents/keys and cancels browser work; cancellation does not
+undo an admitted import. Preserve the full-height opaque drawer, internal scroll,
+native Escape, explicit opener focus restoration and Tab containment. The
+production verifier checks download, failure/retry, revision conflict, file input,
+one-time keys, mobile contrast and interrupted preview without weakening gates.
+
 ## Testing
 
 - Jest with `next/jest` transformer (`jest.config.cts`)

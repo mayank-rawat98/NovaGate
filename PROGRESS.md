@@ -1,12 +1,14 @@
 # NovaGate progress and remaining work
 
-Updated: **11 October 2026** (Asia/Calcutta).
+Updated: **12 October 2026** (Asia/Calcutta).
 
 This report distinguishes merged development work, the alerting foundation checkpoint,
 and formal acceptance. The detailed roadmap is [implementation.md](implementation.md).
 No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
+
+- [Issue #103](https://github.com/mayank-rawat98/NovaGate/issues/103) / [PR #104](https://github.com/mayank-rawat98/NovaGate/pull/104) adds reviewed complete YAML/JSON import/export and Settings controls with atomic durable reconciliation. Current Node 26.11.1 validation passes **1,558 tests with no failures or skips**, five-project static checks, four app builds, four fresh guarded non-root images and **42 production browser cold loads at sixfold CPU throttling** with zero runtime/accessibility findings. The packaged pipeline proves actual gateway ACK, key routing, restart and idempotent export roundtrip while preserving telemetry/archives/alerts/privacy/rollups; all three services exit 0. The original pending files are preserved, and the CLI/log-stream work is next in this cleanup. Main remains reserved for final acceptance.
 
 - [Issue #99](https://github.com/mayank-rawat98/NovaGate/issues/99) / [PR #100](https://github.com/mayank-rawat98/NovaGate/pull/100) implements bounded count/latency/path rollups for larger consumer usage windows. Exact retained counts, global top-path ranking, histogram upper estimates and materialization coverage preserve current privacy/receipt retention. The isolated Node 26.11.1 branch passes **1,535 tests with no failures or skips**, all five projects' lint/typecheck/build checks, **42 production browser cold loads at sixfold CPU throttling plus seven final loads**, and four fresh non-root images. Automatic production timers materialize **200,001 records in 108.629 seconds**; two replicas materialize **400,001 observations / 20,000 path cells in 111.202 seconds**, with exact reference results, replay/restart/admission recovery and automatic privacy cleanup in **101.230 seconds**. Retained traffic, metrics, private archives, alerts and export scheduler/capacity checks pass with clean shutdown. Broader workload/traffic/provider, comparative and formal phase/release acceptance remain open. A recurring dependency extraction failure is tracked separately in [issue #101](https://github.com/mayank-rawat98/NovaGate/issues/101). This PR targets dev; main remains reserved for the completed roadmap and final acceptance.
 
@@ -1573,3 +1575,69 @@ issues #69, #90 and the remaining #101 investigation stay open.
 - Reproducible NovaGate/Kong benchmarks, security/chaos testing and regional failover drills.
 - Run the formal all-phase acceptance campaign after implementation, preserve evidence
   for every exit criterion, and use a separate release gate before any production deployment.
+
+## Declarative configuration — issue #103 / PR #104
+
+The preserved local import/export prototype is reconciled onto dev `0b4671e`
+without restoring its older Node runtime, unguarded installs or stale rollup code.
+The visible workspace is the development branch; all 85 original pending source
+files were byte-verified in `.local-work/source-cleanup-20261012` and Git stash
+`81642c05611c282de67dc044ddf09b3ad511cced` before cleanup. Nineteen source files
+already matched dev. The useful CLI/log-stream prototype is preserved for its next
+separate issue and PR; cleanup is not complete until that work is merged.
+
+The authenticated API and Settings now support strict complete YAML/JSON documents,
+write-free metadata previews, ten-minute revisions, drift detection and atomic
+service/route/consumer reconciliation with the version and durable gateway outbox.
+Matching identities, consumer keys and omitted saved plugin credentials survive;
+removed entries are soft-deleted/revoked. Route/plugin order survives reconnect.
+Exports omit credentials and refuse unsafe or unimportable configurations. New
+consumer keys return once after commit; queued delivery is labelled accurately.
+See [the operator contract](apps/admin-api/src/config-import/README.md).
+
+Review also fixes unknown target fields and malformed URL-like export metadata.
+The parser is pinned to production `yaml` 2.9.1 at the repository's existing root
+and admin dependency locations, so production pruning and image copies retain it.
+Real HTTP/PostgreSQL checks cover duplicate keys/identities, aliases/tags/multiple
+YAML documents, deep parser/visitor inputs, authentication, private errors, stable
+identity, ordering, outbox rollback, drift, two-replica races, bounded lock/admission
+and shutdown. The maximum 200-consumer replacement reviews and commits all 400
+create/remove actions.
+
+Final current-source validation:
+
+- **847 admin / 47 suites, 586 gateway / 38 suites, 115 collector / 7
+  suites, 10 dashboard / 3 suites**, with no failures or skips. The final import
+  suite contains 22 actual HTTP/PostgreSQL cases. Static checks pass for five
+  projects; all four application builds pass. One matching static result was
+  reused from Nx cache; the final admin checks are recorded separately.
+- Fresh guarded installs in all four Node 26.11.1 images, with no extraction
+  diagnostics; all three guarded production prunes pass. All images run as UID 1000. All backend bundles match current host builds byte-for-byte. The final
+  admin image contains yaml 2.9.1. Dashboard login and all 16 referenced assets
+  return HTTP 200; its Next base-http module is nonempty with the actual request
+  constructor, and shutdown exits 0.
+- **42 production browser cold loads at sixfold CPU throttling**, followed by
+  download/file input, preview failure/retry, editing invalidation, acknowledged
+  apply, revision conflict recovery, one-time keys, Escape/focus/Tab, mobile axe
+  and two interrupted applies/workspace reset checks. The full verifier completes
+  in **153.539 seconds**, with zero runtime or WCAG A/AA findings. The mobile
+  drawer screenshot was visually reviewed. Superseded artifacts from older runs
+  are excluded from this issue's evidence; their originals remain preserved.
+- The fresh-image pipeline verifies actual authenticated export/reviewed apply,
+  durable gateway ACK, new-key routing, anonymous rejection, restart/reconstruction
+  and idempotent roundtrip. Retained traffic, metrics/SSE/history, private archives,
+  privacy/retention and stable signed delivery/retry/revocation still pass. Alerts
+  fire in **57.418 seconds**. Automatic timers materialize **200,001 records in
+  106.377 seconds**; the authenticated query takes **706.872 ms**, with zero manual
+  worker ticks. All three app services exit 0 and owned fixtures are removed.
+
+Evidence: `.local-work/phase5-1` contains current test/static/build logs, guarded
+host installs, image logs/IDs/bundle proofs, pipeline evidence, fresh browser
+artifacts and source review/merge records. Verification was local; workflow and
+deployment triggers remain unchanged. Main stays reserved for final acceptance.
+
+This is a bounded development checkpoint: 200 entries and 64 KiB per complete
+configuration document. Larger workloads, CLI/scoped automation, user-facing
+configuration history/rollback and formal phase/release acceptance remain open.
+Transaction rollback is not an operator rollback feature. Existing issues #69,
+#90 and the unproven filesystem cause in #101 remain open.

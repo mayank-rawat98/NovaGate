@@ -1,6 +1,8 @@
 import { validateMetricPayload } from '@api-gateway/shared-types';
 import type {
   TenantEntity,
+  ConfigPreview,
+  ConfigApplyResult,
   RouteEntity,
   ServiceEntity,
   ConsumerEntity,
@@ -230,6 +232,47 @@ export function resetPassword(
 
 export function getTenant(id: string): Promise<TenantEntity> {
   return request(`/tenants/${id}`);
+}
+
+export async function exportConfiguration(
+  tenantId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const response = await authorizedFetch(`/tenants/${tenantId}/export`, {
+    signal,
+    cache: 'no-store',
+  });
+  return response.text();
+}
+export function previewConfiguration(
+  tenantId: string,
+  document: string,
+  signal?: AbortSignal,
+): Promise<ConfigPreview> {
+  return request(`/tenants/${tenantId}/import?dryRun=true`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/yaml' },
+    body: document,
+    signal,
+    cache: 'no-store',
+  });
+}
+export function applyConfiguration(
+  tenantId: string,
+  document: string,
+  revision: string,
+  signal?: AbortSignal,
+): Promise<ConfigApplyResult> {
+  return request(`/tenants/${tenantId}/import?dryRun=false`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/yaml',
+      'If-Match': `"${revision}"`,
+    },
+    body: document,
+    signal,
+    cache: 'no-store',
+  });
 }
 
 export function rotateGatewayKey(

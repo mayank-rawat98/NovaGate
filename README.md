@@ -348,6 +348,23 @@ Tenant schema upgrades run in a transaction under a database migration lock. Leg
 
 Configuration PUT requests preserve omitted fields. Send `null` to clear optional route retry, GraphQL, plugin or rate-limit override policies; use an empty array to clear consumer groups. Updating a missing configuration record returns 404.
 
+### Declarative configuration
+
+Settings → Configuration import & export downloads active services, routes and
+consumers as YAML and reviews YAML/JSON documents before applying them. Documents
+require `version: 1` and all three arrays; route `serviceId` references a unique
+service name. Missing entries are removed or revoked. Matching consumer keys and
+omitted existing plugin credentials are preserved; new keys return once.
+
+The authenticated `/api/tenants/:id/import?dryRun=true` API returns a metadata-only
+diff and a ten-minute revision. Apply uses `dryRun=false` and that revision in
+`If-Match`. Configuration drift or document edits require another preview. Rows,
+version and durable delivery queue commit atomically. A queued result does not
+claim gateway confirmation. Export omits credentials and refuses opaque URL
+credentials or files exceeding import limits. The import/export workflow supports
+200 total entries and 64 KiB. See [the complete operator contract](apps/admin-api/src/config-import/README.md)
+for schema, credential preservation, failure recovery and remaining phase 5 work.
+
 ### Dashboard browser verification
 
 The workspace uses a responsive ivory, mint and indigo dashboard with CSS clay illustrations. Navigation and configuration forms support keyboard focus, Escape dismissal and focus restoration. Data outages show retry controls; an unavailable gateway status is distinct from an offline gateway.

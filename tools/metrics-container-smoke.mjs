@@ -7,6 +7,7 @@ import { resolve } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import pg from 'pg';
 import jwt from 'jsonwebtoken';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { startAlertFixture } from './alerts-container-fixture.mjs';
 import { configureArchiveFixture } from './log-export-container-fixture.mjs';
 import { exportDestinationFixture } from './export-destinations-container-fixture.mjs';
@@ -998,6 +999,136 @@ try {
     archiveRecords: maskedRecords.length,
     localRecords: localRecords.length,
   };
+  const configExport = await fetch(`${adminUrl}/tenants/${tenant}/export`, {
+    headers,
+  });
+  assert.equal(configExport.status, 200);
+  assert.equal(configExport.headers.get('cache-control'), 'no-store');
+  const source = await configExport.text();
+  assert(!source.includes(usageConsumerKey));
+  assert(!source.includes('keyHash'));
+  const imported = parseYaml(source);
+  imported.consumers.push({
+    name: 'Declarative runtime consumer',
+    groups: ['read-only'],
+  });
+  imported.routes.push({
+    method: 'GET',
+    pathPattern: '/declarative',
+    serviceId: imported.services[0].name,
+    authRequired: true,
+    enabled: true,
+    plugins: [],
+  });
+  const document = stringifyYaml(imported);
+  const proposed = await fetch(
+    `${adminUrl}/tenants/${tenant}/import?dryRun=true`,
+    {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/yaml' },
+      body: document,
+    },
+  );
+  assert.equal(proposed.status, 200);
+  const preview = await proposed.json();
+  assert.equal(preview.changes.length, 2);
+  assert(preview.changes.every((change) => change.action === 'create'));
+  const applied = await fetch(
+    `${adminUrl}/tenants/${tenant}/import?dryRun=false`,
+    {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'Content-Type': 'application/yaml',
+        'If-Match': `"${preview.revision}"`,
+      },
+      body: document,
+    },
+  );
+  assert.equal(applied.status, 200);
+  const importedResult = await applied.json();
+  assert.equal(importedResult.changed, 2);
+  assert.equal(importedResult.consumerKeys.length, 1);
+  assert.equal(importedResult.delivery, 'queued');
+  await until(
+    async () =>
+      (
+        await db.query(
+          'SELECT id FROM public.pending_config_updates WHERE "tenantId"=$1',
+          [tenant],
+        )
+      ).rowCount === 0,
+    'Imported configuration gateway ACK',
+  );
+  assert.equal((await fetch(`${gatewayUrl}/declarative`)).status, 401);
+  const consumerKey = importedResult.consumerKeys[0].apiKey;
+  assert.equal(
+    (
+      await fetch(`${gatewayUrl}/declarative`, {
+        headers: { authorization: `Bearer ${consumerKey}` },
+      })
+    ).status,
+    200,
+  );
+  const consumer = (
+    await db.query(
+      `SELECT id,"keyHash" FROM ${schema}.consumers WHERE name='Declarative runtime consumer'`,
+    )
+  ).rows[0];
+  assert.equal(consumer.id, importedResult.consumerKeys[0].id);
+  assert.equal(
+    consumer.keyHash,
+    createHash('sha256').update(consumerKey).digest('hex'),
+  );
+  docker('stop', '--time', '10', gateway);
+  assert.equal(
+    JSON.parse(docker('inspect', gateway, '--format', '{{json .State}}'))
+      .ExitCode,
+    0,
+  );
+  docker('start', gateway);
+  gatewayUrl = `http://127.0.0.1:${port(gateway, 3000)}`;
+  await until(
+    async () => (await fetch(`${gatewayUrl}/health`)).ok,
+    'Gateway restart after declarative import',
+  );
+  await until(
+    async () =>
+      (
+        await fetch(`${gatewayUrl}/declarative`, {
+          headers: { authorization: `Bearer ${consumerKey}` },
+        })
+      ).status === 200,
+    'Imported configuration survives gateway reconstruction',
+  );
+  const afterExport = await fetch(`${adminUrl}/tenants/${tenant}/export`, {
+    headers,
+  });
+  assert.equal(afterExport.status, 200);
+  const afterSource = await afterExport.text();
+  assert(!afterSource.includes(consumerKey));
+  assert(!afterSource.includes(consumer.keyHash));
+  const roundtrip = await fetch(
+    `${adminUrl}/tenants/${tenant}/import?dryRun=true`,
+    {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/yaml' },
+      body: afterSource,
+    },
+  );
+  assert.equal(roundtrip.status, 200);
+  assert.equal((await roundtrip.json()).changes.length, 0);
+  const declarativeConfiguration = {
+    authenticatedYamlExport: true,
+    credentialFree: true,
+    reviewedAtomicApply: true,
+    changes: 2,
+    durableGatewayAck: true,
+    consumerKeyThroughGateway: true,
+    anonymousRequiredRouteRejected: true,
+    gatewayRestartPreservesConfiguration: true,
+    idempotentRoundtrip: true,
+  };
   const consumerRollupReader = await verifyConsumerRollupReader({
     adminUrl,
     db,
@@ -1044,6 +1175,7 @@ try {
         consumerUsage,
         consumerRollups,
         consumerRollupReader,
+        declarativeConfiguration,
         logPrivacy,
         logRetention,
         exportDestinations,

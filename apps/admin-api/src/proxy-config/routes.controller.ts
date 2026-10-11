@@ -174,7 +174,7 @@ const graphqlConfigSchema = Joi.object({
     .max(MAX_GRAPHQL_POLICY_COMPLEXITY),
   introspectionAllowed: Joi.boolean().strict(),
 });
-function validateGraphql(value: unknown): void {
+export function validateGraphql(value: unknown): void {
   if (value === null || value === undefined) return;
   if (graphqlConfigSchema.validate(value).error)
     throw new BadRequestException(
@@ -182,7 +182,7 @@ function validateGraphql(value: unknown): void {
     );
 }
 
-function validatePlugins(plugins: unknown): void {
+export function validatePlugins(plugins: unknown): void {
   if (plugins === null || plugins === undefined) return;
   if (!Array.isArray(plugins))
     throw new BadRequestException('plugins must be an array');
@@ -237,7 +237,7 @@ export class RoutesController {
   async findAll(@Param('tenantId') tenantId: string) {
     const schema = tenantSchema(tenantId);
     return this.dataSource.query(
-      `SELECT * FROM ${schema}.routes WHERE "deletedAt" IS NULL ORDER BY "createdAt" ASC`,
+      `SELECT * FROM ${schema}.routes WHERE "deletedAt" IS NULL ORDER BY "configOrder" NULLS LAST,"createdAt",id`,
     );
   }
 

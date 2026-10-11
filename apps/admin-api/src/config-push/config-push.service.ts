@@ -116,7 +116,7 @@ export class ConfigPushService
     const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
 
     const routes = await manager.query(
-      `SELECT * FROM ${schema}.routes WHERE "deletedAt" IS NULL AND enabled = true`,
+      `SELECT * FROM ${schema}.routes WHERE "deletedAt" IS NULL AND enabled = true ORDER BY "configOrder" NULLS LAST,"createdAt",id`,
     );
     const serviceRows = await manager.query(
       `SELECT * FROM ${schema}.services WHERE "deletedAt" IS NULL`,

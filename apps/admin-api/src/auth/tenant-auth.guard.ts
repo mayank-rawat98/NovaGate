@@ -23,6 +23,7 @@ export class TenantAuthGuard implements CanActivate {
     );
     if (controllerPath === 'auth' || controllerPath === 'health') return true;
 
+    context.switchToHttp().getResponse().setHeader('Cache-Control', 'no-store');
     const req = context.switchToHttp().getRequest<{
       headers: { authorization?: string };
       params: { tenantId?: string; id?: string };

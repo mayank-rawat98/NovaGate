@@ -6,6 +6,7 @@ import {
   verifyExportDestinationsDashboard,
 } from './export-destinations-dashboard-smoke.mjs';
 import { verifyExportDeliveryDashboard } from './export-delivery-dashboard-smoke.mjs';
+import { verifyConfigImportDashboard } from './config-import-dashboard-smoke.mjs';
 import { createServer } from 'node:http';
 import {
   existsSync,
@@ -48,6 +49,7 @@ let traceWritten = false;
 let passed = false;
 let exportDestinationsEvidence;
 let exportDeliveryEvidence;
+let configImportEvidence;
 let coldLoads = 0;
 const startedAt = Date.now();
 let metricsConnections = 0;
@@ -2505,6 +2507,14 @@ try {
     artifacts,
     fixture: exportDestinationsFixture,
   });
+  configImportEvidence = await verifyConfigImportDashboard({
+    page,
+    context,
+    base,
+    tenant,
+    audit,
+    artifacts,
+  });
   writeFileSync(
     resolve(artifacts, 'accessibility.json'),
     JSON.stringify(violations, null, 2),
@@ -2555,6 +2565,7 @@ try {
           traceWritten,
           exportDestinations: exportDestinationsEvidence,
           exportDelivery: exportDeliveryEvidence,
+          configImport: configImportEvidence,
           runtimeErrors,
           accessibilityViolations: violations,
         },

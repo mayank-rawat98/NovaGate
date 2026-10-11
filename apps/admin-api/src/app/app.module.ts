@@ -11,6 +11,8 @@ import { TracesService } from '../proxy-config/traces.service';
 import { validateTraceQueryConfiguration } from '../proxy-config/traces.configuration';
 import { LogExportModule } from '../log-export/log-export.module';
 import { Module } from '@nestjs/common';
+import { ConfigImportController } from '../config-import/config-import.controller';
+import { ConfigImportService } from '../config-import/config-import.service';
 import { APP_GUARD } from '@nestjs/core';
 import { TenantAuthGuard } from '../auth/tenant-auth.guard';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -64,6 +66,7 @@ import { AlertsModule } from '../alerts/alerts.module';
     TypeOrmModule.forFeature([Tenant, ApiKey, PendingConfigUpdate]),
   ],
   controllers: [
+    ConfigImportController,
     LogRetentionController,
     LogPrivacyController,
     HealthController,
@@ -76,6 +79,7 @@ import { AlertsModule } from '../alerts/alerts.module';
     TracesController,
   ],
   providers: [
+    ConfigImportService,
     { provide: APP_GUARD, useClass: TenantAuthGuard },
     AuthService,
     EmailService,

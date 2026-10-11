@@ -48,6 +48,12 @@ Config updates originate in the **admin-api** `ConfigPushService`:
    - **online**: send `config.update` WS message immediately
    - **offline**: the admin API already persisted `pending_config_updates`; replay on reconnect
 
+Declarative import uses `persistUpdate()` in the same transaction as all service,
+route and consumer changes, then publishes after commit. Initial connection
+snapshots must honor route `configOrder` before creation time/ID, as publication
+does. The collector query tolerates legacy schemas missing order/creation-time
+columns; schema upgrades remain admin-owned. Preserve plugin array order.
+
 ## Close codes (defined in `libs/shared-types/src/lib/ws-close-codes.ts`)
 
 | Code | Meaning      | Gateway should reconnect? |
@@ -119,3 +125,25 @@ tenants. Malformed explicit metadata selections fail closed. Selected paths/requ
 IDs use the required-column placeholder; optional consumer/service/trace/span values
 become NULL. Admin owns existing schema upgrades; deploy updated collectors before
 enabling selections. Verify actual WebSocket/PostgreSQL persistence, not only mocks.
+
+Consumer rollup storage adds admin-owned statement hooks to request_logs. Preserve
+the collector's canonical receipt lock, bounded INSERT and ON CONFLICT DO NOTHING:
+the transition table aggregates only newly persisted IDs and shares their commit.
+Do not propagate gateway-selected usageRollupVersion or pathRollupVersion; the collector whitelist leaves
+both NULL in JSON record conversion and the database materializer owns them. Migration installs all rollup DDL; the collector
+does not create it. Aggregate write failure must reject the log transaction, so
+there is no successful ACK with a partially committed count. The public analytics
+API keeps exact raw-log statistics for small windows and automatically uses bounded
+rollup reads with explicit coverage for larger windows. Preserve scalar source
+fields and database-owned markers needed for exact request/receipt edge reads.
+Path groups have an independent capped store/marker and share source commit,
+receipt fencing and privacy projection. Path capacity cannot discard logs or stop
+count ingestion. Historical path omission merges redacted groups without replay;
+consumer omission and receipt cleanup erase both stores. Public high-volume path
+reads reconcile their own pending/edge records within the count snapshot, validate
+full counts/histograms before selecting global top-ten groups and expose independent
+path coverage. The final policy-revision guard applies to both readers.
+Pending source inserts also commit an admin-owned durable wake-up. It has one row
+per tenant and carries no source identity or payload. Preserve receipt fencing;
+ingestion must not acquire a public tenant write lock after the receipt lock.
+Notification persistence failure rejects the source transaction and its ACK.
