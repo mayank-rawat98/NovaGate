@@ -3,6 +3,7 @@ import { LogRetentionService } from '../log-retention/log-retention.service';
 import { LogPrivacyController } from '../log-privacy/log-privacy.controller';
 import { LogPrivacyService } from '../log-privacy/log-privacy.service';
 import { ConsumerAnalyticsService } from '../proxy-config/consumer-analytics.service';
+import { ConsumerRollupService } from '../proxy-config/consumer-rollup.service';
 import { MetricsStreamService } from '../proxy-config/metrics-stream.service';
 import { metricStreamConfiguration } from '../proxy-config/metrics-stream.configuration';
 import { TracesController } from '../proxy-config/traces.controller';
@@ -87,6 +88,7 @@ import { AlertsModule } from '../alerts/alerts.module';
     TracesService,
     MetricsStreamService,
     ConsumerAnalyticsService,
+    ConsumerRollupService,
   ],
 })
 export class AppModule {}

@@ -30,6 +30,7 @@ import type {
   TraceListResponse,
   TraceDetailResponse,
   MetricsSnapshot,
+  MetricHistorySnapshot,
   AlertConfiguration,
   AlertRule,
   AlertChannel,
@@ -410,7 +411,7 @@ export function getMetrics(
   period: Period = '24h',
   signal?: AbortSignal,
   consumerId?: string,
-): Promise<MetricsSnapshot[]> {
+): Promise<MetricHistorySnapshot[]> {
   return request(
     `/tenants/${tenantId}/metrics${toQuery({ period, consumerId })}`,
     { signal },

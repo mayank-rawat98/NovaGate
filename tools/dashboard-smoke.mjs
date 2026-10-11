@@ -211,6 +211,8 @@ const newArchiveId = '45678901-1234-1234-1234-123456789abc';
 let failConsumerUsage = false;
 let emptyConsumerUsage = false;
 let privacyUsage = '';
+let rollupUsage = '';
+let rollupPathsUnavailable = false;
 const consumerUsageRequests = [];
 const otherTenant = '87654321-1234-1234-1234-123456789abc';
 let failServices = false;
@@ -441,21 +443,88 @@ const handleApiFixture = async (route) => {
         : (i === 0 ? 12 : i === seconds / bucketSeconds - 1 ? 8 : 0) /
           bucketSeconds,
     }));
+    const rolled = rollupUsage && !noUsage;
+    const rollupTo = new Date(to);
+    rollupTo.setUTCSeconds(30, 125);
+    const rolledTo = rollupTo.getTime(),
+      rolledFrom = rolledTo - seconds * 1000;
+    const rolledStart =
+      Math.floor(rolledFrom / (bucketSeconds * 1000)) * bucketSeconds * 1000;
+    const rolledBuckets = Math.ceil(
+      (rolledTo - rolledStart) / (bucketSeconds * 1000),
+    );
+    const rolledCounts = (requests, errors = 0) => ({
+      ...counts(requests, errors),
+      p50Ms: requests ? 64 : null,
+      p95Ms: requests ? 128 : null,
+      p99Ms: requests ? 256 : null,
+    });
+    const rolledSeries = rolled
+      ? Array.from({ length: rolledBuckets }, (_, i) => {
+          const timestamp = rolledStart + i * bucketSeconds * 1000;
+          const observedSeconds =
+            (Math.min(timestamp + bucketSeconds * 1000, rolledTo) -
+              Math.max(timestamp, rolledFrom)) /
+            1000;
+          const requests =
+            i === 0 ? 100001 : i === rolledBuckets - 1 ? 100000 : 0;
+          return {
+            ...rolledCounts(requests, i === 0 ? 20000 : 0),
+            timestamp: new Date(timestamp).toISOString(),
+            observedSeconds,
+            rps: requests / observedSeconds,
+          };
+        })
+      : undefined;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        ...counts(noUsage ? 0 : 20, noUsage ? 0 : 4),
+        ...(rolled
+          ? rolledCounts(200001, 20000)
+          : counts(noUsage ? 0 : 20, noUsage ? 0 : 4)),
         consumer: {
           id: url.pathname.split('/').at(-2),
           name: 'Storefront app',
           revokedAt: null,
         },
         period,
-        from,
-        to,
+        from: rolled ? new Date(rolledFrom).toISOString() : from,
+        to: rolled ? new Date(rolledTo).toISOString() : to,
         generatedAt: to,
-        source: 'persisted_request_logs',
+        source: rolled ? 'consumer_rollups' : 'persisted_request_logs',
+        rollup: rolled
+          ? {
+              version: 1,
+              counts: 'complete_for_retained_records',
+              materialization: rollupUsage,
+              latencyMethod: 'histogram_bucket_upper_bound',
+              seriesAlignment: 'utc',
+              paths: rollupPathsUnavailable
+                ? 'unavailable'
+                : 'complete_for_retained_records',
+              pathAggregation: rollupPathsUnavailable
+                ? undefined
+                : {
+                    version: 1,
+                    materialization: rollupUsage,
+                    rollupCells: 20,
+                    rawRecords: 50,
+                    pendingRecords: 25,
+                    groups: 67,
+                    limits: {
+                      cells: 20000,
+                      rawRecords: 100000,
+                      returnedGroups: 10,
+                    },
+                  },
+              rollupCells: 15,
+              rawRecords: 50,
+              pendingRecords: 25,
+              lateRecords: 7,
+              limits: { cells: 20000, rawRecords: 100000, buckets: 169 },
+            }
+          : undefined,
         privacy: privacyUsage
           ? { revision: randomUUID(), redactedFields: [privacyUsage] }
           : undefined,
@@ -467,16 +536,30 @@ const handleApiFixture = async (route) => {
         },
         bucketSeconds,
         rowLimit: 100000,
-        series,
-        topPaths: noUsage
-          ? []
-          : [
-              {
-                ...counts(20, 4),
-                method: 'GET',
-                path: privacyUsage === 'path' ? '[redacted]' : '/orders',
-              },
-            ],
+        series: rolledSeries ?? series,
+        topPaths:
+          noUsage || (rolled && rollupPathsUnavailable)
+            ? []
+            : rolled
+              ? [
+                  {
+                    ...rolledCounts(180001, 18000),
+                    method: 'GET',
+                    path: privacyUsage === 'path' ? '[redacted]' : '/rolled',
+                  },
+                  {
+                    ...rolledCounts(20000, 2000),
+                    method: 'POST',
+                    path: privacyUsage === 'path' ? '[redacted]' : '/rolled',
+                  },
+                ]
+              : [
+                  {
+                    ...counts(20, 4),
+                    method: 'GET',
+                    path: privacyUsage === 'path' ? '[redacted]' : '/orders',
+                  },
+                ],
       }),
     });
     return;
@@ -1425,6 +1508,111 @@ try {
     path: resolve(artifacts, 'consumer-usage-desktop.png'),
     fullPage: true,
   });
+  rollupUsage = 'backfilling';
+  await usageDialog
+    .getByRole('button', { name: 'Refresh usage', exact: true })
+    .click();
+  await expect(usageDialog.getByText('200,001', { exact: true })).toBeVisible();
+  await expect(
+    usageDialog.getByText('P95 estimate (upper bound)', { exact: true }),
+  ).toBeVisible();
+  await expect(usageDialog).toContainText('Historical backfill is in progress');
+  await expect(usageDialog).toContainText(
+    'estimated histogram bucket upper bounds',
+  );
+  await expect(
+    usageDialog.getByRole('region', { name: 'Consumer top paths table' }),
+  ).toContainText('GET /rolled');
+  await expect(usageDialog).toContainText(
+    'Showing 2 of 67 recorded method/path groups',
+  );
+  await expect(usageDialog).toContainText('Path backfill is in progress');
+  await expect(
+    usageDialog.getByRole('columnheader', {
+      name: 'P95 upper estimate',
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    usageDialog.getByRole('region', { name: 'Consumer top paths table' }),
+  ).not.toContainText('No paths recorded');
+  await interval.focus();
+  await page.keyboard.press('End');
+  await expect(interval).toHaveValue('168');
+  await expect(usageDialog).toContainText(
+    '100,000 requests · 0 server errors · P95 upper estimate',
+  );
+  await expect(usageDialog).toContainText('observed seconds');
+  await audit('consumer rollup coverage desktop');
+  await page.setViewportSize({ width: 390, height: 844 });
+  rollupUsage = 'capacity_limited';
+  await usageDialog
+    .getByRole('button', { name: 'Refresh usage', exact: true })
+    .click();
+  await expect(usageDialog).toContainText('Rollup storage is at capacity');
+  await expect(usageDialog).toContainText('Path storage is at capacity');
+  failConsumerUsage = true;
+  await usageDialog
+    .getByRole('button', { name: 'Refresh usage', exact: true })
+    .click();
+  await expect(usageDialog.getByRole('alert')).toContainText(
+    'previous successful refresh',
+  );
+  await expect(usageDialog.getByText('200,001', { exact: true })).toBeVisible();
+  await expect(
+    usageDialog.getByText('P95 estimate (upper bound)', { exact: true }),
+  ).toBeVisible();
+  await audit('consumer rollup stale coverage mobile');
+  await page.screenshot({
+    path: resolve(artifacts, 'consumer-usage-rollup-mobile.png'),
+    fullPage: true,
+  });
+  await usageDialog
+    .getByRole('heading', { name: 'Top paths', exact: true })
+    .scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: resolve(artifacts, 'consumer-path-rollup-mobile.png'),
+    fullPage: true,
+  });
+  failConsumerUsage = false;
+  rollupPathsUnavailable = true;
+  await usageDialog
+    .getByRole('button', { name: 'Refresh usage', exact: true })
+    .click();
+  await expect(
+    usageDialog.getByRole('region', { name: 'Consumer top paths table' }),
+  ).toContainText('not yet available for high-volume');
+  await expect(usageDialog).not.toContainText('Showing 2 of 67');
+  rollupPathsUnavailable = false;
+  privacyUsage = 'path';
+  await usageDialog
+    .getByRole('button', { name: 'Refresh usage', exact: true })
+    .click();
+  await expect(usageDialog).toContainText('path groups show redacted values');
+  await expect(
+    usageDialog.getByRole('region', { name: 'Consumer top paths table' }),
+  ).toContainText('GET [redacted]');
+  await expect(
+    usageDialog.getByRole('region', { name: 'Consumer top paths table' }),
+  ).not.toContainText('/rolled');
+  await audit('consumer rollup privacy groups mobile');
+  await usageDialog
+    .getByRole('heading', { name: 'Top paths', exact: true })
+    .scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: resolve(artifacts, 'consumer-path-rollup-privacy-mobile.png'),
+    fullPage: true,
+  });
+  privacyUsage = '';
+  rollupUsage = '';
+  await usageDialog
+    .getByRole('button', { name: 'Refresh usage', exact: true })
+    .click();
+  await expect(
+    usageDialog.getByText('P95 response time', { exact: true }),
+  ).toBeVisible();
+  await expect(usageDialog).not.toContainText('Rollup storage is at capacity');
+  await page.setViewportSize({ width: 1440, height: 960 });
   privacyUsage = 'path';
   await usageDialog
     .getByRole('button', { name: 'Refresh usage', exact: true })

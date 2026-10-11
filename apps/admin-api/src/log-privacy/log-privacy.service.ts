@@ -17,6 +17,8 @@ import {
 import { tenantSchema } from '../tenants/tenant-schema';
 import { ConfigPushService } from '../config-push/config-push.service';
 import { REVOKE_TENANT_DELIVERIES_SQL } from '../log-export/export-delivery-schema';
+import { eraseConsumerRollups } from '../proxy-config/consumer-rollup.service';
+import { eraseConsumerPathRollups } from '../proxy-config/consumer-path-rollup-cleanup';
 
 @Injectable()
 export class LogPrivacyService
@@ -184,9 +186,14 @@ export class LogPrivacyService
       try {
         const found = await this.db.transaction(async (manager) => {
           await this.bounded(manager);
-          const [row] = await manager.query(
-            `SELECT id,"logPrivacy","logPrivacyScrubCursor","logPrivacyRevision" FROM public.tenants WHERE NOT "logPrivacyScrubDone" ORDER BY "logPrivacyScrubCheckedAt" NULLS FIRST,id LIMIT 1 FOR NO KEY UPDATE SKIP LOCKED`,
-          );
+          const candidate = `SELECT id,"logPrivacy","logPrivacyScrubCursor","logPrivacyRevision" FROM public.tenants
+            WHERE NOT "logPrivacyScrubDone" ORDER BY "logPrivacyScrubCheckedAt" NULLS FIRST,id LIMIT 1 FOR NO KEY UPDATE`;
+          let [row] = await manager.query(`${candidate} SKIP LOCKED`);
+          // Prefer free tenants, then wait within the existing lock budget.
+          // Aligned periodic replicas must not lose every sweep while another
+          // transaction briefly owns the sole pending tenant. PostgreSQL
+          // rechecks eligibility and returns the current cursor after the wait.
+          if (!row) [row] = await manager.query(candidate);
           if (!row) return false;
           attempted = { id: row.id, revision: row.logPrivacyRevision };
           await manager.query(
@@ -195,6 +202,16 @@ export class LogPrivacyService
           );
           const policy = logPrivacyPolicy(row.logPrivacy);
           const schema = tenantSchema(row.id);
+          const erasedRollups = policy.redactedFields?.includes('consumerId')
+            ? await eraseConsumerRollups(manager, row.id, {
+                attributionHidden: true,
+              })
+            : 0;
+          const erasedPaths = await eraseConsumerPathRollups(manager, row.id, {
+            attributionHidden:
+              policy.redactedFields?.includes('consumerId') ?? false,
+            pathHidden: policy.redactedFields?.includes('path') ?? false,
+          });
           // Do not skip locked log rows: advancing past one would permanently miss its erasure.
           const changed: Array<{ id: string }> = await manager.query(
             `WITH page AS (
@@ -219,7 +236,7 @@ export class LogPrivacyService
             [
               row.id,
               changed.at(-1)?.id ?? row.logPrivacyScrubCursor,
-              changed.length < 500,
+              changed.length < 500 && erasedRollups < 500 && erasedPaths < 500,
               row.logPrivacyRevision,
             ],
           );

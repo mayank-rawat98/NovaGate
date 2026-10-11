@@ -85,6 +85,17 @@ Feature badges in the routes table: Retry badge and a Plugins count badge when `
 - Groups displayed as indigo badge chips in the table
 - Groups feed the `acl` plugin on routes
 
+Usage windows above the raw bound use consumer rollups. Label histogram percentile
+upper bounds, retained-observation coverage, late counts, historical backfill and
+capacity pressure. UTC chart edges expose actual observed seconds. Preserve prior
+same-workspace data on failed refreshes and clear it on workspace changes. High-volume
+path groups expose the global top ten and total normalized group count, independent
+backfill/capacity coverage and labelled latency upper estimates. Privacy omission
+projects group names before publication. Preserve explicit legacy unavailable
+responses; do not describe those as zero recorded paths.
+The typed filtered-metrics REST contract retains consumerUsage source, sample count,
+interval duration and coverage alongside legacy numeric latency fields.
+
 ## Settings page
 
 Fetches `getTenant()` to display real tenant ID and config version.

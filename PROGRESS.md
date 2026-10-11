@@ -8,7 +8,9 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
-- [Issue #95](https://github.com/mayank-rawat98/NovaGate/issues/95) / [PR #96](https://github.com/mayank-rawat98/NovaGate/pull/96) integrates dev `219f2a28` after the runtime correction in PR #98. The combined Node 26.11.1 checkout passes **1,492 tests** (782 admin / 42 suites, 586 gateway / 38 suites, 114 collector / 7 suites, 10 dashboard / 3 suites), with zero skipped tests and no intermediate-mTLS failure. Five projects' lint/typecheck/build checks and **42 production browser cold loads under sixfold CPU throttling** pass with zero runtime/accessibility findings. Fresh admin/dashboard images run as UID 1000; dashboard login and all 16 referenced assets return HTTP 200 with clean shutdown. Gateway and collector reuse PR #98's verified images: both compiled production bundles match byte-for-byte and their production dependency manifests are unchanged. Node 26 packaged transports pass all provider formats and shutdown. Automatic timers deliver 73 batches across two tenants/seven destinations with no manual ticks (2.102 seconds to the first healthy pass, maximum four processing and twenty pending batches). The 1,101-window capacity run retains 1,000 caller and 1,000 scheduled identities, records exactly 101 compacted scheduled batches/records and keeps no terminal payloads; it completes in 22.905 seconds. The full service pipeline passes real traffic, metrics/SSE/history, private archives, alerts, privacy/retention, authenticated delivery activation/history, immutable signed retries and revocation; all three services exit 0. Alert firing acceptance takes 56.410 seconds. Formal actual-provider/inbox, workload/replica, comparative and release acceptance remain open. Consumer rollups, declarative configuration and the CLI remain separate local work. This change targets dev; main stays reserved until everything is implemented and accepted.
+- [Issue #99](https://github.com/mayank-rawat98/NovaGate/issues/99) / [PR #100](https://github.com/mayank-rawat98/NovaGate/pull/100) implements bounded count/latency/path rollups for larger consumer usage windows. Exact retained counts, global top-path ranking, histogram upper estimates and materialization coverage preserve current privacy/receipt retention. The isolated Node 26.11.1 branch passes **1,535 tests with no failures or skips**, all five projects' lint/typecheck/build checks, **42 production browser cold loads at sixfold CPU throttling plus seven final loads**, and four fresh non-root images. Automatic production timers materialize **200,001 records in 108.629 seconds**; two replicas materialize **400,001 observations / 20,000 path cells in 111.202 seconds**, with exact reference results, replay/restart/admission recovery and automatic privacy cleanup in **101.230 seconds**. Retained traffic, metrics, private archives, alerts and export scheduler/capacity checks pass with clean shutdown. Broader workload/traffic/provider, comparative and formal phase/release acceptance remain open. A recurring dependency extraction failure is tracked separately in [issue #101](https://github.com/mayank-rawat98/NovaGate/issues/101). This PR targets dev; main remains reserved for the completed roadmap and final acceptance.
+
+- [Issue #95](https://github.com/mayank-rawat98/NovaGate/issues/95) / [PR #96](https://github.com/mayank-rawat98/NovaGate/pull/96) is merged into dev at `e8886267`, integrating dev `219f2a28` after the runtime correction in PR #98. The combined Node 26.11.1 checkout passes **1,492 tests** (782 admin / 42 suites, 586 gateway / 38 suites, 114 collector / 7 suites, 10 dashboard / 3 suites), with zero skipped tests and no intermediate-mTLS failure. Five projects' lint/typecheck/build checks and **42 production browser cold loads under sixfold CPU throttling** pass with zero runtime/accessibility findings. Fresh admin/dashboard images run as UID 1000; dashboard login and all 16 referenced assets return HTTP 200 with clean shutdown. Gateway and collector reuse PR #98's verified images: both compiled production bundles match byte-for-byte and their production dependency manifests are unchanged. Node 26 packaged transports pass all provider formats and shutdown. Automatic timers deliver 73 batches across two tenants/seven destinations with no manual ticks (2.102 seconds to the first healthy pass, maximum four processing and twenty pending batches). The 1,101-window capacity run retains 1,000 caller and 1,000 scheduled identities, records exactly 101 compacted scheduled batches/records and keeps no terminal payloads; it completes in 22.905 seconds. The full service pipeline passes real traffic, metrics/SSE/history, private archives, alerts, privacy/retention, authenticated delivery activation/history, immutable signed retries and revocation; all three services exit 0. Alert firing acceptance takes 56.410 seconds. Formal actual-provider/inbox, workload/replica, comparative and release acceptance remain open. Consumer rollups are implemented and verified separately in issue #99; declarative configuration and the CLI remain separate local work. This change targets dev; main stays reserved until everything is implemented and accepted.
 
 - Runtime compatibility [issue #97](https://github.com/mayank-rawat98/NovaGate/issues/97) / [PR #98](https://github.com/mayank-rawat98/NovaGate/pull/98) pins Node **26.11.1** for local/CI checks and all four application images. Node 24.21.0 reproduces the native intermediate-client chain failure plus two real TLS regressions (583/586 gateway tests pass); the unchanged mTLS plugin passes all 586 on Node 26.11.1. A separate checkout from dev `b182b882` passes **1,361 tests** (651 admin, 586 gateway, 114 collector, 10 dashboard), five projects' lint/typecheck/build gates and 42 production browser cold loads under sixfold CPU throttling, with zero runtime/accessibility findings. The non-root gateway passes 41 packaged HTTP/gRPC/WSS/auth/TLS/config/trace/metrics checks, including intermediate chains and live trust revocation. The verifier now generates explicit CA constraints and confines LibreSSL/OpenSSL serial files to the disposable directory; its initial CA:FALSE startup failure is preserved. Three rebuilt backend images pass actual traffic, metrics/SSE/history, private RustFS archives, alerts, privacy/retention and encrypted export drafts; all three services exit 0. Alert firing acceptance takes 59.050 seconds. All four fresh images run Node 26.11.1 as UID 1000; the dashboard serves login and all 16 referenced assets with HTTP 200 and exits 0. The first dashboard image build retained npm filesystem extraction errors and a zero-byte Next.js module in its cached dependency layer; a fresh install and image build pass without those extraction errors. Node 26.11.1 is **Current, not LTS**; runtime support, provider/comparative acceptance and production release acceptance remain separate. PR #98 is merged into dev at `219f2a28`; main deployment is reserved for the final release.
 
@@ -1355,20 +1357,117 @@ commit identity and push URL.
   attempt also failed because its output directories were absent; directories
   were created and the final commands leave only the native mTLS failure.
 
-Issue-level verification does not complete formal provider, comparative or release
-acceptance. The unchanged intermediate-mTLS limitation, #69, #90, scalable consumer
-analytics, phases 5–6 and enterprise requirements remain open. The branch stays
-unmerged while the required review is pending; no main deployment is authorized.
+This is the historical pre-runtime issue #95 checkpoint. Issue #97 / PR #98
+subsequently fixes the native intermediate-mTLS runtime gate, and PR #96 is merged
+into dev. Current issue-level verification and remaining formal acceptance are
+recorded above; no main deployment is authorized.
+
+## Consumer count/path rollups — issue #99 / PR #100
+
+The branch starts from dev `e8886267`, after PRs #98 and #96. Backend commit
+`8ba759b` contains admin-owned migration/provisioning, transactional count/path
+materialization, indexed backfill, durable one-row replica notifications and
+bounded readers/cleanup. UI commit `7caa20c` exposes exact retained counts,
+histogram upper estimates, partial UTC intervals, path group counts, independent
+backfill/capacity coverage and stale/retry states. Commit `110a35f` corrects the
+late-observation label to “15 seconds or more,” matching the inclusive SQL boundary.
+Declarative import, CLI and live-log work remain separate local changes.
+
+- **1,535 tests pass, zero failed/skipped:** 825 admin / 46 suites, 586 gateway /
+  38 suites, 114 collector / 7 suites and 10 dashboard / 3 suites. This includes
+  31 real PostgreSQL storage cases, eight real PostgreSQL reader cases, three
+  histogram checks and actual shutdown ownership. The final wording-only UI
+  correction also passes all ten dashboard tests. Evidence: `test-evidence.json`,
+  per-project results and `dashboard-label-results.json` under `.local-work/issue99`.
+- All five projects pass lint, typecheck and build (`static-build.log`); the final
+  dashboard source passes its static/build checks (`dashboard-label-static.log`).
+  Both production browser campaigns pass without runtime or axe WCAG findings:
+  42 cold loads / six passes at sixfold CPU throttling in
+  **213.735 seconds**, then seven final loads in
+  **44.968 seconds**. Full traces, run metadata and
+  mobile coverage/path/privacy screenshots remain in `browser-artifacts` and
+  `browser-label-artifacts`. The final mobile image was visually inspected.
+- All four fresh images run Node 26.11.1 as UID 1000. The three backend bundles
+  match the tested host builds byte-for-byte (`fresh-bundle-evidence.json`). The
+  final dashboard image serves login and all 16 referenced assets with HTTP 200
+  and exits 0 (`image-evidence.json`). The first dashboard dependency install
+  reported npm `TAR_ENTRY_ERROR EFAULT`; that build was explicitly cancelled and
+  rejected for verification. Its log/disposition remain. A clean builder install
+  completes without extraction errors and passes the runtime checks; the final
+  label rebuild also passes. This retry does not establish the filesystem cause
+  or prevent recurrence; issue #101 remains open.
+- The single-image production timer materializes **200,001 retained records**
+  in **108.629 seconds**, preserving the
+  150-second deadline. Authenticated query takes
+  **466.509 ms**; exact counts/path groups, estimate
+  metadata, excessive-pending refusal and immediate/automatic privacy erasure
+  pass. There are zero manual worker ticks; the non-root admin exits 0.
+  Evidence: `single-runtime.log`, `consumer-rollup-runtime-evidence.json`.
+- The two-image fixture materializes **400,001 observations**, **19,995 normalized
+  groups** and exactly **20,000 path cells** in
+  **111.202 seconds**. The other workspace
+  progresses in **255.995 ms** while backfill is
+  active. Concurrent replay of 2,000 existing IDs preserves source/count identity;
+  a replica exits 0, restarts and finishes the active backlog. Both replicas match
+  independent counts, all histogram estimates and global ranking. Eight concurrent
+  reads yield four complete responses and four actionable refusals, then recover.
+  Tenant isolation, whole-response refusal of a 20,001st cell, shorter-window and
+  receipt-retention recovery pass. Current path privacy projects immediately;
+  automatic historical erasure completes in
+  **101.230 seconds**, and restoring path
+  retention does not resurrect metadata. Original 180-second materialization and
+  cleanup limits, 20-second fairness, SQL/lock/admission limits remain unchanged.
+  Both non-root replicas exit 0; zero manual ticks or manufactured marker/aggregate
+  writes. Evidence: `replicas-runtime.log`, `consumer-rollup-replicas-evidence.json`.
+- The retained three-service pipeline verifies **21 real consumer requests** /
+  **10 server errors** / **21 latency samples** atomically materialized into both
+  stores, with histogram coherence and private internal markers. Metrics/SSE,
+  private RustFS archives, authenticated export activation/history, immutable
+  signed retries, payload/revision revocation, privacy/retention and independent
+  consumer attribution pass. Alert firing acceptance takes
+  **59.299 seconds**. Its separate
+  200,001-record backfill finishes in
+  **104.423 seconds**.
+  All three services exit 0. Evidence: `pipeline.log`, `pipeline-evidence.json`.
+- Retained export timers deliver **73 batches**
+  across two tenants/seven destinations, with the first healthy pass in
+  **2.091 seconds**, at most
+  **2 database connections**, four processing and
+  twenty pending batches. Pause/resume and reconstruction pass, with no terminal
+  payloads or manual timer ticks. The direct producer/worker capacity fixture
+  delivers **1,101 real windows** in **20.651 seconds**,
+  retains 1,000 caller identities (synthetic fixture rows) plus 1,000 scheduled
+  outcomes, records exactly 101 compacted batches/records and retains no terminal
+  bytes. It does not claim timer discovery; that is verified separately above.
+  Evidence: `exports-runtime.log`, `export-scheduler-evidence.json`,
+  `export-capacity-evidence.json`.
+
+Prior failing diagnostics remain under `.local-work/issue95`: TypeORM mutation
+tuple handling, lost sweeps through brief receipt/public-row contention, missing
+idle ingestion wake-ups and two-worker historical privacy starvation. Current
+real PostgreSQL regressions retain their corrected row-return, lock order,
+bounded retry/cooldown, notification rollback and cursor/revision ownership.
+Source backup and hashes are preserved under `.local-work/issue99/source-backup`;
+the original dirty workspace and global Node runtime are untouched.
+
+These are finite persisted-record/controlled-receiver and issue regression results.
+They do not establish complete traffic/billing coverage, larger workload/cardinality
+acceptance, actual-provider indexing/inbox guarantees or comparative Kong throughput.
+Issues #69, #90 and #101, later roadmap phases, enterprise requirements and formal
+all-phase/release acceptance remain open. Main is reserved for that final gate.
 
 ## Remaining work
 
-### Next: scalable consumer analytics and developer tooling; retain follow-ups #69 and #90
+### Next: build follow-up and developer tooling; retain follow-ups #69 and #90
 
 - Reproduce the intermittent server/session hydration recovery, identify the DOM/state
   mismatch and fix its source. Keep strict browser error gates and record a regression
   that demonstrates the failure before the fix. Successful reruns alone do not close it.
 - Resolve RustFS empty-bucket cleanup/orphan metadata in #90 with a real regression
   and verified fix; preserve strict lifecycle cleanup gates.
+- Investigate recurring npm filesystem extraction failure and reject damaged
+  dependency installations in [issue #101](https://github.com/mayank-rawat98/NovaGate/issues/101).
+  A clean retry does not establish the source of EFAULT or prevent recurrence.
 - Retain #92’s actual Jest/PostgreSQL timeout ownership regression and strict budgets;
   any remaining resource-pressure deadline failures must remain visible.
 - Continue later work through the issue → dev branch → tested PR → merge convention.
@@ -1380,9 +1479,11 @@ unmerged while the required review is pending; no main deployment is authorized.
 - Verify larger external delivery workloads/replicas and actual-provider acceptance.
   Transports, immutable snapshots, bounded durable retries, receipt scheduling,
   authenticated activation, stricter payload policies and metadata-only history
-  are implemented locally in issue #95; formal acceptance remains open.
-- High-volume per-consumer rollups, idempotent ingestion/backfill, retention and
-  explicit coverage indicators beyond the bounded persisted-log usage view.
+  are merged into dev through PR #96; formal acceptance remains open.
+- Bounded per-consumer count/path rollups, idempotent ingestion/backfill, retention
+  and explicit materialization coverage are implemented in issue #99. Broader
+  workload/window/cardinality/replica acceptance and actual traffic completeness
+  remain unproven beyond the finite persisted-record fixtures.
 - Formal acceptance for tracing, two-second live metrics, 90-second actual alert delivery,
   private RustFS export and consumer analytics.
 
