@@ -193,7 +193,7 @@ Rules:
 - Never read `process.env` directly outside of `configuration.ts`
 - Never hardcode threshold numbers, URLs, or secrets in guard/service/middleware files
 - Adding a new config key requires a corresponding Joi rule in `configuration.schema.ts`
-- Adding a new environment variable requires updating the tracked `docker/gateway.env.example` and the README table
+- Adding a new environment variable requires updating the README environment variable table; all env files and env templates stay ignored by Git
 
 ---
 

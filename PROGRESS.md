@@ -1,12 +1,14 @@
 # NovaGate progress and remaining work
 
-Updated: **9 October 2026** (Asia/Calcutta).
+Updated: **11 October 2026** (Asia/Calcutta).
 
 This report distinguishes merged development work, the alerting foundation checkpoint,
 and formal acceptance. The detailed roadmap is [implementation.md](implementation.md).
 No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
+
+- Runtime compatibility [issue #97](https://github.com/mayank-rawat98/NovaGate/issues/97) / [PR #98](https://github.com/mayank-rawat98/NovaGate/pull/98) pins Node **26.11.1** for local/CI checks and all four application images. Node 24.21.0 reproduces the native intermediate-client chain failure plus two real TLS regressions (583/586 gateway tests pass); the unchanged mTLS plugin passes all 586 on Node 26.11.1. A separate checkout from dev `b182b882` passes **1,361 tests** (651 admin, 586 gateway, 114 collector, 10 dashboard), five projects' lint/typecheck/build gates and 42 production browser cold loads under sixfold CPU throttling, with zero runtime/accessibility findings. The non-root gateway passes 41 packaged HTTP/gRPC/WSS/auth/TLS/config/trace/metrics checks, including intermediate chains and live trust revocation. The verifier now generates explicit CA constraints and confines LibreSSL/OpenSSL serial files to the disposable directory; its initial CA:FALSE startup failure is preserved. Three rebuilt backend images pass actual traffic, metrics/SSE/history, private RustFS archives, alerts, privacy/retention and encrypted export drafts; all three services exit 0. Alert firing acceptance takes 59.050 seconds. All four fresh images run Node 26.11.1 as UID 1000; the dashboard serves login and all 16 referenced assets with HTTP 200 and exits 0. The first dashboard image build retained npm filesystem extraction errors and a zero-byte Next.js module in its cached dependency layer; a fresh install and image build pass without those extraction errors. Node 26.11.1 is **Current, not LTS**; runtime support, provider/comparative acceptance and production release acceptance remain separate. This PR targets dev; main deployment is reserved for the final release.
 
 - Current [issue #92](https://github.com/mayank-rawat98/NovaGate/issues/92) fixes retention integration case ownership from merged `dev` **a3597969** / PR #93. An actual child Jest/PostgreSQL regression proves a timed-out body contaminates the following case without draining; with ownership tracking, the intentional timeout still fails while the next case passes. The 30 exact elapsed-time boundary cases retain their five-second budgets and assertions. All **1,359 tests** pass (651 admin, 584 gateway, 114 control-plane, 10 dashboard), all five static gates pass, and the admin build matches the prior production compilation. The final committed-source affected run passes all 651 admin tests; [PR #94](https://github.com/mayank-rawat98/NovaGate/pull/94) closes #92. Formal acceptance remains separate.
 
