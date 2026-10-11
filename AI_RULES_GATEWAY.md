@@ -454,3 +454,17 @@ indexed pending notifications and queue-write failure rolls back ingestion.
 Privacy discovery must also fall back to a bounded wait when all pending tenants
 are briefly locked. Preserve current cursor/revision ownership and source-row
 erasure; aligned replica timers cannot silently discard every cleanup sweep.
+
+## Rule 26 — Declarative apply preserves reviewed state and durable delivery
+
+A configuration document replaces the complete active service, route and consumer
+set. Validate the entire bounded document before writing. Preview must not write or
+expose credentials/hashes; its keyed revision binds the workspace, complete current
+private snapshot, normalized desired document and expiry. Apply must fence ordinary
+CRUD writes and recheck that revision under the same transaction that reconciles
+rows, version and durable outbox. Expiry, drift, edits and replica races require
+another preview; database failures leave no partial import. Preserve matching IDs,
+consumer keys, omitted matching private plugin fields and ordered routes/plugins.
+Never revive revoked keys. Exports omit secrets and refuse unsafe or unimportable
+documents. New plaintext consumer keys return once after commit; queued delivery
+does not imply a gateway ACK. Browser cancellation cannot promise server rollback.

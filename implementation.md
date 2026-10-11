@@ -100,7 +100,7 @@ The code contains substantial work for phases 0–3, but file presence does not 
 | 2     | OIDC, client credentials, HMAC, ACL, mTLS implementations and unit tests                                                       | Verify real providers and TLS handshakes; Tenant-bound REST authorization and groups repaired in #27; provider isolation/bounds verified in #47 and native/proxy mTLS plus live trust rotation in #49. Bounded Stripe/GitHub webhook HMAC verified in #51; external Auth0 and final phase acceptance remain |
 | 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                                                      | Native gRPC/WebSocket checks exist (#41/#43), bounded AST GraphQL policies are verified (#53), and issue #55 hardens HTTP/2 lifecycle, limits and health-compatible fallback; issue #57 adds verified least-connections; formal protocol acceptance remains                                                 |
 | 4     | RustFS archives (#37), traces (#61), live metrics (#63), alerts (#65), external delivery (#95), bounded consumer rollups (#99) | Larger workloads/provider acceptance, hydration (#69), RustFS cleanup (#90), formal acceptance and release remain                                                                                                                                                                                           |
-| 5     | Existing REST configuration primitives                                                                                         | Declarative reconciliation, CLI, portal, Terraform, plugin SDK and third-party loading remain to implement                                                                                                                                                                                                  |
+| 5     | REST configuration and reviewed declarative import/export (#103)                                                               | CLI/scoped automation, portal, Terraform, plugin SDK, third-party loading, configuration history/rollback and formal acceptance remain                                                                                                                                                                      |
 | 6     | No verified implementations                                                                                                    | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                                                                   |
 
 ### Prerequisites discovered by audit
@@ -1049,6 +1049,17 @@ This phase turns the product from a gateway into a platform. Kong sells this as 
 
 ### 5.1 Declarative Config (YAML Import/Export)
 
+Implementation is verified in [issue #103](https://github.com/mayank-rawat98/NovaGate/issues/103)
+and [PR #104](https://github.com/mayank-rawat98/NovaGate/pull/104), reconciled from the
+preserved local prototype onto the latest dev. The authenticated
+preview/apply workflow uses bounded strict documents, a ten-minute revision,
+identity/credential preservation and atomic configuration/version/outbox writes.
+Route/plugin order survives gateway reconnect. Settings supports downloads,
+reviewed diffs, conflict recovery and one-time keys. See the
+[operator contract](apps/admin-api/src/config-import/README.md). CLI integration,
+revision history/operator rollback and formal acceptance remain separate work.
+Transaction rollback does not provide a user-facing configuration rollback.
+
 `apps/admin-api/src/config-import/`:
 
 - `POST /tenants/:id/import` — accepts YAML or JSON body; dry-run mode returns diff
@@ -1057,6 +1068,7 @@ This phase turns the product from a gateway into a platform. Kong sells this as 
 Schema maps exactly to existing DB model (no new concepts):
 
 ```yaml
+version: 1
 services:
   - name: users-api
     targets:

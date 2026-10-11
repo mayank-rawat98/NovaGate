@@ -244,6 +244,42 @@ integration(
         );
         expect(publish).toHaveBeenCalledTimes(1);
       }));
+    it('reviews and commits all 400 changes when replacing the maximum 200 consumers', () =>
+      cases.run(async () => {
+        const tenant = await workspace();
+        const config: DeclarativeConfig = {
+          version: 1,
+          services: [],
+          routes: [],
+          consumers: Array.from({ length: 200 }, (_, i) => ({
+            name: `old-${i}`,
+          })),
+        };
+        const seeded = await seed(tenant, config);
+        config.consumers = Array.from({ length: 200 }, (_, i) => ({
+          name: `new-${i}`,
+        }));
+        const before = await fingerprint(tenant);
+        const proposed = await preview(tenant, config);
+        expect(
+          proposed.changes.filter((change) => change.action === 'create'),
+        ).toHaveLength(200);
+        expect(
+          proposed.changes.filter((change) => change.action === 'remove'),
+        ).toHaveLength(200);
+        expect(await fingerprint(tenant)).toEqual(before);
+        const response = await apply(tenant, config, proposed.revision);
+        expect(response.status).toBe(200);
+        const result = (await response.json()) as ConfigApplyResult;
+        expect(result.changed).toBe(400);
+        expect(result.consumerKeys).toHaveLength(200);
+        expect(result.configVersion).toBe(seeded.configVersion + 1);
+        const schema = tenantSchema(tenant);
+        const [counts] = await db.query(
+          `SELECT COUNT(*) FILTER (WHERE "revokedAt" IS NULL)::integer AS active, COUNT(*) FILTER (WHERE "revokedAt" IS NOT NULL)::integer AS revoked FROM ${schema}.consumers`,
+        );
+        expect(counts).toEqual({ active: 200, revoked: 200 });
+      }));
     it('exports YAML without credentials or hashes and round trips without rotating keys or publishing', () =>
       cases.run(async () => {
         const tenant = await workspace(),
