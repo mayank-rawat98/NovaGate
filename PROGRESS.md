@@ -1456,6 +1456,54 @@ acceptance, actual-provider indexing/inbox guarantees or comparative Kong throug
 Issues #69, #90 and #101, later roadmap phases, enterprise requirements and formal
 all-phase/release acceptance remain open. Main is reserved for that final gate.
 
+## Dependency extraction rejection — issue #101 / PR #102
+
+CI and all four Docker dependency installs now use the builtin-only verified
+npm wrapper; backend production pruning uses it too. It rejects npm tar
+extraction diagnostics even when npm exits zero, keeps normal npm failures,
+streams output with bounded diagnostic overlap/backpressure, and propagates
+POSIX cancellation to npm and its lifecycle-script group. The copied guard
+invalidates earlier unguarded Docker install layers. Failed installs are not
+repaired or retried automatically; existing images need rebuilding.
+
+The real npm/tar regression injects one fixture file-write EFAULT. Unguarded
+npm accepts a zero-byte module with a missing constructor; guarded ci/prune
+reject it. Quiet options/environment cannot suppress the warning. Healthy
+installs preserve the 52-byte module and constructor. A real prepare script
+runs; cancellation drains it and npm with exit 143. A script failure keeps
+exit 17, all 128 KiB of output and its trailing diagnostic. Missing-lock/npm
+errors fail, and a real negative Docker build cannot publish its image tag.
+This controlled callback injection proves rejection, not the original kernel
+cause. The bundled npm 11.20.0 / pacote 21.5.1 / tar 7.5.22 source explains
+nonfatal write-error handling; attribution to Node/libuv/OrbStack and observed
+memory pressure remains unproven. Issue #101 remains open for that trace.
+
+A fresh guarded Node 26.11.1 host install passes. All five projects' lint and
+typecheck pass, reusing three matching Nx cache results among ten tasks.
+All four images build with fresh guarded installs and no extraction diagnostic;
+three backend pruning steps succeed. Every image runs as UID 1000 with Node
+26.11.1. All three packaged backend bundle hashes match the already verified
+merged dev checkpoint. The production dashboard serves login and all 16 assets
+with HTTP 200, retains a 4,558-byte Next base-http module and real constructor,
+and shuts down with exit 0.
+
+The retained production pipeline also passes actual gateway traffic, committed
+metrics/SSE/history, private archives, privacy/retention and authenticated
+signed stable-body delivery/retry/revocation. Alert firing is accepted in
+59.924 seconds. Automatic timers materialize 200,001 persisted records in
+102.503 seconds with no manual ticks; the authenticated query takes 336.994 ms.
+Gateway, collector and admin all finish shutdown with exit 0; disposable
+fixtures are removed. These are finite local regressions, not complete
+provider/inbox, larger-workload or comparative Kong acceptance.
+
+Evidence is retained under `.local-work/issue101`: `repro-before.json`,
+`extraction-smoke-final.log`, `verified-host-ci.log`, `static.log`, four
+`*-image-build.log` files, `image-build-evidence.json`, `image-evidence.json`
+and `pipeline.log` / `pipeline-evidence.json`. The original 85 dirty source
+files are preserved byte-for-byte. Main remains reserved for final roadmap
+and formal release acceptance. Later phases, enterprise requirements and
+issues #69, #90 and the remaining #101 investigation stay open.
+
 ## Remaining work
 
 ### Next: build follow-up and developer tooling; retain follow-ups #69 and #90
@@ -1465,9 +1513,10 @@ all-phase/release acceptance remain open. Main is reserved for that final gate.
   that demonstrates the failure before the fix. Successful reruns alone do not close it.
 - Resolve RustFS empty-bucket cleanup/orphan metadata in #90 with a real regression
   and verified fix; preserve strict lifecycle cleanup gates.
-- Investigate recurring npm filesystem extraction failure and reject damaged
-  dependency installations in [issue #101](https://github.com/mayank-rawat98/NovaGate/issues/101).
-  A clean retry does not establish the source of EFAULT or prevent recurrence.
+- The npm extraction rejection gate and real regression are implemented in
+  [PR #102](https://github.com/mayank-rawat98/NovaGate/pull/102). Investigate the
+  original filesystem EFAULT in [issue #101](https://github.com/mayank-rawat98/NovaGate/issues/101);
+  a clean retry or injected callback error does not establish its kernel cause.
 - Retain #92’s actual Jest/PostgreSQL timeout ownership regression and strict budgets;
   any remaining resource-pressure deadline failures must remain visible.
 - Continue later work through the issue → dev branch → tested PR → merge convention.
