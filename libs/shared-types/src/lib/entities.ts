@@ -1,4 +1,4 @@
-import type { GraphqlPolicy } from './ws-messages.ts';
+import type { GraphqlPolicy, MetricsSnapshot } from './ws-messages.ts';
 export interface TenantEntity {
   id: string;
   name: string;
@@ -94,6 +94,8 @@ export interface ConsumerUsageCounts {
 }
 export interface ConsumerUsageBucket extends ConsumerUsageCounts {
   timestamp: string;
+  /** Rollup charts align to UTC; edge intervals cover only part of a bucket. */
+  observedSeconds?: number;
 }
 export interface ConsumerUsagePath extends ConsumerUsageCounts {
   method: string;
@@ -108,9 +110,16 @@ export interface ConsumerUsageStats extends ConsumerUsageCounts {
   from: string;
   to: string;
   generatedAt: string;
-  source: 'persisted_request_logs';
+  source: 'persisted_request_logs' | 'consumer_rollups';
+  rollup?: import('./consumer-rollup.ts').ConsumerRollupCoverage;
   bucketSeconds: number;
   rowLimit: number;
   series: ConsumerUsageBucket[];
   topPaths: ConsumerUsagePath[];
+}
+
+/** REST history may include consumer usage; gateway telemetry keeps its wire shape. */
+export interface MetricHistorySnapshot extends MetricsSnapshot {
+  consumerUsage?: Pick<ConsumerUsageStats, 'source' | 'rollup'> &
+    Pick<ConsumerUsageBucket, 'observedSeconds' | 'latencySamples'>;
 }

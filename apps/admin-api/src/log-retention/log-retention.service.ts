@@ -15,6 +15,8 @@ import {
 } from '@api-gateway/shared-types';
 import { tenantSchema } from '../tenants/tenant-schema';
 import { REVOKE_TENANT_DELIVERIES_SQL } from '../log-export/export-delivery-schema';
+import { eraseConsumerRollups } from '../proxy-config/consumer-rollup.service';
+import { eraseConsumerPathRollups } from '../proxy-config/consumer-path-rollup-cleanup';
 import {
   retentionCoverage,
   retentionProfile,
@@ -173,6 +175,14 @@ export class LogRetentionService
             [row.id],
           );
           const profile = await retentionProfile(manager, row.id);
+          const erasedRollups = await eraseConsumerRollups(manager, row.id, {
+            attributionHidden: false,
+            receiptCutoff: profile.cutoff,
+          });
+          const erasedPaths = await eraseConsumerPathRollups(manager, row.id, {
+            attributionHidden: false,
+            receiptCutoff: profile.cutoff,
+          });
           // Do not skip locked log rows and incorrectly report their deletion as complete.
           const removed: Array<{ id: string }> = await manager.query(
             'WITH page AS (SELECT id FROM ' +
@@ -184,7 +194,13 @@ export class LogRetentionService
           );
           await manager.query(
             'UPDATE public.tenants SET "logRetentionPending"=$2,"logRetentionError"=false,"logRetentionCheckedAt"=clock_timestamp() WHERE id=$1 AND "logRetentionRevision"=$3',
-            [row.id, removed.length === 500, row.logRetentionRevision],
+            [
+              row.id,
+              removed.length === 500 ||
+                erasedRollups === 500 ||
+                erasedPaths === 500,
+              row.logRetentionRevision,
+            ],
           );
           return true;
         });

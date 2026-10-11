@@ -86,7 +86,7 @@
         "cache": false,
         "options": {
           "commands": [
-            "eslint tools/metrics-container-smoke.mjs tools/alerts-container-fixture.mjs tools/log-export-container-fixture.mjs tools/export-destinations-container-fixture.mjs",
+            "eslint tools/metrics-container-smoke.mjs tools/alerts-container-fixture.mjs tools/log-export-container-fixture.mjs tools/export-destinations-container-fixture.mjs tools/consumer-rollup-container-fixture.mjs",
             "node tools/metrics-container-smoke.mjs"
           ],
           "parallel": false
@@ -124,6 +124,28 @@
             "eslint tools/build-export-transport-fixture.mjs tools/export-delivery-container-smoke.mjs",
             "node tools/build-export-transport-fixture.mjs",
             "node tools/export-delivery-container-smoke.mjs scheduler"
+          ],
+          "parallel": false
+        }
+      },
+      "consumer-rollup-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/consumer-rollup-container-smoke.mjs tools/consumer-rollup-container-fixture.mjs tools/consumer-rollup-replicas-fixture.mjs",
+            "node tools/consumer-rollup-container-smoke.mjs"
+          ],
+          "parallel": false
+        }
+      },
+      "consumer-rollup-replicas-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/consumer-rollup-container-smoke.mjs tools/consumer-rollup-container-fixture.mjs tools/consumer-rollup-replicas-fixture.mjs",
+            "node tools/consumer-rollup-container-smoke.mjs replicas"
           ],
           "parallel": false
         }

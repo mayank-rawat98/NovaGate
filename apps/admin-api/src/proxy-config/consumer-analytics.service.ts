@@ -16,6 +16,7 @@ import type {
 } from '@api-gateway/shared-types';
 import { DataSource } from 'typeorm';
 import { tenantSchema } from '../tenants/tenant-schema';
+import { readConsumerRollup } from './consumer-rollup-reader';
 
 import {
   CONSUMER_ANALYTICS_ROW_LIMIT,
@@ -160,12 +161,20 @@ export class ConsumerAnalyticsService implements OnModuleDestroy {
               hidden.includes('consumerId'),
             ],
           );
-          if (row.matched > CONSUMER_ANALYTICS_ROW_LIMIT)
-            throw new ServiceUnavailableException(
-              'This window exceeds the consumer usage limit. Choose a shorter period.',
-            );
+          const rolled =
+            row.matched > CONSUMER_ANALYTICS_ROW_LIMIT
+              ? await readConsumerRollup(manager, {
+                  tenantId: schema.slice(7).replace(/_/g, '-'),
+                  consumerId,
+                  from,
+                  to,
+                  receiptCutoff: profile.cutoff,
+                  bucketSeconds: bucket,
+                  pathHidden: hidden.includes('path'),
+                })
+              : undefined;
           return {
-            ...row.totals,
+            ...(rolled?.totals ?? row.totals),
             retention: retentionCoverage(profile),
             privacy: {
               revision: privacy.logPrivacyRevision,
@@ -180,11 +189,12 @@ export class ConsumerAnalyticsService implements OnModuleDestroy {
             from,
             to,
             generatedAt: new Date(Date.now()).toISOString(),
-            source: 'persisted_request_logs',
+            source: rolled ? 'consumer_rollups' : 'persisted_request_logs',
+            ...(rolled ? { rollup: rolled.rollup } : {}),
             bucketSeconds: bucket,
             rowLimit: CONSUMER_ANALYTICS_ROW_LIMIT,
-            series: row.series,
-            topPaths: row.paths,
+            series: rolled?.series ?? row.series,
+            topPaths: rolled?.topPaths ?? row.paths,
           };
         },
       );

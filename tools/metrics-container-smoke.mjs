@@ -10,6 +10,7 @@ import jwt from 'jsonwebtoken';
 import { startAlertFixture } from './alerts-container-fixture.mjs';
 import { configureArchiveFixture } from './log-export-container-fixture.mjs';
 import { exportDestinationFixture } from './export-destinations-container-fixture.mjs';
+import { verifyConsumerRollupReader } from './consumer-rollup-container-fixture.mjs';
 
 // Production images, disposable infrastructure and fixture credentials only.
 const docker = (...args) =>
@@ -492,6 +493,80 @@ try {
   assert.equal(usage.topPaths[0].requests, 21);
   assert.ok(!JSON.stringify(usage).includes(usageConsumerKey));
   assert.ok(!JSON.stringify(usage).includes('keyHash'));
+  const rollups = (
+    await db.query(
+      `SELECT requests,server_errors,latency_samples,histogram FROM ${schema}.consumer_usage_rollups WHERE consumer_id=$1`,
+      [usageConsumer],
+    )
+  ).rows;
+  assert.equal(
+    rollups.reduce((sum, row) => sum + BigInt(row.requests), 0n),
+    21n,
+  );
+  assert.equal(
+    rollups.reduce((sum, row) => sum + BigInt(row.server_errors), 0n),
+    10n,
+  );
+  assert.equal(
+    rollups.reduce((sum, row) => sum + BigInt(row.latency_samples), 0n),
+    21n,
+  );
+  assert.ok(
+    rollups.every(
+      (row) =>
+        row.histogram.length === 33 &&
+        row.histogram.reduce((sum, n) => sum + BigInt(n), 0n) ===
+          BigInt(row.latency_samples),
+    ),
+  );
+  assert.equal(
+    (
+      await db.query(
+        `SELECT 1 FROM ${schema}.request_logs WHERE "consumerId"=$1 AND "usageRollupVersion" IS DISTINCT FROM 1 LIMIT 1`,
+        [usageConsumer],
+      )
+    ).rowCount,
+    0,
+  );
+  const publicLogs = await (
+    await fetch(`${adminUrl}/tenants/${tenant}/logs`, { headers })
+  ).json();
+  assert.ok(publicLogs.length > 0);
+  assert.ok(
+    publicLogs.every(
+      (row) =>
+        !Object.hasOwn(row, 'usageRollupVersion') &&
+        !Object.hasOwn(row, 'pathRollupVersion'),
+    ),
+  );
+  const pathRollups = (
+    await db.query(
+      `SELECT method,path,SUM(requests)::text AS requests,SUM(server_errors)::text AS errors,SUM(latency_samples)::text AS samples FROM ${schema}.consumer_path_rollups WHERE consumer_id=$1 GROUP BY method,path`,
+      [usageConsumer],
+    )
+  ).rows;
+  assert.deepEqual(pathRollups, [
+    {
+      method: 'GET',
+      path: '/traffic',
+      requests: '21',
+      errors: '10',
+      samples: '21',
+    },
+  ]);
+  const consumerRollups = {
+    requests: 21,
+    serverErrors: 10,
+    latencySamples: 21,
+    cells: rollups.length,
+    pathGroups: pathRollups.length,
+    checks: [
+      'actual-gateway-and-collector-atomic-materialization',
+      'histogram-count-coherence',
+      'actual-gateway-private-path-materialization',
+      'internal-marker-excluded-from-log-reads-and-archives',
+    ],
+  };
   const consumerMetricsResponse = await fetch(
     `${adminUrl}/tenants/${tenant}/metrics?period=1h&consumerId=${usageConsumer}`,
     { headers },
@@ -820,6 +895,20 @@ try {
       privacyState.historicalCleanup === 'complete' && unredacted.rowCount === 0
     );
   }, 'Production metadata cleanup permanently erases attribution and correlation');
+  assert.equal(
+    (await db.query(`SELECT 1 FROM ${schema}.consumer_usage_rollups LIMIT 1`))
+      .rowCount,
+    0,
+  );
+  assert.equal(
+    (
+      await db.query(
+        `SELECT cells FROM ${schema}.consumer_usage_rollup_state WHERE singleton`,
+      )
+    ).rows[0].cells,
+    0,
+  );
+  consumerRollups.privacyErasure = true;
   const privateUsage = await (
     await fetch(
       `${adminUrl}/tenants/${tenant}/consumers/${usageConsumer}/stats?period=1h`,
@@ -909,6 +998,10 @@ try {
     archiveRecords: maskedRecords.length,
     localRecords: localRecords.length,
   };
+  const consumerRollupReader = await verifyConsumerRollupReader({
+    adminUrl,
+    db,
+  });
   const shutdown = [];
   for (const [name, role] of [
     [gateway, 'gateway'],
@@ -949,6 +1042,8 @@ try {
         alerts,
         archives,
         consumerUsage,
+        consumerRollups,
+        consumerRollupReader,
         logPrivacy,
         logRetention,
         exportDestinations,

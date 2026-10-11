@@ -8,6 +8,10 @@ import { EXPORT_DELIVERY_SCHEMA } from '../log-export/export-delivery-schema';
 import { traceSchemaSql } from './trace-schema';
 import { ALERT_SCHEDULE_SCHEMA, alertSchemaSql } from '../alerts/alert-schema';
 import { tenantSchema } from '../tenants/tenant-schema';
+import {
+  CONSUMER_ROLLUP_PUBLIC_SCHEMA,
+  consumerRollupSchemaSql,
+} from '../proxy-config/consumer-rollup-schema';
 
 @Injectable()
 export class MigrationService implements OnModuleInit {
@@ -41,6 +45,7 @@ export class MigrationService implements OnModuleInit {
       await manager.query(EXPORT_DESTINATION_SCHEMA);
       await manager.query(LOG_PRIVACY_SCHEMA);
       await manager.query(LOG_RETENTION_SCHEMA);
+      await manager.query(CONSUMER_ROLLUP_PUBLIC_SCHEMA);
       await manager.query(EXPORT_DELIVERY_SCHEMA);
       await manager.query(ALERT_SCHEDULE_SCHEMA);
       const tenants = await manager.query<Array<{ id: string }>>(
@@ -89,6 +94,7 @@ export class MigrationService implements OnModuleInit {
         await manager.query(
           `CREATE INDEX IF NOT EXISTS request_logs_consumer_time ON ${schema}.request_logs ("consumerId", timestamp DESC, id DESC) WHERE "consumerId" IS NOT NULL`,
         );
+        await manager.query(consumerRollupSchemaSql(tenant.id));
         await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "loadBalancing" VARCHAR NOT NULL DEFAULT 'weighted-round-robin' CHECK ("loadBalancing" IN ('weighted-round-robin', 'least-connections'))`,
         );

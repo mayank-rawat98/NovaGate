@@ -1,5 +1,6 @@
 import { RETENTION_CUTOFF_SQL } from '../log-retention/log-retention.policy';
 import { logPrivacyPolicy, redactRequestLog } from '@api-gateway/shared-types';
+import type { MetricHistorySnapshot } from '@api-gateway/shared-types';
 import type { Request, Response } from 'express';
 import { MetricsStreamService } from './metrics-stream.service';
 import {
@@ -102,8 +103,13 @@ export class AnalyticsController {
         `SELECT * FROM request_logs ${where} ORDER BY timestamp DESC LIMIT 50 OFFSET $${params.length}`,
         params,
       );
-      return rows.map(({ receivedAt: _receivedAt, ...row }) =>
-        redactRequestLog(row, tenant?.logPrivacy),
+      return rows.map(
+        ({
+          receivedAt: _receivedAt,
+          usageRollupVersion: _usageRollupVersion,
+          pathRollupVersion: _pathRollupVersion,
+          ...row
+        }) => redactRequestLog(row, tenant?.logPrivacy),
       );
     });
   }
@@ -189,7 +195,7 @@ export class AnalyticsController {
     @Param('tenantId') tenantId: string,
     @Query('period') period = '24h',
     @Query('consumerId') consumerId?: string,
-  ) {
+  ): Promise<MetricHistorySnapshot[]> {
     if (consumerId !== undefined) {
       const usage = await this.consumerAnalytics.get(
         tenantId,
@@ -205,6 +211,14 @@ export class AnalyticsController {
         p50Ms: b.p50Ms ?? 0,
         p95Ms: b.p95Ms ?? 0,
         p99Ms: b.p99Ms ?? 0,
+        consumerUsage: {
+          source: usage.source,
+          latencySamples: b.latencySamples,
+          ...(usage.rollup ? { rollup: usage.rollup } : {}),
+          ...(b.observedSeconds !== undefined
+            ? { observedSeconds: b.observedSeconds }
+            : {}),
+        },
       }));
     }
     return this.metricsStream.history(tenantId, period);
