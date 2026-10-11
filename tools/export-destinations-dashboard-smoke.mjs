@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { expect } from '@playwright/test';
+import { exportDeliveryBrowserFixture } from './export-delivery-dashboard-smoke.mjs';
 
 /** Display-safe fixture responses. Credentials exist only in write assertions. */
 export function exportDestinationsBrowserFixture() {
@@ -18,15 +19,21 @@ export function exportDestinationsBrowserFixture() {
     if (!states.has(tenant)) states.set(tenant, []);
     return states.get(tenant);
   }
+  const delivery = exportDeliveryBrowserFixture({
+    rows,
+    destinationControls: controls,
+  });
   return {
     controls,
     writes,
     rows,
+    delivery,
     async handle(route) {
       const url = new URL(route.request().url());
       const parts = url.pathname.split('/');
       const at = parts.indexOf('log-export-destinations');
       if (at < 0) return false;
+      if (parts[at + 2] === 'delivery') return delivery.handle(route);
       assert.equal(
         route.request().headers().authorization,
         'Bearer browser-verification-token',
@@ -44,7 +51,7 @@ export function exportDestinationsBrowserFixture() {
         } else
           body = {
             configurationAvailable: controls.available,
-            deliveryAvailable: false,
+            deliveryAvailable: controls.available,
             limit: 10,
             destinations: current.map((row) => ({
               ...row,
@@ -132,7 +139,7 @@ export function exportDestinationsBrowserFixture() {
               revision: randomUUID(),
               updatedAt: new Date().toISOString(),
               credentialStatus: connection ? 'available' : row.credentialStatus,
-              state: 'draft',
+              state: row?.state ?? 'draft',
             };
             if (row) current.splice(current.indexOf(row), 1, saved);
             else {

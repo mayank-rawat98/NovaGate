@@ -765,6 +765,8 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
         (row) =>
           row.path === '/scheduled-late' &&
           !('receivedAt' in row) &&
+          !('usageRollupVersion' in row) &&
+          !('pathRollupVersion' in row) &&
           !('export_cursor' in row),
       ),
     ).toBe(true);

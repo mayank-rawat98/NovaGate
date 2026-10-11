@@ -14,6 +14,7 @@ import {
   type LogRetentionState,
 } from '@api-gateway/shared-types';
 import { tenantSchema } from '../tenants/tenant-schema';
+import { REVOKE_TENANT_DELIVERIES_SQL } from '../log-export/export-delivery-schema';
 import {
   retentionCoverage,
   retentionProfile,
@@ -144,6 +145,7 @@ export class LogRetentionService
           "UPDATE public.log_export_jobs SET status='expired',expires_at=LEAST(expires_at,clock_timestamp()),lease_id=NULL,lease_until=NULL,cleanup_at=NULL,error='Log retention changed. Create a new archive.' WHERE tenant_id=$1 AND status<>'expired'",
           [id],
         );
+        await manager.query(REVOKE_TENANT_DELIVERIES_SQL, [id]);
         return this.state(manager, id);
       }),
     );

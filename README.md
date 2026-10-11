@@ -1,6 +1,6 @@
 # NovaGate — Self-Hosted API Gateway
 
-> A production-grade, multi-tenant API gateway where **live traffic never touches the SaaS servers**. Tenants deploy the gateway binary on their own VPS; the SaaS control plane handles config, analytics, and routing rules only.
+> A multi-tenant API gateway where **API proxy traffic stays on the customer's data plane**. Tenants deploy the gateway binary on their own VPS; the control plane manages configuration and recorded telemetry. Production acceptance and remaining capabilities are tracked in [PROGRESS.md](PROGRESS.md).
 
 **Live:** [novagate.dev](https://novagate.dev) &nbsp;·&nbsp; **Docs:** [novagate.dev/docs](https://novagate.dev/docs) &nbsp;·&nbsp; **Dashboard:** [app.novagate.dev](https://app.novagate.dev)
 
@@ -8,11 +8,13 @@
 
 ## Why this exists
 
-Most API gateway SaaS products (Kong Cloud, Zuplo, etc.) proxy your production traffic through their servers — introducing latency, per-request costs, and data-sovereignty concerns. NovaGate separates the **data plane** (traffic) from the **control plane** (configuration), so:
+NovaGate separates the **data plane** (API traffic) from the **control plane** (configuration and recorded telemetry):
 
-- Live traffic is proxied directly on the customer's own server — zero latency added by SaaS hops
-- SaaS server cost scales with number of tenants, not request volume
-- If the control plane goes offline, the gateway keeps serving from its local Redis warm-start cache
+- The customer's gateway proxies requests directly to downstream services.
+- Shared control-plane services manage configuration and recorded telemetry; telemetry storage and processing still scale with recorded volume.
+- A valid local Redis configuration cache lets a gateway warm-start while the control plane is unavailable.
+
+Kong also supports [separate control and data planes](https://developer.konghq.com/gateway/hybrid-mode/) and [self-managed data-plane hosting](https://developer.konghq.com/gateway/topology-hosting-options/). Our beyond-Kong roadmap requires verified capabilities, reliability, operator workflows and comparative acceptance; this deployment model alone does not establish an advantage.
 
 ---
 
@@ -462,11 +464,13 @@ NX_DAEMON=false NX_NO_CLOUD=true npm exec nx run admin-api:test -- --skipNxCache
 
 Production storage is disabled until configured. Set the documented `OBJECT_STORAGE_*` variables in the deployment environment; all env files and env templates are ignored by Git. `COMPOSE_PROFILES=object-storage` enables the bundled RustFS service (Compose 2.20+ is required for its optional dependency). It has persistent data/log volumes and readiness checks, joins only the internal gateway network, and publishes neither S3 nor console ports. External S3-compatible storage can use the same API settings without enabling that profile. Startup checks the bucket policy and ACL and refuses public grants; the adapter never adds a public policy or ACL. Keep AWS S3 Block Public Access enabled as an additional operator control.
 
-External S3-compatible, webhook and Datadog connections can be prepared in **Settings → External export destinations** and stored as encrypted drafts through the tenant API. They do not deliver yet. Dedicated export keys, safe reads, revision-aware edits/removal and key rotation are documented in [the destination guide](apps/admin-api/src/log-export/README.md). The Settings editor supports masked complete credential replacement, metadata-only edits, revision-aware removal and saved-credential re-encryption. Provider transports and delivery history remain pending.
+External S3-compatible, webhook and Datadog connections start as encrypted drafts in **Settings → External export destinations**. Choose **Delivery & history** to explicitly enable receipt scheduling, select filters and stricter payload omissions, pause/resume, remove automatic delivery or inspect metadata-only history. Saving credentials never enables delivery. First configuration starts at database save time; resume catches up with retained receipts and pause lets queued batches finish. Removal revokes scheduled waiting bytes and preserves history; external copies cannot be recalled. Enabled is a saved configuration state, and provider acknowledgement does not establish indexing or health. Dedicated keys, safe reads, revision-aware controls and rotation are documented in [the destination guide](apps/admin-api/src/log-export/README.md).
+
+The external delivery checkpoint in [issue #95](https://github.com/mayank-rawat98/NovaGate/issues/95) / [PR #96](https://github.com/mayank-rawat98/NovaGate/pull/96) includes bounded transports, immutable snapshots, leased attempts and authenticated receipt scheduling controls. Scheduled terminal history rolls off with exact workspace coverage while preserving caller identities and active retries. Discovery continues independently of provider latency within free worker slots and claims only scheduled batches. Controlled runtime checks cover signed retries, full history, slow receivers, queue pressure, pause/resume and reconstruction. Larger workload/replica acceptance, actual-provider acceptance and formal phase/release acceptance remain pending.
 
 Keep RustFS root credentials separate from the application's archive service account. Pre-create a private archive bucket, or use `OBJECT_STORAGE_CREATE_BUCKET=true` once with a provisioning identity and disable it afterward. The application account needs bucket location/list, policy/ACL read and multipart listing permissions, plus object get/put/delete and multipart abort permissions scoped to the archive bucket. It does not need to modify policies or ACLs. Use a TLS endpoint for external storage and restrict credential access. RustFS installation/readiness guidance: [official container documentation](https://docs.rustfs.com/en/installation/container) and [health endpoints](https://docs.rustfs.com/en/operations/status-check).
 
-The bundled single-node storage has no distributed redundancy. Back up PostgreSQL job metadata and RustFS objects together, protect backup credentials and preserve the bucket/object paths. Restore both into an isolated environment first; verify a known archive through the authenticated download endpoint and confirm anonymous access is denied. Expired objects will be removed when the restored worker starts. Distributed storage, restore drills, configurable external tenant destinations and redaction controls remain roadmap work; local and CI evidence does not establish final production acceptance.
+The bundled single-node storage has no distributed redundancy. Back up PostgreSQL job metadata and RustFS objects together, protect backup credentials and preserve the bucket/object paths. Restore both into an isolated environment first; verify a known archive through the authenticated download endpoint and confirm anonymous access is denied. Expired objects will be removed when the restored worker starts. Distributed storage and restore drills remain roadmap work; local and CI evidence does not establish final production acceptance.
 
 The packaged runtime check verifies actual gateway traffic and a separately authenticated late log through the control plane, automatic scheduling, private RustFS downloads, live metrics/alerting and service shutdown. Rebuild the three verification images before running it:
 

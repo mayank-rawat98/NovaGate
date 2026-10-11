@@ -4,7 +4,7 @@ import {
   DATADOG_LOG_SITES,
   type LogExportDestinationCredentials,
 } from '@api-gateway/shared-types';
-import { isPublicAlertAddress } from '../alerts/alert-egress-policy';
+import { isPublicOutboundAddress } from '../shared/outbound-egress-policy';
 
 function invalid(
   message = 'Provide supported destination credentials without extra fields.',
@@ -43,7 +43,7 @@ export function destinationUuid(value: unknown): string {
     invalid('Use a valid destination identifier and its latest revision.');
   return value.toLowerCase();
 }
-function url(value: unknown): URL {
+function url(value: unknown, trusted: ReadonlySet<string>): URL {
   try {
     const raw = text(value, 1, 2048);
     // URL parsing normalizes whitespace and alternate IP spellings. Check both.
@@ -51,19 +51,21 @@ function url(value: unknown): URL {
     const parsed = new URL(raw);
     const host = parsed.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
     if (
-      parsed.protocol !== 'https:' ||
-      (parsed.port && parsed.port !== '443') ||
+      !['http:', 'https:'].includes(parsed.protocol) ||
+      (!trusted.has(parsed.origin) &&
+        (parsed.protocol !== 'https:' || !!parsed.port)) ||
       parsed.username ||
       parsed.password ||
       parsed.hash ||
-      (isIP(host)
-        ? !isPublicAlertAddress(host)
-        : !host.includes('.') ||
-          host === 'metadata.google.internal' ||
-          host.endsWith('.localhost') ||
-          host.endsWith('.local') ||
-          host.endsWith('.internal') ||
-          host.endsWith('.home.arpa'))
+      (!trusted.has(parsed.origin) &&
+        (isIP(host)
+          ? !isPublicOutboundAddress(host)
+          : !host.includes('.') ||
+            host === 'metadata.google.internal' ||
+            host.endsWith('.localhost') ||
+            host.endsWith('.local') ||
+            host.endsWith('.internal') ||
+            host.endsWith('.home.arpa')))
     )
       throw new Error();
     return parsed;
@@ -74,7 +76,10 @@ function url(value: unknown): URL {
   }
 }
 /** Syntactic validation only; delivery must additionally pin validated DNS at connect. */
-export function destinationCredentials(input: unknown): {
+export function destinationCredentials(
+  input: unknown,
+  trustedOrigins: ReadonlySet<string> = new Set(),
+): {
   credentials: LogExportDestinationCredentials;
   destination: string;
 } {
@@ -94,7 +99,7 @@ export function destinationCredentials(input: unknown): {
   ]);
   if (value.type === 'webhook') {
     destinationRecord(value, ['type', 'url', 'signingSecret']);
-    const target = url(value.url);
+    const target = url(value.url, trustedOrigins);
     return {
       destination: target.origin,
       credentials: {
@@ -115,7 +120,7 @@ export function destinationCredentials(input: unknown): {
       'sessionToken',
       'forcePathStyle',
     ]);
-    const endpoint = url(value.endpoint);
+    const endpoint = url(value.endpoint, trustedOrigins);
     if (endpoint.pathname !== '/' || endpoint.search)
       invalid('Use an S3 HTTPS origin without a path or query.');
     const bucket = text(value.bucket, 3, 63);

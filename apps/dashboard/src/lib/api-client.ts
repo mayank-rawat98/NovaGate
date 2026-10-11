@@ -22,6 +22,11 @@ import type {
   LogExportDestinationList,
   CreateLogExportDestination,
   UpdateLogExportDestination,
+  LogExportDeliveryState,
+  LogExportDeliveryHistory,
+  LogExportDeliverySchedule,
+  SaveLogExportDeliverySchedule,
+  RemoveLogExportDeliverySchedule,
   TraceListResponse,
   TraceDetailResponse,
   MetricsSnapshot,
@@ -431,6 +436,48 @@ export function createLogExportDestination(
     body: JSON.stringify(input),
     signal,
   });
+}
+export function getLogExportDelivery(
+  tenantId: string,
+  id: string,
+  signal?: AbortSignal,
+): Promise<LogExportDeliveryState> {
+  return request(
+    `/tenants/${tenantId}/log-export-destinations/${id}/delivery`,
+    { signal },
+  );
+}
+export function getLogExportDeliveryHistory(
+  tenantId: string,
+  id: string,
+  signal?: AbortSignal,
+): Promise<LogExportDeliveryHistory> {
+  return request(
+    `/tenants/${tenantId}/log-export-destinations/${id}/delivery/history`,
+    { signal },
+  );
+}
+export function saveLogExportDelivery(
+  tenantId: string,
+  id: string,
+  input: SaveLogExportDeliverySchedule,
+  signal?: AbortSignal,
+): Promise<LogExportDeliverySchedule> {
+  return request(
+    `/tenants/${tenantId}/log-export-destinations/${id}/delivery`,
+    { method: 'PUT', body: JSON.stringify(input), signal },
+  );
+}
+export function removeLogExportDelivery(
+  tenantId: string,
+  id: string,
+  input: RemoveLogExportDeliverySchedule,
+  signal?: AbortSignal,
+): Promise<{ removed: true }> {
+  return request(
+    `/tenants/${tenantId}/log-export-destinations/${id}/delivery`,
+    { method: 'DELETE', body: JSON.stringify(input), signal },
+  );
 }
 export function updateLogExportDestination(
   tenantId: string,

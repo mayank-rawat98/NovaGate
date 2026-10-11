@@ -581,6 +581,8 @@ export class LogExportService
               delete log.export_timestamp;
               delete log.export_cursor;
               delete log.receivedAt;
+              delete log.usageRollupVersion;
+              delete log.pathRollupVersion;
               const line =
                 JSON.stringify(redactRequestLog(log, row.privacy_policy)) +
                 '\n';

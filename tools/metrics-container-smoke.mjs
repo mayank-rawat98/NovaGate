@@ -185,6 +185,7 @@ try {
     ],
   );
   upstream = createServer((request, response) => {
+    if (destinationsFixture.handleRequest(request, response)) return;
     request.resume();
     response.writeHead(request.url?.includes('/failure') ? 503 : 200);
     response.end('metric fixture');
@@ -229,6 +230,7 @@ try {
 
       ...alertFixture.environment,
       ...destinationsFixture.environment,
+      `LOG_EXPORT_HTTP_TRUSTED_ORIGINS=${JSON.stringify([`http://host.docker.internal:${upstream.address().port}`])}`,
     ],
     [3001],
   );
@@ -242,6 +244,13 @@ try {
     tenant,
     headers,
     db,
+  });
+  exportDestinations.scheduler = await destinationsFixture.verifyAutomatic({
+    adminUrl,
+    tenant,
+    headers,
+    db,
+    origin: `http://host.docker.internal:${upstream.address().port}`,
   });
   const alertConfiguration = await alertFixture.configure(
     adminUrl,
