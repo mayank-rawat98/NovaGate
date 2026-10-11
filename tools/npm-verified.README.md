@@ -30,11 +30,11 @@ accepted install contained a zero-byte Next.js `base-http/node.js`, with no
 its installed files were inspected. Clean builds succeeded, but success after
 a clean retry does not establish why the original filesystem writes failed.
 
-The pinned Node 26.11.1 Alpine image currently bundles npm 11.20.0, tar 7.5.22
-and libuv 1.52.1. In the installed npm sources, pacote's tar extraction warning
+The pinned Node 26.11.1 Alpine image currently bundles npm 11.20.0, pacote 21.5.1,
+tar 7.5.22 and libuv 1.52.1. In the installed npm sources, pacote's tar extraction warning
 callback logs recoverable warnings without requesting strict extraction.
 node-tar resumes after a recoverable entry write error. The corresponding
-upstream sources are [pacote's fetcher](https://github.com/npm/pacote/blob/main/lib/fetcher.js)
+upstream sources are [pacote's fetcher](https://github.com/npm/pacote/blob/v21.5.1/lib/fetcher.js)
 and [node-tar 7.5.22's unpacker](https://github.com/isaacs/node-tar/blob/v7.5.22/src/unpack.ts).
 This explains how npm can accept a damaged install after receiving a write
 error; it does not explain the original kernel error.
@@ -67,7 +67,8 @@ The fixture verifies:
 - A healthy install preserves all 52 fixture bytes and its constructor; healthy
   pruning succeeds, while pruning that re-extracts the failed package rejects it.
 - A normal prepare script runs; SIGTERM drains a real waiting prepare script
-  and npm with exit 143. Missing lockfile/npm failures remain nonzero.
+  and npm with exit 143. A real script failure preserves exit 17, 128 KiB of
+  output and its final diagnostic. Missing lockfile/npm failures remain nonzero.
 - A real Docker build rejects the extraction RUN and never publishes its tag.
 
 The injected write error proves rejection behavior; it is not a reproduction

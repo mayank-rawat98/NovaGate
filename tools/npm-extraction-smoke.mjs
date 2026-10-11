@@ -199,6 +199,33 @@ if (mode === '--inside' || mode === '--docker-failure') {
       const shutdownMs = Date.now() - started;
       assert.ok(shutdownMs < 5000, `Lifecycle shutdown took ${shutdownMs}ms`);
 
+      // Preserve a real lifecycle failure code and output spanning many chunks,
+      // including its final diagnostic before npm closes.
+      writeFileSync(
+        join(cwd, 'prepare.cjs'),
+        "process.stdout.write('Z'.repeat(128 * 1024), () => { process.stderr.write('lifecycle-end\\n'); process.exitCode = 17; });\n",
+      );
+      const rawLifecycleFailure = run(false, 'ci', {
+        args: ['--ignore-scripts=false'],
+      });
+      const guardedLifecycleFailure = run(true, 'ci', {
+        args: ['--ignore-scripts=false'],
+      });
+      assert.equal(rawLifecycleFailure.status, 17, rawLifecycleFailure.stderr);
+      assert.equal(
+        guardedLifecycleFailure.status,
+        17,
+        guardedLifecycleFailure.stderr,
+      );
+      assert.ok(
+        guardedLifecycleFailure.stdout.includes('Z'.repeat(128 * 1024)),
+      );
+      assert.match(guardedLifecycleFailure.stderr, /lifecycle-end/);
+      assert.doesNotMatch(
+        guardedLifecycleFailure.stderr,
+        /Verified npm rejected/,
+      );
+
       rmSync(join(cwd, 'package-lock.json'));
       const ordinaryFailure = run(true, 'ci');
       assert.notEqual(ordinaryFailure.status, 0);
@@ -228,6 +255,8 @@ if (mode === '--inside' || mode === '--docker-failure') {
             lifecycleExit: lifecycle.status,
             cancelledExit: cancelled.code,
             shutdownMs,
+            lifecycleFailureExit: guardedLifecycleFailure.status,
+            lifecycleOutputBytes: 128 * 1024,
           },
           null,
           2,
