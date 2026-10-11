@@ -460,6 +460,49 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
       }),
     ).rejects.toThrow('stopping');
   });
+  it('reconstructs numeric imported route order and preserves plugin order on reconnect', async () => {
+    const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
+    const ids = Array.from({ length: 6 }, () => randomUUID());
+    await ds.query(
+      `ALTER TABLE ${schema}.routes ADD COLUMN "configOrder" INTEGER, ADD COLUMN "createdAt" TIMESTAMP, ADD COLUMN plugins JSONB`,
+    );
+    try {
+      await ds.query(
+        `INSERT INTO ${schema}.routes (id,enabled,"deletedAt","configOrder","createdAt",plugins)
+         VALUES ($1,true,NULL,10,'2024-01-01','[]'),
+                ($2,true,NULL,2,'2024-01-02','[{"name":"acl","config":{"allow":["read-only"]}},{"name":"cors","config":{"origins":["https://app.example.test"]}}]'),
+                ($3,true,NULL,NULL,'2024-01-02','[]'),
+                ($4,true,NULL,NULL,'2024-01-01','[]'),
+                ($5,false,NULL,0,'2024-01-01','[]'),
+                ($6,true,'2024-01-01',0,'2024-01-01','[]')`,
+        ids,
+      );
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const { ws, message } = await connect(apiKey);
+        expect(message.payload.config.routes.map((route) => route.id)).toEqual([
+          ids[1],
+          ids[0],
+          ids[3],
+          ids[2],
+        ]);
+        expect(
+          message.payload.config.routes[0].plugins?.map(
+            (plugin) => plugin.name,
+          ),
+        ).toEqual(['acl', 'cors']);
+        const closed = once(ws, 'close');
+        ws.close();
+        await closed;
+      }
+    } finally {
+      await ds.query(`DELETE FROM ${schema}.routes WHERE id=ANY($1::uuid[])`, [
+        ids,
+      ]);
+      await ds.query(
+        `ALTER TABLE ${schema}.routes DROP COLUMN "configOrder", DROP COLUMN "createdAt", DROP COLUMN plugins`,
+      );
+    }
+  });
   it('preserves publication versions and retains pending config until ACK', async () => {
     const { ws, message } = await connect(apiKey);
     const config = message.payload.config;

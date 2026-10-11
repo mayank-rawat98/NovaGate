@@ -47,7 +47,8 @@
     "tslib": "^2.3.0",
     "typeorm": "^0.3.29",
     "uuid": "^11.0.3",
-    "ws": "^8.20.0"
+    "ws": "^8.20.0",
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.0.1",

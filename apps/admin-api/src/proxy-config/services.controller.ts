@@ -20,7 +20,7 @@ import {
   type ServiceConfig,
 } from '@api-gateway/shared-types';
 
-interface ServiceBody {
+export interface ServiceBody {
   name?: string;
   loadBalancing?: ServiceConfig['loadBalancing'];
   targets?: unknown;
@@ -34,7 +34,7 @@ interface ServiceBody {
   supportsWebSocket?: boolean;
 }
 
-function validateTargets(targets: unknown): ServiceTarget[] {
+export function validateTargets(targets: unknown): ServiceTarget[] {
   if (!Array.isArray(targets) || targets.length === 0) {
     throw new BadRequestException('Targets must be a non-empty array');
   }
@@ -83,7 +83,7 @@ function validateTargets(targets: unknown): ServiceTarget[] {
   });
 }
 
-function validateHealthSettings(body: ServiceBody) {
+export function validateHealthSettings(body: ServiceBody) {
   if (
     body.loadBalancing !== undefined &&
     !['weighted-round-robin', 'least-connections'].includes(body.loadBalancing)

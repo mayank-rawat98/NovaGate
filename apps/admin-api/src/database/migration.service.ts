@@ -107,6 +107,9 @@ export class MigrationService implements OnModuleInit {
         await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.routes ADD COLUMN IF NOT EXISTS plugins JSONB`,
         );
+        await manager.query(
+          `ALTER TABLE IF EXISTS ${schema}.routes ADD COLUMN IF NOT EXISTS "configOrder" INTEGER`,
+        );
         const columns = await manager.query<Array<{ column_name: string }>>(
           `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'routes'`,
           [schema],

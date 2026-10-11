@@ -34,6 +34,7 @@ export class TenantProvisioningService {
           retry JSONB,
           plugins JSONB,
           graphql JSONB,
+          "configOrder" INTEGER,
           "createdAt" TIMESTAMP DEFAULT NOW(),
           "deletedAt" TIMESTAMP
         )

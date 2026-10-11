@@ -261,7 +261,8 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
       );
       if (!tenant) throw new Error('Tenant not found');
       const routes = await manager.query(
-        `SELECT * FROM ${schema}.routes WHERE "deletedAt" IS NULL AND enabled = true`,
+        `SELECT r.* FROM ${schema}.routes r WHERE "deletedAt" IS NULL AND enabled = true
+          ORDER BY (to_jsonb(r)->>'configOrder')::integer NULLS LAST,(to_jsonb(r)->>'createdAt')::timestamp NULLS LAST,id`,
       );
       const services = await manager.query(
         `SELECT * FROM ${schema}.services WHERE "deletedAt" IS NULL`,
