@@ -116,5 +116,8 @@
     "apps/apps/*",
     "apps/api/libs/*",
     "apps/api/apps/*"
-  ]
+  ],
+  "engines": {
+    "node": ">=26.11.1"
+  }
 }

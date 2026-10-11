@@ -127,8 +127,12 @@ function certificate(name) {
       '/CN=localhost',
       '-addext',
       'subjectAltName=IP:127.0.0.1,DNS:host.docker.internal',
+      '-addext',
+      'basicConstraints=critical,CA:TRUE,pathlen:1',
+      '-addext',
+      'keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign,cRLSign',
     ],
-    { stdio: 'ignore', timeout: 15000 },
+    { cwd: directory, stdio: 'ignore', timeout: 15000 },
   );
   chmodSync(key, 0o644); // Allow the non-root container to read its disposable fixture.
   return { key: readFileSync(key), cert: readFileSync(cert) };
@@ -297,7 +301,7 @@ try {
       '-subj',
       '/CN=Packaged client',
     ],
-    { stdio: 'ignore', timeout: 15000 },
+    { cwd: directory, stdio: 'ignore', timeout: 15000 },
   );
   writeFileSync(
     resolve(directory, 'client.ext'),
@@ -315,6 +319,8 @@ try {
       '-CAkey',
       resolve(directory, 'trusted.key.pem'),
       '-CAcreateserial',
+      '-CAserial',
+      resolve(directory, 'trusted.srl'),
       '-out',
       resolve(directory, 'client.cert.pem'),
       '-days',
@@ -322,7 +328,7 @@ try {
       '-extfile',
       resolve(directory, 'client.ext'),
     ],
-    { stdio: 'ignore', timeout: 15000 },
+    { cwd: directory, stdio: 'ignore', timeout: 15000 },
   );
   execFileSync(
     'openssl',
@@ -336,6 +342,8 @@ try {
       '-CAkey',
       resolve(directory, 'untrusted.key.pem'),
       '-CAcreateserial',
+      '-CAserial',
+      resolve(directory, 'untrusted.srl'),
       '-out',
       resolve(directory, 'rotated-client.cert.pem'),
       '-days',
@@ -343,12 +351,85 @@ try {
       '-extfile',
       resolve(directory, 'client.ext'),
     ],
-    { stdio: 'ignore', timeout: 15000 },
+    { cwd: directory, stdio: 'ignore', timeout: 15000 },
   );
   const clientCredentials = {
     key: readFileSync(resolve(directory, 'client.key.pem')),
     cert: readFileSync(resolve(directory, 'client.cert.pem')),
   };
+  // A presented intermediate must survive Node's internal X509 reads before
+  // the gateway verifies the current tenant anchors, across all native protocols.
+  execFileSync(
+    'openssl',
+    [
+      'req',
+      '-newkey',
+      'rsa:2048',
+      '-nodes',
+      '-keyout',
+      resolve(directory, 'intermediate.key.pem'),
+      '-out',
+      resolve(directory, 'intermediate.csr'),
+      '-subj',
+      '/CN=Packaged intermediate',
+    ],
+    { cwd: directory, stdio: 'ignore', timeout: 15000 },
+  );
+  writeFileSync(
+    resolve(directory, 'intermediate.ext'),
+    'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n',
+  );
+  execFileSync(
+    'openssl',
+    [
+      'x509',
+      '-req',
+      '-in',
+      resolve(directory, 'intermediate.csr'),
+      '-CA',
+      resolve(directory, 'trusted.cert.pem'),
+      '-CAkey',
+      resolve(directory, 'trusted.key.pem'),
+      '-CAcreateserial',
+      '-CAserial',
+      resolve(directory, 'trusted.srl'),
+      '-out',
+      resolve(directory, 'intermediate.cert.pem'),
+      '-days',
+      '1',
+      '-extfile',
+      resolve(directory, 'intermediate.ext'),
+    ],
+    { cwd: directory, stdio: 'ignore', timeout: 15000 },
+  );
+  execFileSync(
+    'openssl',
+    [
+      'x509',
+      '-req',
+      '-in',
+      resolve(directory, 'client.csr'),
+      '-CA',
+      resolve(directory, 'intermediate.cert.pem'),
+      '-CAkey',
+      resolve(directory, 'intermediate.key.pem'),
+      '-CAcreateserial',
+      '-CAserial',
+      resolve(directory, 'intermediate.srl'),
+      '-out',
+      resolve(directory, 'intermediate-client.cert.pem'),
+      '-days',
+      '1',
+      '-extfile',
+      resolve(directory, 'client.ext'),
+    ],
+    { cwd: directory, stdio: 'ignore', timeout: 15000 },
+  );
+  const directClientCredentials = { ...clientCredentials };
+  clientCredentials.cert = Buffer.concat([
+    readFileSync(resolve(directory, 'intermediate-client.cert.pem')),
+    readFileSync(resolve(directory, 'intermediate.cert.pem')),
+  ]);
 
   const trustedTarget = await upstream(
     trusted,
@@ -1103,6 +1184,11 @@ try {
     403,
   );
   assert.equal(
+    (await fetch(`https://127.0.0.1:${httpPort}/mtls`, directClientCredentials))
+      .status,
+    200,
+  );
+  assert.equal(
     (await fetch(`https://127.0.0.1:${httpPort}/mtls`, clientCredentials))
       .status,
     200,
@@ -1741,6 +1827,7 @@ try {
           'Stripe-HTTPS-binary-rotation-tamper-staleness-body-limit-deadline-recovery',
           'signed-byte-preparation-before-earlier-body-limit-hook',
           'native-client-private-key-proof-HTTPS-gRPC-WSS',
+          'native-intermediate-chain-HTTPS-gRPC-WSS-and-current-tenant-anchor-revocation',
           'copied-public-certificate-assertion-denied',
           'tenant-trust-removal-cancels-gRPC-and-WSS-denies-new-requests',
           'native-HTTPS-anonymous-loopback-health',
