@@ -24,6 +24,12 @@ verification evidence and the remaining work at the bottom of that report.
 - CI runs only as the verification dependency of deployment on a push to `main`.
   Verification failure blocks image builds and deployment. Current work targets `dev`.
 
+## Native mTLS runtime compatibility — issue #97
+
+[PR #98](https://github.com/mayank-rawat98/NovaGate/pull/98) pins Node 26.11.1 across local/CI and all four application build/runtime stages. Node 24.21.0 consumes the intermediate-chain metadata before tenant trust checks; Node's [upstream fix](https://github.com/nodejs/node/pull/65602) preserves it. The plugin still requires native TLS private-key proof, clientAuth usage and current tenant anchors. Real TLS tests preserve issuer metadata after repeated X509/detailed reads and verify 200 → 403 → 200 on one connection when tenant anchors change. The packaged production gateway presents intermediate chains through HTTPS, native gRPC and WSS and verifies revocation of existing streams.
+
+The independent dev checkout passes 1,361 tests, all five static/build gates and 42 production browser cold loads with zero runtime/accessibility findings. The committed gateway fixture passes 41 packaged checks and removes its containers/network/certificates/serial files. Its initial LibreSSL root omitted CA constraints; both Node runtimes parse it as CA:FALSE and the packaged gateway failed startup. Explicit fixture generation fixes that environment dependency without weakening gateway trust. Three rebuilt backend images pass actual traffic, metrics/SSE/history, private RustFS archives, alerts, privacy/retention and encrypted export drafts; all three services exit 0. Alert firing acceptance takes 59.050 seconds. All four fresh images run Node 26.11.1 as UID 1000; the dashboard serves login and all 16 referenced assets with HTTP 200 and exits 0. The first dashboard image build retained npm filesystem extraction errors and a zero-byte Next.js module in its cached dependency layer; a fresh install and image build pass without those extraction errors. Node 26.11.1 is Current, not LTS: pinned-runtime maintenance and production adoption require separate acceptance. Work merges into dev; main stays reserved until implementation and formal acceptance are complete.
+
 ## Telemetry lifetime consistency
 
 Use fixed elapsed 24-hour days for all configured telemetry lifetimes, including

@@ -161,7 +161,7 @@ CORS, IP restriction, rate limiting, body size limits, auth, and all other per-r
 
 ## Running Locally
 
-**Prerequisites:** Node 22, Docker
+**Prerequisites:** Node 26.11.1 (see `.nvmrc`), Docker
 
 ```sh
 # Install dependencies
@@ -299,13 +299,13 @@ For native gRPC upstreams, choose **Native gRPC health service** in the Services
 
 WebSocket clients use the HTTP listener and a GET route pointing to a service with **WebSocket upgrades** enabled. Header Bearer credentials accept consumer API keys or HS256 gateway JWTs. Basic Auth, OIDC, OAuth introspection, ACL and IP restriction are compatible handshake plugins; unsupported plugins reject the upgrade explicitly. Outbound OAuth credential injection does not authenticate an inbound client. Upgrade quotas apply after verified authentication, and forwarding/certificate assertions are stripped before authorization. Prefer Authorization headers; browser clients that need `?token=` must use the explicit operator opt-in. Query credentials never reach the upstream URL or gateway connection logs.
 
-Accepted tunnels preserve text, binary, fragmentation, ping/pong, close frames, negotiated subprotocols and compression bytes with stream backpressure. The handshake follows [RFC 6455](https://datatracker.ietf.org/doc/html/rfc6455#section-4); the transport uses [Node HTTP upgrade sockets](https://nodejs.org/docs/latest-v24.x/api/http.html#event-upgrade). HTTPS upstreams verify certificates using Node’s trust store. Tenant, route policy, consumer, service or target removal closes affected connections. Handshake deadlines include provider and quota work, and disconnected requests retain admission capacity until that work settles. Active connections and traffic bytes are counted only after successful upstream acceptance. Shutdown rejects new upgrades and permits accepted tunnels to drain for the configured grace before terminating remaining sockets; it does not inject frames into an opaque partial frame. WebSocket authentication happens during the handshake; continuous message authorization is outside this transport’s contract.
+Accepted tunnels preserve text, binary, fragmentation, ping/pong, close frames, negotiated subprotocols and compression bytes with stream backpressure. The handshake follows [RFC 6455](https://datatracker.ietf.org/doc/html/rfc6455#section-4); the transport uses [Node HTTP upgrade sockets](https://nodejs.org/download/release/v26.11.1/docs/api/http.html#event-upgrade). HTTPS upstreams verify certificates using Node’s trust store. Tenant, route policy, consumer, service or target removal closes affected connections. Handshake deadlines include provider and quota work, and disconnected requests retain admission capacity until that work settles. Active connections and traffic bytes are counted only after successful upstream acceptance. Shutdown rejects new upgrades and permits accepted tunnels to drain for the configured grace before terminating remaining sockets; it does not inject frames into an opaque partial frame. WebSocket authentication happens during the handshake; continuous message authorization is outside this transport’s contract.
 
 The Services form also exposes HTTP/2 upstream connections and WebSocket upgrades. Native gRPC client traffic uses the separate opt-in gRPC endpoint; the HTTP/2 setting controls ordinary HTTP proxy connections and HTTP health probes. The service timeout and caller `grpc-timeout` can shorten the gateway's maximum gRPC deadline. Live-network verification covers listener/upstream TLS, call/session admission limits, cancellation reuse, slow-client backpressure and shutdown grace. Upstreams use Node’s certificate trust store; mount a private CA and set `NODE_EXTRA_CA_CERTS` before startup when your upstream uses a private PKI. Certificate/key mounts must be readable by the image’s non-root UID 1000. Publish the gRPC port explicitly on your private network when enabling the listener.
 
 The gateway data plane uses Redis and tenant configuration from the control plane. It has no PostgreSQL connection or local administrative CRUD; manage services through the authenticated tenant admin API. `DATABASE_URL` is required by the admin API and control plane, and is ignored by the gateway.
 
-Use `docker/gateway.env.example` as a non-secret gateway configuration template. Only list reverse proxies you control in `TRUSTED_PROXY_CIDRS`; do not use a broad network to make client IP detection appear to work. Route IP restrictions support IPv4 and IPv6.
+Configure the gateway using the environment variable reference above; keep local env files out of Git. Only list reverse proxies you control in `TRUSTED_PROXY_CIDRS`; do not use a broad network to make client IP detection appear to work. Route IP restrictions support IPv4 and IPv6.
 
 ## Local regression verification
 
@@ -334,7 +334,9 @@ It requires OrbStack, OpenSSL and access to the pinned grpcurl image. It generat
 
 ## Release and developer checks
 
-Use Node 24 (`.nvmrc`) and `npm ci`. `npm run check` runs lint, typecheck, tests and builds for the workspace. `npm run docker:up` (also `docker:up:dev`) starts the isolated PostgreSQL/Redis verification dependencies in OrbStack; `docker:down` stops them. Run application serve targets separately through Nx.
+Use Node 26.11.1 (`.nvmrc`) and `npm ci`. The four application Dockerfiles pin the same Node patch release in their build and runtime stages; CI reads `.nvmrc`. `npm run check` runs lint, typecheck, tests and builds for the workspace. `npm run docker:up` (also `docker:up:dev`) starts the isolated PostgreSQL/Redis verification dependencies in OrbStack; `docker:down` stops them. Run application serve targets separately through Nx.
+
+Node 26.11.1 is a **Current, non-LTS release**. This runtime choice fixes native mTLS with client certificates issued by an intermediate CA: Node 24.21.0 consumes peer-chain metadata during its internal X509 authorization read, leaving the gateway unable to verify the presented chain against current tenant anchors. Node's [upstream fix](https://github.com/nodejs/node/pull/65602) preserves that metadata. The gateway still requires verified private-key possession, clientAuth usage and current tenant trust; do not relax those checks to support the affected runtime. Use the pinned runtime for local checks and rebuilt images, and run the verification below before adopting it in a deployment. This change does not deploy or establish production acceptance. Check the [official release index](https://nodejs.org/dist/index.json) when reviewing runtime support and future upgrades.
 
 The pre-commit hook checks formatting of the staged content without writing files or adding unrelated edits. Format and stage the files you intend to commit.
 
@@ -458,7 +460,7 @@ TEST_OBJECT_STORAGE_ENDPOINT=http://127.0.0.1:19000 \
 NX_DAEMON=false NX_NO_CLOUD=true npm exec nx run admin-api:test -- --skipNxCache
 ```
 
-Production storage is disabled until configured. [docker/object-storage.env.example](docker/object-storage.env.example) lists the settings; choose real credentials in the deployment environment rather than editing tracked examples. `COMPOSE_PROFILES=object-storage` enables the bundled RustFS service (Compose 2.20+ is required for its optional dependency). It has persistent data/log volumes and readiness checks, joins only the internal gateway network, and publishes neither S3 nor console ports. External S3-compatible storage can use the same API settings without enabling that profile. Startup checks the bucket policy and ACL and refuses public grants; the adapter never adds a public policy or ACL. Keep AWS S3 Block Public Access enabled as an additional operator control.
+Production storage is disabled until configured. Set the documented `OBJECT_STORAGE_*` variables in the deployment environment; all env files and env templates are ignored by Git. `COMPOSE_PROFILES=object-storage` enables the bundled RustFS service (Compose 2.20+ is required for its optional dependency). It has persistent data/log volumes and readiness checks, joins only the internal gateway network, and publishes neither S3 nor console ports. External S3-compatible storage can use the same API settings without enabling that profile. Startup checks the bucket policy and ACL and refuses public grants; the adapter never adds a public policy or ACL. Keep AWS S3 Block Public Access enabled as an additional operator control.
 
 External S3-compatible, webhook and Datadog connections can be prepared in **Settings → External export destinations** and stored as encrypted drafts through the tenant API. They do not deliver yet. Dedicated export keys, safe reads, revision-aware edits/removal and key rotation are documented in [the destination guide](apps/admin-api/src/log-export/README.md). The Settings editor supports masked complete credential replacement, metadata-only edits, revision-aware removal and saved-credential re-encryption. Provider transports and delivery history remain pending.
 
@@ -505,7 +507,7 @@ OpenSSL verifies native certificate paths and any configured CRLs. PEM listener/
 
 Forwarded certificates default off. `MTLS_TRUSTED_PROXY_CIDRS` explicitly trusts only the actual socket peer; it is separate from IP forwarding trust. Your trusted TLS terminator must verify client private-key possession and overwrite `ssl_client_cert` plus `ssl_client_verify: SUCCESS` (or the corresponding `x-ssl-client-cert`/`x-ssl-client-verify` pair). For intermediate chains, include the validated client chain in the URL-encoded PEM assertion. Duplicate/ambiguous assertions are rejected. Restrict access to that gateway connection to the trusted proxy; forwarded client IPs cannot grant certificate trust. The gateway rechecks current tenant anchors and clientAuth usage; full path/revocation verification belongs to the trusted terminator.
 
-Verified identity uses a certificate fingerprint, with a bounded safe subject header. The Docker health probe checks loopback HTTPS when enabled and skips certificate/hostname verification only for that local liveness request; client/provider/upstream TLS verification remains enabled. Native listener behavior follows the [Node TLS documentation](https://nodejs.org/download/release/v24.20.0/docs/api/tls.html).
+Verified identity uses a certificate fingerprint, with a bounded safe subject header. The Docker health probe checks loopback HTTPS when enabled and skips certificate/hostname verification only for that local liveness request; client/provider/upstream TLS verification remains enabled. Native listener behavior follows the [Node TLS documentation](https://nodejs.org/download/release/v26.11.1/docs/api/tls.html).
 
 ### Webhook signatures
 
@@ -603,7 +605,7 @@ Manual tracing uses the pinned OpenTelemetry JavaScript SDK and validated W3C tr
 
 The shared trace wire contract allows 16 whitelisted scalar attributes, at most 256 UTF-8 bytes each, 8192 bytes per span, and 128 spans/65536 bytes per batch. Capacity and transport drops have bounded reason labels in Prometheus. Logs retain integer milliseconds for existing PostgreSQL schemas; trace spans preserve fractional timing. See the [OpenTelemetry trace SDK](https://github.com/open-telemetry/opentelemetry-js/blob/main/packages/sdk-trace/README.md) for manual instrumentation concepts.
 
-Control-plane and admin query limits are documented in [docker/tracing.env.example](docker/tracing.env.example). By default each tenant retains up to 100,000 spans for seven days; ingestion admits eight concurrent transactions with 5-second statement/1-second lock deadlines. Idle cleanup visits up to 64 tenant tables each minute. Admin trace queries admit eight concurrent transactions, use a 3-second statement deadline, allow seven-day ranges, return 50 traces per page and at most 256 detail spans. `TRACE_RETENTION_DAYS` must match across the control plane and admin API. Queries immediately hide expired spans; background physical deletion can take multiple ticks. Trace delivery is best effort, so use durable audit facilities for audit requirements.
+Control-plane and admin query limits are defined by [collector tracing configuration](apps/control-plane/src/config/tracing.configuration.ts) and [admin trace query configuration](apps/admin-api/src/proxy-config/traces.configuration.ts). By default each tenant retains up to 100,000 spans for seven days; ingestion admits eight concurrent transactions with 5-second statement/1-second lock deadlines. Idle cleanup visits up to 64 tenant tables each minute. Admin trace queries admit eight concurrent transactions, use a 3-second statement deadline, allow seven-day ranges, return 50 traces per page and at most 256 detail spans. `TRACE_RETENTION_DAYS` must match across the control plane and admin API. Queries immediately hide expired spans; background physical deletion can take multiple ticks. Trace delivery is best effort, so use durable audit facilities for audit requirements.
 
 ## Live HTTP metrics
 
@@ -634,9 +636,8 @@ Metric ingestion admits 32 concurrent transactions with 3-second statement and
 1-second lock deadlines. Each tenant keeps at most 100,000 samples for seven days;
 the row cap can shorten that history. Idle expiry visits at most 64 tenant tables
 per minute. Queries immediately filter expired data. Keep `METRICS_RETENTION_DAYS`
-consistent between admin and control plane. Gateway budgets are in
-[docker/gateway.env.example](docker/gateway.env.example); ingestion, stream and
-history budgets are in [docker/tracing.env.example](docker/tracing.env.example).
+consistent between admin and control plane. Gateway budgets are listed above; ingestion, stream and
+history budgets are documented in [the analytics guide](apps/admin-api/src/proxy-config/README.md).
 
 After building the three production images locally with OrbStack, run the complete
 pipeline verifier:
@@ -668,7 +669,7 @@ Rule/channel changes use revision checks; saved secrets remain hidden and rotati
 requires explicit replacement. Empty channel selection records history only.
 
 Operators configure dedicated encryption keys and optional Mailtr credentials using
-[docker/alerting.env.example](docker/alerting.env.example). Default notification egress
+[the alerting configuration guide](apps/admin-api/src/alerts/README.md). Default notification egress
 uses validated public HTTPS; intentional private receivers require exact trusted
 origins. Read the [alerting guide](apps/admin-api/src/alerts/README.md) for key rotation,
 webhook signature verification, finite retries and at-least-once delivery semantics.
