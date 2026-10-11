@@ -166,8 +166,8 @@ CORS, IP restriction, rate limiting, body size limits, auth, and all other per-r
 **Prerequisites:** Node 26.11.1 (see `.nvmrc`), Docker
 
 ```sh
-# Install dependencies
-npm install
+# Install locked dependencies and reject extraction warnings
+node tools/npm-verified.mjs ci --no-audit --no-fund
 
 # Start backing services (Postgres, Redis, control-plane, admin-api, dashboard)
 docker compose up -d
@@ -336,7 +336,7 @@ It requires OrbStack, OpenSSL and access to the pinned grpcurl image. It generat
 
 ## Release and developer checks
 
-Use Node 26.11.1 (`.nvmrc`) and `npm ci`. The four application Dockerfiles pin the same Node patch release in their build and runtime stages; CI reads `.nvmrc`. `npm run check` runs lint, typecheck, tests and builds for the workspace. `npm run docker:up` (also `docker:up:dev`) starts the isolated PostgreSQL/Redis verification dependencies in OrbStack; `docker:down` stops them. Run application serve targets separately through Nx.
+Use Node 26.11.1 (`.nvmrc`) and `node tools/npm-verified.mjs ci --no-audit --no-fund`. The four application Dockerfiles pin the same Node patch release in their build and runtime stages; CI reads `.nvmrc`. CI and Docker installs/pruning reject npm tar extraction diagnostics even when npm exits zero; see [the dependency-install guard and real npm regression](tools/npm-verified.README.md). `npm run check` runs lint, typecheck, tests and builds for the workspace. `npm run docker:up` (also `docker:up:dev`) starts the isolated PostgreSQL/Redis verification dependencies in OrbStack; `docker:down` stops them. Run application serve targets separately through Nx.
 
 Node 26.11.1 is a **Current, non-LTS release**. This runtime choice fixes native mTLS with client certificates issued by an intermediate CA: Node 24.21.0 consumes peer-chain metadata during its internal X509 authorization read, leaving the gateway unable to verify the presented chain against current tenant anchors. Node's [upstream fix](https://github.com/nodejs/node/pull/65602) preserves that metadata. The gateway still requires verified private-key possession, clientAuth usage and current tenant trust; do not relax those checks to support the affected runtime. Use the pinned runtime for local checks and rebuilt images, and run the verification below before adopting it in a deployment. This change does not deploy or establish production acceptance. Check the [official release index](https://nodejs.org/dist/index.json) when reviewing runtime support and future upgrades.
 
