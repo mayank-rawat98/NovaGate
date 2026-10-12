@@ -1688,6 +1688,21 @@ Current-source verification:
   production yaml is 2.9.1. Dashboard login/all 16 referenced assets return 200,
   its Next.js request constructor is present and shutdown exits 0.
 
+- The CLI tarball is installed outside the checkout and exercised through its actual
+  executable: authenticated login/private saved session, metadata lists, consumer
+  key routing, secret-free export, mutation-free preview, reviewed apply, gateway
+  ACK, anonymous rejection, idempotent preview, privacy-projected live logs and
+  logout removal all pass. The package contains exactly README, manifest and bundle.
+- The full fresh-image pipeline retains traffic, metrics/SSE/history, private
+  RustFS archives, privacy/retention and stable export retry/revocation. Alerts fire
+  in **56.863 seconds**. Automatic timers materialize **200,001 records in
+  107.016 seconds**; the authenticated query takes **483.671 ms**,
+  with zero manual worker ticks. All three services exit 0; owned fixtures are removed.
+  Two earlier full runs timed out during alert delivery and automatic receipt
+  scheduling while the shared machine was heavily swapping. Both failure records
+  remain preserved; the unchanged source/images/assertions/deadlines pass after
+  waiting for the competing compiler build to finish. No root-cause proof is claimed.
+
 The complete source backup remains in `.local-work/source-cleanup-20261012`.
 All 85 original preserved source hashes are recorded: **19 already merged**, **four
 stale/unnecessary changes omitted**, and **62 useful changes integrated or
