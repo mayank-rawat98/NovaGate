@@ -7,6 +7,8 @@ Each phase builds on the previous. Track implementation, regression verification
 See [PROGRESS.md](PROGRESS.md) for the consolidated record of completed work,
 verification evidence and the remaining work at the bottom of that report.
 
+- [Issue #105](https://github.com/mayank-rawat98/NovaGate/issues/105) / [PR #106](https://github.com/mayank-rawat98/NovaGate/pull/106) finishes the preserved private `gwx` CLI and bounded authenticated request-log streams. It passes 862 admin tests / 48 suites, 27 built CLI tests on Node 26 and Node 24, six-project static checks, five production builds, actual POSIX terminal checks and four rebuilt guarded non-root images. Existing tenant JWT sessions authenticate the CLI; scoped/revocable automation tokens, enterprise RBAC, public distribution and formal phase/release acceptance remain open. The original pending source changes are reconciled through PRs #104 and #106. Delivery targets dev; main remains reserved for final acceptance.
+
 - [PR #102](https://github.com/mayank-rawat98/NovaGate/pull/102) adds a verified npm install/prune gate to reusable CI and all four Dockerfiles. Real npm/tar with a controlled filesystem write failure accepts a zero-byte module unguarded, while the new gate rejects it and prevents a Docker image tag. Healthy installs, quiet logging overrides, lifecycle scripts, cancellation, exit 17 and complete streamed output pass. Fresh guarded host dependencies, five-project lint/typecheck and four non-root application images pass; all three backend bundle hashes match the merged dev baseline. The dashboard serves login/all 16 assets and its healthy Next.js constructor. The full pipeline passes traffic, metrics, private archives, privacy/retention, stable delivery retries and shutdown; firing acceptance takes 59.924 seconds and automatic 200,001-record materialization takes 102.503 seconds without manual ticks. See [the guard contract and pinned upstream findings](tools/npm-verified.README.md). [Issue #101](https://github.com/mayank-rawat98/NovaGate/issues/101) remains open for the original Node/libuv/OrbStack filesystem cause; the injected callback error proves rejection behavior. Main remains reserved for the completed roadmap and final release acceptance.
 
 - [Issue #99](https://github.com/mayank-rawat98/NovaGate/issues/99) / [PR #100](https://github.com/mayank-rawat98/NovaGate/pull/100) implements bounded count/latency/path rollups for larger consumer usage windows. Exact retained counts, global top-path ranking, histogram upper estimates and materialization coverage preserve current privacy/receipt retention. The isolated Node 26.11.1 branch passes 1,535 tests with no failures or skips, all five projects' lint/typecheck/build checks, 42 production browser cold loads at sixfold CPU throttling plus seven final loads, and four fresh non-root images. Automatic production timers materialize 200,001 records in 108.629 seconds; two replicas materialize 400,001 observations / 20,000 path cells in 111.202 seconds, with exact reference results, replay/restart/admission recovery and automatic privacy cleanup in 101.230 seconds. Retained traffic, metrics, private archives, alerts and export scheduler/capacity checks pass with clean shutdown. Broader workload/traffic/provider, comparative and formal phase/release acceptance remain open. A recurring dependency extraction failure is tracked separately in [issue #101](https://github.com/mayank-rawat98/NovaGate/issues/101). This PR targets dev; main remains reserved for the completed roadmap and final acceptance.
@@ -100,7 +102,7 @@ The code contains substantial work for phases 0–3, but file presence does not 
 | 2     | OIDC, client credentials, HMAC, ACL, mTLS implementations and unit tests                                                       | Verify real providers and TLS handshakes; Tenant-bound REST authorization and groups repaired in #27; provider isolation/bounds verified in #47 and native/proxy mTLS plus live trust rotation in #49. Bounded Stripe/GitHub webhook HMAC verified in #51; external Auth0 and final phase acceptance remain |
 | 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                                                      | Native gRPC/WebSocket checks exist (#41/#43), bounded AST GraphQL policies are verified (#53), and issue #55 hardens HTTP/2 lifecycle, limits and health-compatible fallback; issue #57 adds verified least-connections; formal protocol acceptance remains                                                 |
 | 4     | RustFS archives (#37), traces (#61), live metrics (#63), alerts (#65), external delivery (#95), bounded consumer rollups (#99) | Larger workloads/provider acceptance, hydration (#69), RustFS cleanup (#90), formal acceptance and release remain                                                                                                                                                                                           |
-| 5     | REST configuration and reviewed declarative import/export (#103)                                                               | CLI/scoped automation, portal, Terraform, plugin SDK, third-party loading, configuration history/rollback and formal acceptance remain                                                                                                                                                                      |
+| 5     | REST configuration, reviewed declarative import/export (#103), private CLI/live logs (#105)                                    | Scoped/revocable automation, CLI distribution, portal, Terraform, plugin SDK, third-party loading, configuration history/rollback and formal acceptance remain                                                                                                                                              |
 | 6     | No verified implementations                                                                                                    | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                                                                   |
 
 ### Prerequisites discovered by audit
@@ -1056,8 +1058,9 @@ preview/apply workflow uses bounded strict documents, a ten-minute revision,
 identity/credential preservation and atomic configuration/version/outbox writes.
 Route/plugin order survives gateway reconnect. Settings supports downloads,
 reviewed diffs, conflict recovery and one-time keys. See the
-[operator contract](apps/admin-api/src/config-import/README.md). CLI integration,
-revision history/operator rollback and formal acceptance remain separate work.
+[operator contract](apps/admin-api/src/config-import/README.md). The CLI uses this
+contract through issue #105; scoped automation, revision history/operator rollback
+and formal acceptance remain separate work.
 Transaction rollback does not provide a user-facing configuration rollback.
 
 `apps/admin-api/src/config-import/`:
@@ -1100,7 +1103,9 @@ consumers:
 
 ### 5.2 CLI Tool (`gwx`)
 
-New package: `tools/gwx/` (Nx CLI app, distributed via npm `gwx`):
+The private workspace package `@api-gateway/gwx` in `tools/gwx/` provides a bundled
+`gwx` executable for these commands. It supports local tarball installation; npm
+publication and registry ownership remain release work:
 
 ```bash
 gwx login                          # stores token in ~/.gwx/credentials
@@ -1112,7 +1117,16 @@ gwx logs tail                      # stream logs to terminal (SSE)
 gwx alerts list
 ```
 
-Auth: reads `GW_API_TOKEN` env var or `~/.gwx/credentials`. API calls `admin-api` via the same endpoints as the dashboard.
+Current implementation reads an explicit tenant session JWT from `GW_API_TOKEN`
+or the private, API/workspace-bound `~/.gwx/credentials` store. API calls use the
+same admin endpoints as the dashboard. Reviewed apply handles up to 400 actions,
+uses identical document bytes and the preview revision, and requires confirmation
+or `--yes`. Authenticated live logs use encrypted receipt/UUID cursors and current
+privacy/retention, with bounded SQL, output and shutdown ownership. See the
+[CLI guide](tools/gwx/README.md) and
+[stream contract](apps/admin-api/src/proxy-config/log-stream.README.md).
+Operation-scoped tokens, revocation, enterprise RBAC, distribution and formal
+acceptance remain required before phase 5.2 is complete.
 
 ---
 

@@ -8,7 +8,9 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
-- [Issue #103](https://github.com/mayank-rawat98/NovaGate/issues/103) / [PR #104](https://github.com/mayank-rawat98/NovaGate/pull/104) adds reviewed complete YAML/JSON import/export and Settings controls with atomic durable reconciliation. Current Node 26.11.1 validation passes **1,558 tests with no failures or skips**, five-project static checks, four app builds, four fresh guarded non-root images and **42 production browser cold loads at sixfold CPU throttling** with zero runtime/accessibility findings. The packaged pipeline proves actual gateway ACK, key routing, restart and idempotent export roundtrip while preserving telemetry/archives/alerts/privacy/rollups; all three services exit 0. The original pending files are preserved, and the CLI/log-stream work is next in this cleanup. Main remains reserved for final acceptance.
+- [Issue #105](https://github.com/mayank-rawat98/NovaGate/issues/105) / [PR #106](https://github.com/mayank-rawat98/NovaGate/pull/106) finishes the preserved private `gwx` CLI and authenticated live request logs. Current checks pass **862 admin tests / 48 suites**, including 15 real HTTP/PostgreSQL stream cases, and **27 built CLI tests on both Node 26 and Node 24**, with no failures or skips. Six-project static checks, five production builds, real POSIX terminal checks and four rebuilt guarded non-root images pass. The cleanup disposition covers all 85 original source paths: 19 already merged, four stale/unnecessary changes omitted and 62 useful changes reconciled through PRs #104 and #106. Scoped/revocable automation, public CLI distribution and formal phase acceptance remain open. Main remains reserved for final acceptance.
+
+- [Issue #103](https://github.com/mayank-rawat98/NovaGate/issues/103) / [PR #104](https://github.com/mayank-rawat98/NovaGate/pull/104) adds reviewed complete YAML/JSON import/export and Settings controls with atomic durable reconciliation. Current Node 26.11.1 validation passes **1,558 tests with no failures or skips**, five-project static checks, four app builds, four fresh guarded non-root images and **42 production browser cold loads at sixfold CPU throttling** with zero runtime/accessibility findings. The packaged pipeline proves actual gateway ACK, key routing, restart and idempotent export roundtrip while preserving telemetry/archives/alerts/privacy/rollups; all three services exit 0. The original pending files are preserved; issue #105 / PR #106 records the CLI/log-stream reconciliation and final cleanup disposition. Main remains reserved for final acceptance.
 
 - [Issue #99](https://github.com/mayank-rawat98/NovaGate/issues/99) / [PR #100](https://github.com/mayank-rawat98/NovaGate/pull/100) implements bounded count/latency/path rollups for larger consumer usage windows. Exact retained counts, global top-path ranking, histogram upper estimates and materialization coverage preserve current privacy/receipt retention. The isolated Node 26.11.1 branch passes **1,535 tests with no failures or skips**, all five projects' lint/typecheck/build checks, **42 production browser cold loads at sixfold CPU throttling plus seven final loads**, and four fresh non-root images. Automatic production timers materialize **200,001 records in 108.629 seconds**; two replicas materialize **400,001 observations / 20,000 path cells in 111.202 seconds**, with exact reference results, replay/restart/admission recovery and automatic privacy cleanup in **101.230 seconds**. Retained traffic, metrics, private archives, alerts and export scheduler/capacity checks pass with clean shutdown. Broader workload/traffic/provider, comparative and formal phase/release acceptance remain open. A recurring dependency extraction failure is tracked separately in [issue #101](https://github.com/mayank-rawat98/NovaGate/issues/101). This PR targets dev; main remains reserved for the completed roadmap and final acceptance.
 
@@ -1540,8 +1542,11 @@ issues #69, #90 and the remaining #101 investigation stay open.
 
 ### Phase 5 — developer ecosystem
 
-- Declarative YAML import/export, validated preview/diff, atomic reconciliation and drift handling.
-- `gwx` CLI using scoped authentication and the actual admin API.
+- Declarative configuration is implemented through #103/PR #104; configuration
+  history/operator rollback, broader workloads and formal acceptance remain.
+- The private `gwx` commands and authenticated live logs are implemented through
+  #105/PR #106. Scoped/revocable automation, enterprise RBAC, package distribution
+  and formal acceptance remain.
 - Developer portal with route catalog, scoped self-service keys and private usage views.
 - Terraform provider, tests and resources inside this repository.
 - Plugin SDK/third-party loading with explicit trust, compatibility and resource limits.
@@ -1583,8 +1588,9 @@ without restoring its older Node runtime, unguarded installs or stale rollup cod
 The visible workspace is the development branch; all 85 original pending source
 files were byte-verified in `.local-work/source-cleanup-20261012` and Git stash
 `81642c05611c282de67dc044ddf09b3ad511cced` before cleanup. Nineteen source files
-already matched dev. The useful CLI/log-stream prototype is preserved for its next
-separate issue and PR; cleanup is not complete until that work is merged.
+already matched dev. At this checkpoint, the useful CLI/log-stream prototype was
+preserved for its separate issue and PR. Issue #105 / PR #106 records that work
+and the final source cleanup disposition below.
 
 The authenticated API and Settings now support strict complete YAML/JSON documents,
 write-free metadata previews, ten-minute revisions, drift detection and atomic
@@ -1637,7 +1643,63 @@ artifacts and source review/merge records. Verification was local; workflow and
 deployment triggers remain unchanged. Main stays reserved for final acceptance.
 
 This is a bounded development checkpoint: 200 entries and 64 KiB per complete
-configuration document. Larger workloads, CLI/scoped automation, user-facing
+configuration document. Larger workloads, scoped automation, CLI distribution, user-facing
 configuration history/rollback and formal phase/release acceptance remain open.
 Transaction rollback is not an operator rollback feature. Existing issues #69,
 #90 and the unproven filesystem cause in #101 remain open.
+
+## CLI and live request logs — issue #105 / PR #106
+
+The remaining useful CLI prototype is reconciled onto dev `00007d3` after PR #104.
+The private `@api-gateway/gwx` package contains the bundled executable, its manifest
+and operator guide, with no runtime package dependencies. Login/logout, metadata
+lists, consumer creation, secret-free export, reviewed exact-byte apply and live
+logs use existing tenant JWT sessions. A maximum-size replacement presents all
+400 create/remove actions. Named pipes and nonregular credential/document inputs
+fail without blocking; saved sessions use private POSIX file/directory modes.
+
+The live-log endpoint admits at most 16 clients, two per tenant, and four database
+queries. Receipt cursors are encrypted and tenant-bound; current privacy and
+retention project every page. SQL, output, lifetime and closing-response budgets
+remain bounded. Shutdown retains ownership of actual streams and pending queries
+until they close, including delayed HTTP completion. See [the CLI guide](tools/gwx/README.md)
+and [the stream contract](apps/admin-api/src/proxy-config/log-stream.README.md).
+
+Current-source verification:
+
+- **862 admin tests / 48 suites** pass in **271.853 seconds**, including all 15
+  actual HTTP/PostgreSQL stream cases. **27 built CLI process/HTTP/file tests**
+  pass on Node 26.11.1 in **3.343 seconds** and Node 24.21.0 in **4.026 seconds**.
+  These runs have zero failures or skipped cases. A timestamp-tie fixture was
+  corrected to use one millisecond-truncated statement timestamp; its original
+  failure remains in the local evidence.
+- Six projects pass lint/typecheck (12 tasks, three cached results), with two
+  existing unrelated fixture warnings and no errors. Five production builds
+  pass, with the matching CLI build cached. A real POSIX pseudo-terminal verifies
+  hidden password input, declined apply without mutation, Ctrl-C exit 130 and
+  EOF without mutation. The gateway, collector and dashboard retain the preceding
+  PR #104 regression/browser evidence; their suites were not rerun for this CLI change.
+- Four rebuilt images run Node 26.11.1 as UID 1000. Two fresh guarded dependency
+  installations supply the shared newly verified install layers reused by the
+  collector and dashboard; all three backend production prunes pass. Moving the
+  dashboard telemetry setting immediately before its build permits this shared
+  layer while retaining disabled build/runtime telemetry. No npm extraction
+  diagnostics occur. Backend bundles match current host builds byte-for-byte;
+  production yaml is 2.9.1. Dashboard login/all 16 referenced assets return 200,
+  its Next.js request constructor is present and shutdown exits 0.
+
+The complete source backup remains in `.local-work/source-cleanup-20261012`.
+All 85 original preserved source hashes are recorded: **19 already merged**, **four
+stale/unnecessary changes omitted**, and **62 useful changes integrated or
+reconciled** through PRs #104 and #106. Omitted changes comprise an unused generated
+CLI debug entry, an older consumer-usage label and two obsolete rollup evidence
+paths. Current runtime guards, rollups, UI behavior and verification records remain.
+The backup is local evidence, not pending development work. Environment files at
+all depths remain ignored and excluded from commits.
+
+Evidence is in `.local-work/phase5-2`: actual test/static/build/terminal logs,
+image identities and bundle proofs, packed CLI/runtime evidence and reviewed-source
+records. Public npm publication, scoped/revocable automation tokens, enterprise
+RBAC, Windows credential-store acceptance and broader workload/provider/comparative
+acceptance remain open. This checkpoint does not complete phase 5.2 or a production
+release. Main remains reserved for final acceptance.
