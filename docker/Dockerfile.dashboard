@@ -1,6 +1,5 @@
 FROM node:26.11.1-alpine AS builder
 WORKDIR /app
-ENV NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json ./
 COPY libs/shared-types/package.json ./libs/shared-types/package.json
 COPY apps/api/package.json ./apps/api/package.json
@@ -12,6 +11,7 @@ COPY tools/npm-verified.mjs ./tools/npm-verified.mjs
 ENV NX_DAEMON=false NX_NO_CLOUD=true
 RUN --mount=type=cache,target=/root/.npm node tools/npm-verified.mjs ci --no-audit --no-fund --ignore-scripts
 COPY . .
+ENV NEXT_TELEMETRY_DISABLED=1
 ARG ADMIN_API_URL=http://admin-api:3001
 ENV ADMIN_API_URL=$ADMIN_API_URL
 RUN npm exec nx build dashboard
