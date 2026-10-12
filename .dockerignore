@@ -13,3 +13,12 @@ libs/*/node_modules
 apps/*/dist
 libs/*/dist
 apps/*/.next
+tools/*/dist
+tools/*/out-tsc
+tools/*/test-output
+**/out-tsc
+**/test-output
+**/.env
+**/.env.*
+**/*.env
+**/*.env.*
