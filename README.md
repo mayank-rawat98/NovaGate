@@ -365,6 +365,22 @@ credentials or files exceeding import limits. The import/export workflow support
 200 total entries and 64 KiB. See [the complete operator contract](apps/admin-api/src/config-import/README.md)
 for schema, credential preservation, failure recovery and remaining phase 5 work.
 
+### Administration CLI
+
+The local `tools/gwx` Nx app provides a bundled `gwx` executable for login/logout,
+route listing/export, reviewed configuration apply, consumer creation, alert-rule
+listing and live retained-log tail. Build with `npm exec -- nx run gwx:build` and
+inspect commands with `node tools/gwx/dist/main.js --help`. The private package can
+be packed/installed locally; it has not been published to npm.
+
+Saved credentials are private and bound to an API URL/workspace. Automation can
+use an explicit tenant session JWT; operation-scoped tokens and revocation remain
+open. Apply requires a preview and confirmation or `--yes`, returns new consumer
+keys once and reports queued gateway delivery. Logs use authenticated SSE with
+encrypted receipt cursors, bounded reads and current privacy/retention policy.
+See [the CLI guide](tools/gwx/README.md), including one-time key handling and
+timeouts, and [the log stream contract](apps/admin-api/src/proxy-config/log-stream.README.md).
+
 ### Dashboard browser verification
 
 The workspace uses a responsive ivory, mint and indigo dashboard with CSS clay illustrations. Navigation and configuration forms support keyboard focus, Escape dismissal and focus restoration. Data outages show retry controls; an unavailable gateway status is distinct from an offline gateway.

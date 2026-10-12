@@ -1,0 +1,63 @@
+{
+  "name": "@api-gateway/gwx",
+  "version": "0.0.1",
+  "private": true,
+  "nx": {
+    "name": "gwx",
+    "targets": {
+      "tty-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build"
+        ],
+        "options": {
+          "command": "python3 tools/gwx-tty-smoke.py"
+        }
+      },
+      "serve": {
+        "continuous": true,
+        "executor": "@nx/js:node",
+        "defaultConfiguration": "development",
+        "dependsOn": [
+          "build"
+        ],
+        "options": {
+          "buildTarget": "gwx:build",
+          "runBuildTargetDependencies": false
+        },
+        "configurations": {
+          "development": {
+            "buildTarget": "gwx:build:development"
+          },
+          "production": {
+            "buildTarget": "gwx:build:production"
+          }
+        }
+      },
+      "test": {
+        "dependsOn": [
+          "build"
+        ],
+        "options": {
+          "passWithNoTests": false
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@api-gateway/shared-types": "^0.0.1"
+  },
+  "description": "NovaGate administration CLI",
+  "license": "MIT",
+  "bin": {
+    "gwx": "dist/main.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "dist/main.js",
+    "README.md"
+  ]
+}

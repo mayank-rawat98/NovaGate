@@ -127,3 +127,6 @@ checks downloads, failure/retry, reviewed changes, conflict recovery, one-time k
 file input, mobile accessibility and interrupted requests. The packaged three-app
 runtime verifies actual gateway ACK/key routing, restart and idempotent export
 roundtrip while retaining telemetry, archive, alert, privacy and rollup gates.
+
+The [gwx CLI](../../../../tools/gwx/README.md) uses this same preview/revision/apply
+contract for local files and supports all 400 actions in a maximum-size replacement.

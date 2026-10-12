@@ -8,6 +8,7 @@ import { stripVTControlCharacters } from 'node:util';
 import pg from 'pg';
 import jwt from 'jsonwebtoken';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { verifyGwxRuntime } from './gwx-container-fixture.mjs';
 import { startAlertFixture } from './alerts-container-fixture.mjs';
 import { configureArchiveFixture } from './log-export-container-fixture.mjs';
 import { exportDestinationFixture } from './export-destinations-container-fixture.mjs';
@@ -1129,6 +1130,13 @@ try {
     gatewayRestartPreservesConfiguration: true,
     idempotentRoundtrip: true,
   };
+  const cli = await verifyGwxRuntime({
+    adminUrl,
+    tenant,
+    db,
+    gatewayUrl,
+    until,
+  });
   const consumerRollupReader = await verifyConsumerRollupReader({
     adminUrl,
     db,
@@ -1176,6 +1184,7 @@ try {
         consumerRollups,
         consumerRollupReader,
         declarativeConfiguration,
+        cli,
         logPrivacy,
         logRetention,
         exportDestinations,

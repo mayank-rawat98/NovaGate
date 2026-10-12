@@ -468,3 +468,22 @@ consumer keys, omitted matching private plugin fields and ordered routes/plugins
 Never revive revoked keys. Exports omit secrets and refuse unsafe or unimportable
 documents. New plaintext consumer keys return once after commit; queued delivery
 does not imply a gateway ACK. Browser cancellation cannot promise server rollback.
+
+## Rule 27 — CLI sessions and live logs preserve the tenant boundary
+
+Bind stored CLI credentials to the validated API URL and workspace; refuse
+redirects and unsafe URL credentials/query strings. Use private owned atomic
+credential files and hidden terminal input before displaying a password prompt.
+Environment authentication must not inspect or persist the saved credential store.
+Never store new consumer keys, echo private server errors or retry a mutating call.
+Apply must use identical reviewed bytes and the preview revision, with explicit
+interactive confirmation or an automation acknowledgement. Interrupted output
+does not establish that a submitted operation rolled back.
+
+Tail only authenticated tenant request-log observations. Bound connection/SQL/row/
+frame/buffer/lifetime resources and retain actual work ownership through shutdown.
+Use precise trusted receipt/UUID cursors, authenticated encryption and current
+privacy/retention under the ingestion receipt fence. Never expose internal receipt
+or rollup columns. Expired rows cannot reappear when retention grows. Resume may
+replay interrupted output; warn about retention gaps and label recorded coverage.
+Existing tenant session JWTs do not satisfy scoped-token or revocation requirements.

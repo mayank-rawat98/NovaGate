@@ -6,6 +6,7 @@ COPY apps/api/package.json ./apps/api/package.json
 COPY apps/admin-api/package.json ./apps/admin-api/package.json
 COPY apps/control-plane/package.json ./apps/control-plane/package.json
 COPY apps/dashboard/package.json ./apps/dashboard/package.json
+COPY tools/gwx/package.json ./tools/gwx/package.json
 COPY tools/npm-verified.mjs ./tools/npm-verified.mjs
 ENV NX_DAEMON=false NX_NO_CLOUD=true
 RUN --mount=type=cache,target=/root/.npm node tools/npm-verified.mjs ci --no-audit --no-fund --ignore-scripts

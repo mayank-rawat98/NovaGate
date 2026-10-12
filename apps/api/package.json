@@ -91,11 +91,14 @@
         "cache": false,
         "options": {
           "commands": [
-            "eslint tools/metrics-container-smoke.mjs tools/alerts-container-fixture.mjs",
+            "eslint tools/metrics-container-smoke.mjs tools/alerts-container-fixture.mjs tools/log-export-container-fixture.mjs tools/export-destinations-container-fixture.mjs tools/consumer-rollup-container-fixture.mjs tools/gwx-container-fixture.mjs",
             "node tools/metrics-container-smoke.mjs"
           ],
           "parallel": false
-        }
+        },
+        "dependsOn": [
+          "gwx:build"
+        ]
       },
       "grpc-container-smoke": {
         "executor": "nx:run-commands",

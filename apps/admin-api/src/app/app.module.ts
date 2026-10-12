@@ -1,3 +1,5 @@
+import { LogStreamController } from '../proxy-config/log-stream.controller';
+import { LogStreamService } from '../proxy-config/log-stream.service';
 import { LogRetentionController } from '../log-retention/log-retention.controller';
 import { LogRetentionService } from '../log-retention/log-retention.service';
 import { LogPrivacyController } from '../log-privacy/log-privacy.controller';
@@ -66,6 +68,7 @@ import { AlertsModule } from '../alerts/alerts.module';
     TypeOrmModule.forFeature([Tenant, ApiKey, PendingConfigUpdate]),
   ],
   controllers: [
+    LogStreamController,
     ConfigImportController,
     LogRetentionController,
     LogPrivacyController,
@@ -79,6 +82,7 @@ import { AlertsModule } from '../alerts/alerts.module';
     TracesController,
   ],
   providers: [
+    LogStreamService,
     ConfigImportService,
     { provide: APP_GUARD, useClass: TenantAuthGuard },
     AuthService,
