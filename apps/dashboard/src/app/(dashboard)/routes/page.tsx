@@ -13,6 +13,10 @@ import {
   updateRoute,
   deleteRoute,
 } from '../../../lib/api-client';
+import {
+  MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES,
+  isThirdPartyPluginName,
+} from '@api-gateway/shared-types';
 import { useTenantId } from '../../../lib/auth';
 import type {
   Route,
@@ -114,7 +118,15 @@ interface MtlsConfig {
   required: boolean;
 }
 
+/** A workspace-installed plugin: scoped package name and JSON configuration. */
+interface CustomPlugin {
+  key: number;
+  name: string;
+  config: string;
+}
+
 interface PluginsFormState {
+  custom: CustomPlugin[];
   graphql: boolean;
   graphqlConfig: GraphqlConfig;
   cors: boolean;
@@ -154,6 +166,7 @@ interface PluginsFormState {
 }
 
 const EMPTY_PLUGINS_FORM: PluginsFormState = {
+  custom: [],
   cors: false,
   corsConfig: {
     origins: '',
@@ -493,9 +506,16 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
     acl: ['allow', 'deny'],
     mtls: ['required'],
   };
+  const custom = customPluginEntries(pf.custom);
   const remaining = [...result];
   const ordered: PluginEntry[] = [];
   for (const original of pf.originalPlugins) {
+    if (isThirdPartyPluginName(original.name)) {
+      // Edited in place; removed entries are dropped.
+      const index = custom.findIndex((entry) => entry.name === original.name);
+      if (index >= 0) ordered.push(custom.splice(index, 1)[0]);
+      continue;
+    }
     if (!modeled[original.name]) {
       ordered.push(original);
       continue;
@@ -514,14 +534,55 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
         },
       });
   }
-  return [...ordered, ...remaining];
+  return [...ordered, ...remaining, ...custom];
+}
+
+function customPluginEntries(custom: CustomPlugin[]): PluginEntry[] {
+  const seen = new Set<string>();
+  return custom.map(({ name: raw, config: text }) => {
+    const name = raw.trim();
+    if (!isThirdPartyPluginName(name))
+      throw new Error(
+        `Third-party plugin "${name || '(empty)'}" must be a scoped npm package name, such as @acme/saml-auth.`,
+      );
+    if (seen.has(name)) throw new Error(`${name} is listed more than once.`);
+    seen.add(name);
+    let config: unknown = {};
+    if (text.trim()) {
+      try {
+        config = JSON.parse(text);
+      } catch {
+        throw new Error(`${name} configuration is not valid JSON.`);
+      }
+    }
+    if (!config || typeof config !== 'object' || Array.isArray(config))
+      throw new Error(`${name} configuration must be a JSON object.`);
+    if (
+      new TextEncoder().encode(JSON.stringify(config)).length >
+      MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES
+    )
+      throw new Error(
+        `${name} configuration exceeds ${MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES} bytes.`,
+      );
+    return { name, config: config as Record<string, unknown> };
+  });
 }
 
 function pluginsToForm(
   plugins: PluginEntry[] | undefined,
   routePolicy?: GraphqlPolicy | null,
 ): PluginsFormState {
-  const state = { ...EMPTY_PLUGINS_FORM, originalPlugins: plugins ?? [] };
+  const state = {
+    ...EMPTY_PLUGINS_FORM,
+    originalPlugins: plugins ?? [],
+    custom: (plugins ?? [])
+      .filter((p) => isThirdPartyPluginName(p.name))
+      .map((p, key) => ({
+        key,
+        name: p.name,
+        config: JSON.stringify(p.config ?? {}, null, 2),
+      })),
+  };
 
   for (const p of plugins ?? []) {
     const cfg = p.config;
@@ -944,21 +1005,22 @@ function PluginsTab({
   setPf: (patch: Partial<PluginsFormState>) => void;
 }) {
   const oauthModeId = useId();
-  const activeCount = [
-    pf.cors,
-    pf.ipRestriction,
-    pf.requestSizeLimit,
-    pf.rateLimit,
-    pf.requestTransform,
-    pf.responseTransform,
-    pf.basicAuth,
-    pf.oidc,
-    pf.oauth,
-    pf.hmacAuth,
-    pf.graphql,
-    pf.acl,
-    pf.mtls,
-  ].filter(Boolean).length;
+  const activeCount =
+    [
+      pf.cors,
+      pf.ipRestriction,
+      pf.requestSizeLimit,
+      pf.rateLimit,
+      pf.requestTransform,
+      pf.responseTransform,
+      pf.basicAuth,
+      pf.oidc,
+      pf.oauth,
+      pf.hmacAuth,
+      pf.graphql,
+      pf.acl,
+      pf.mtls,
+    ].filter(Boolean).length + pf.custom.length;
 
   return (
     <div className="flex flex-col gap-5">
@@ -1638,7 +1700,94 @@ function PluginsTab({
           validation.
         </p>
       </PluginSection>
+
+      <hr className="border-gray-100" />
+
+      <CustomPluginsSection
+        custom={pf.custom}
+        onChange={(custom) => setPf({ custom })}
+      />
     </div>
+  );
+}
+
+function CustomPluginsSection({
+  custom,
+  onChange,
+}: {
+  custom: CustomPlugin[];
+  onChange: (custom: CustomPlugin[]) => void;
+}) {
+  const update = (key: number, patch: Partial<CustomPlugin>) =>
+    onChange(
+      custom.map((entry) =>
+        entry.key === key ? { ...entry, ...patch } : entry,
+      ),
+    );
+  return (
+    <section aria-label="Third-party plugins" className="flex flex-col gap-3">
+      <div>
+        <h3 className="text-sm font-medium text-gray-700">
+          Third-party plugins
+        </h3>
+        <p className="text-xs text-gray-500">
+          Packages your gateway operator installed and pinned. They run after
+          the built-in plugins above. If the gateway has not loaded one, or it
+          is disabled in Settings, requests on this route are refused.
+        </p>
+      </div>
+      {custom.map((entry, index) => (
+        <div
+          key={entry.key}
+          className="flex flex-col gap-2 rounded-md border border-gray-200 p-3"
+        >
+          <div className="flex items-end gap-2">
+            <div className="min-w-0 flex-1">
+              <TextInput
+                label={`Package name ${index + 1}`}
+                value={entry.name}
+                onChange={(name) => update(entry.key, { name })}
+                placeholder="@acme/saml-auth"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                onChange(custom.filter((item) => item.key !== entry.key))
+              }
+              aria-label={`Remove ${entry.name || `third-party plugin ${index + 1}`}`}
+              className="rounded-md p-2 text-gray-500 hover:bg-gray-100 hover:text-red-700"
+            >
+              <Trash2 aria-hidden="true" size={16} />
+            </button>
+          </div>
+          <Textarea
+            label={`Configuration (JSON object) ${index + 1}`}
+            value={entry.config}
+            onChange={(config) => update(entry.key, { config })}
+            placeholder={'{\n  "value": "v1"\n}'}
+            rows={4}
+            hint="Stored with the route and exported in configuration files. Keep secrets in the plugin's own gateway settings."
+          />
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() =>
+          onChange([
+            ...custom,
+            {
+              key: Math.max(-1, ...custom.map((entry) => entry.key)) + 1,
+              name: '',
+              config: '{}',
+            },
+          ])
+        }
+        className="flex items-center gap-1 self-start rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+      >
+        <Plus aria-hidden="true" size={14} /> Add third-party plugin
+      </button>
+    </section>
   );
 }
 
@@ -1746,21 +1895,22 @@ export default function RoutesPage() {
   const serviceMap = Object.fromEntries(
     (services ?? []).map((s: Service) => [s.id, s.name]),
   );
-  const activePluginCount = [
-    pluginsForm.cors,
-    pluginsForm.ipRestriction,
-    pluginsForm.requestSizeLimit,
-    pluginsForm.rateLimit,
-    pluginsForm.requestTransform,
-    pluginsForm.responseTransform,
-    pluginsForm.basicAuth,
-    pluginsForm.oidc,
-    pluginsForm.oauth,
-    pluginsForm.hmacAuth,
-    pluginsForm.graphql,
-    pluginsForm.acl,
-    pluginsForm.mtls,
-  ].filter(Boolean).length;
+  const activePluginCount =
+    [
+      pluginsForm.cors,
+      pluginsForm.ipRestriction,
+      pluginsForm.requestSizeLimit,
+      pluginsForm.rateLimit,
+      pluginsForm.requestTransform,
+      pluginsForm.responseTransform,
+      pluginsForm.basicAuth,
+      pluginsForm.oidc,
+      pluginsForm.oauth,
+      pluginsForm.hmacAuth,
+      pluginsForm.graphql,
+      pluginsForm.acl,
+      pluginsForm.mtls,
+    ].filter(Boolean).length + pluginsForm.custom.length;
 
   return (
     <div className="p-4 sm:p-8">

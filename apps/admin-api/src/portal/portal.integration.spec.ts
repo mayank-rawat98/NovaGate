@@ -459,6 +459,7 @@ integration('Developer portal on actual PostgreSQL and HTTP', () => {
           auth: ['api-key'],
           rateLimit: { requests: 30, windowMs: 1000 },
           groupRestricted: true,
+          customPolicies: false,
         },
         expect.objectContaining({
           method: 'POST',

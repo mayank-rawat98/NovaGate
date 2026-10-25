@@ -6,6 +6,7 @@ import { ConfigManagerModule } from '../config-manager/config-manager.module';
 import { GATEWAY_PLUGIN } from './gateway-plugin.token';
 import { PluginRegistryService } from './plugin-registry.service';
 import { PluginRunnerService } from './plugin-runner.service';
+import { PluginLoaderService } from './third-party/plugin-loader.service';
 import { CorsPlugin } from './cors/cors.plugin';
 import { IpRestrictionPlugin } from './ip-restriction/ip-restriction.plugin';
 import { RequestSizeLimitPlugin } from './request-size-limit/request-size-limit.plugin';
@@ -45,6 +46,7 @@ const FIRST_PARTY_PLUGINS = [
     RateLimitService,
     PluginRegistryService,
     PluginRunnerService,
+    PluginLoaderService,
     IdentityProviderService,
     RequestBodyService,
     ...FIRST_PARTY_PLUGINS,
@@ -55,6 +57,11 @@ const FIRST_PARTY_PLUGINS = [
       useFactory: (...plugins: GatewayPlugin[]) => plugins,
     },
   ],
-  exports: [PluginRegistryService, PluginRunnerService, RequestBodyService],
+  exports: [
+    PluginRegistryService,
+    PluginRunnerService,
+    PluginLoaderService,
+    RequestBodyService,
+  ],
 })
 export class PluginsModule {}

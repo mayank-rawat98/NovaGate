@@ -32,6 +32,13 @@ export class PluginRegistryService {
     });
   }
 
+  /** Adds an operator-loaded plugin; names are unique across all plugins. */
+  register(plugin: GatewayPlugin): void {
+    if (this.pluginMap.has(plugin.name))
+      throw new Error(`Plugin already registered: ${plugin.name}`);
+    this.pluginMap.set(plugin.name, plugin);
+  }
+
   isKnown(name: string): boolean {
     return this.pluginMap.has(name);
   }

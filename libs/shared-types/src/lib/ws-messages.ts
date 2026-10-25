@@ -11,6 +11,7 @@ export type WsMessageType =
   | 'errors'
   | 'metrics'
   | 'traces'
+  | 'plugins.status'
   | 'ack';
 
 export interface BaseWsMessage {
@@ -97,6 +98,12 @@ export interface TraceSpan {
 export interface TracesMessage extends BaseWsMessage {
   type: 'traces';
   payload: TraceSpan[];
+}
+
+/** Third-party plugin inventory; replaces the previous report for the tenant. */
+export interface PluginsStatusMessage extends BaseWsMessage {
+  type: 'plugins.status';
+  payload: import('./third-party-plugins.ts').GatewayPluginReport;
 }
 
 export interface HealthMessage extends BaseWsMessage {
@@ -303,6 +310,8 @@ export interface TenantConfig {
     authMax: number;
   };
   caCertPem?: string;
+  /** Third-party plugins the workspace disabled; routes using them fail closed. */
+  disabledPlugins?: string[];
 }
 
 export const MAX_GRAPHQL_POLICY_DEPTH = 100;

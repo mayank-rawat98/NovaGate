@@ -28,6 +28,7 @@ const catalog = {
       auth: ['api-key'],
       rateLimit: { requests: 30, windowMs: 60000 },
       groupRestricted: false,
+      customPolicies: false,
     },
   ],
 };

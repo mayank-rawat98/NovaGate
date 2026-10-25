@@ -253,6 +253,61 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
     expect(message.payload.tenantId).toBe(tenantId);
   });
 
+  it('sends disabled plugins and omits portal administration fields at authentication', async () => {
+    const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
+    const routeId = randomUUID();
+    const consumerId = randomUUID();
+    // public.tenants is shared with admin-api suites, which may have added
+    // the column already. Before that upgrade the list is empty, not an error.
+    const [{ exists }] = await ds.query(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='tenants' AND column_name='disabledPlugins') AS exists`,
+    );
+    if (!exists)
+      expect(
+        (await connect(apiKey)).message.payload.config.disabledPlugins,
+      ).toEqual([]);
+    await ds.query(
+      `ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS "disabledPlugins" JSONB NOT NULL DEFAULT '[]'::jsonb`,
+    );
+    await ds.query(`ALTER TABLE ${schema}.routes ADD COLUMN portal JSONB`);
+    await ds.query(
+      `ALTER TABLE ${schema}.consumers ADD COLUMN "portalDeveloperId" UUID, ADD COLUMN "portalKeyName" TEXT`,
+    );
+    try {
+      await ds.query(
+        `UPDATE public.tenants SET "disabledPlugins"=$2::jsonb WHERE id=$1`,
+        [tenantId, JSON.stringify(['@b/x', 'cors', '@a/y', '@b/x'])],
+      );
+      await ds.query(
+        `INSERT INTO ${schema}.routes (id,enabled,portal) VALUES ($1,true,'{"visible":true}')`,
+        [routeId],
+      );
+      await ds.query(
+        `INSERT INTO ${schema}.consumers (id,"portalDeveloperId","portalKeyName") VALUES ($1,$2,'ci')`,
+        [consumerId, randomUUID()],
+      );
+      const { config } = (await connect(apiKey)).message.payload;
+      expect(config.disabledPlugins).toEqual(['@a/y', '@b/x']);
+      expect(config.routes).toEqual([
+        { id: routeId, enabled: true, deletedAt: null },
+      ]);
+      expect(config.consumers).toEqual([{ id: consumerId, revokedAt: null }]);
+    } finally {
+      await ds.query(`DELETE FROM ${schema}.routes WHERE id=$1`, [routeId]);
+      await ds.query(`DELETE FROM ${schema}.consumers WHERE id=$1`, [
+        consumerId,
+      ]);
+      await ds.query(`ALTER TABLE ${schema}.routes DROP COLUMN portal`);
+      await ds.query(
+        `ALTER TABLE ${schema}.consumers DROP COLUMN "portalDeveloperId", DROP COLUMN "portalKeyName"`,
+      );
+      await ds.query(
+        `UPDATE public.tenants SET "disabledPlugins"='[]'::jsonb WHERE id=$1`,
+        [tenantId],
+      );
+    }
+  });
+
   it('keeps concurrent tenant metrics separate on pooled connections', async () => {
     const ingestion = new LogIngestionService(ds);
     await Promise.all(
@@ -330,6 +385,58 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
       subscriber.disconnect();
     }
   });
+  it('stores validated plugin reports under the authenticated tenant with a TTL', async () => {
+    const key = `gw:plugins:${tenantId}`;
+    await redis.del(key, `gw:plugins:${secondId}`);
+    const plugin = {
+      name: '@acme/stamp',
+      package: '@acme/stamp',
+      version: '1.2.3',
+      state: 'quarantined',
+      protocols: ['http'],
+      hooks: ['onRequest'],
+      failures: 3,
+      lastError: 'Error: onRequest exceeded 200 ms',
+      quarantinedUntil: new Date().toISOString(),
+    };
+    const { ws } = await connect(apiKey);
+    ws.send(
+      JSON.stringify({
+        type: 'plugins.status',
+        tenantId: secondId,
+        payload: { plugins: [{ ...plugin, extra: 'dropped' }] },
+      }),
+    );
+    await until(async () => (await redis.exists(key)) === 1);
+    const stored = JSON.parse((await redis.get(key)) as string);
+    expect(stored.plugins).toEqual([plugin]);
+    expect(Date.parse(stored.reportedAt)).not.toBeNaN();
+    const ttl = await redis.ttl(key);
+    expect(ttl).toBeGreaterThan(170);
+    expect(ttl).toBeLessThanOrEqual(180);
+    expect(await redis.exists(`gw:plugins:${secondId}`)).toBe(0);
+    // An invalid report leaves the last valid one in place. A metrics frame
+    // after it proves the serialized handler has processed it.
+    const metrics = `SELECT COUNT(*)::int AS count FROM tenant_${tenantId.replace(/-/g, '_')}.metrics_snapshots`;
+    const [{ count }] = await ds.query(metrics);
+    ws.send(
+      JSON.stringify({
+        type: 'plugins.status',
+        payload: { plugins: [{ ...plugin, name: 'cors', state: 'active' }] },
+      }),
+    );
+    ws.send(
+      JSON.stringify({
+        type: 'metrics',
+        payload: { rps: 1, p50: 1, p95: 2, p99: 3, errorRate: 0 },
+      }),
+    );
+    await until(async () => (await ds.query(metrics))[0].count > count);
+    expect(JSON.parse((await redis.get(key)) as string).plugins).toEqual([
+      plugin,
+    ]);
+  });
+
   it('persists validated histogram evidence on the authenticated tenant and preserves legacy null metadata', async () => {
     const subscriber = new Redis(process.env.TEST_REDIS_URL as string);
     await subscriber.subscribe(`metrics:${tenantId}`);

@@ -47,6 +47,8 @@ import type {
   PortalSettings,
   SavePortalSettings,
   PortalDeveloper,
+  GatewayPluginState,
+  SaveDisabledPlugins,
 } from '@api-gateway/shared-types';
 import { getToken, clearToken } from './auth';
 
@@ -892,6 +894,22 @@ export function revokeAutomationToken(
   );
 }
 
+export function getGatewayPlugins(
+  tenantId: string,
+): Promise<GatewayPluginState> {
+  return request(`/tenants/${tenantId}/gateway-plugins`);
+}
+export function saveDisabledPlugins(
+  tenantId: string,
+  input: SaveDisabledPlugins,
+  signal?: AbortSignal,
+): Promise<GatewayPluginState> {
+  return request(`/tenants/${tenantId}/gateway-plugins`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
 export function getPortalSettings(tenantId: string): Promise<PortalSettings> {
   return request(`/tenants/${tenantId}/portal-settings`);
 }

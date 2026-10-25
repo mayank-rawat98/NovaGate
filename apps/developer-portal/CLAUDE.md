@@ -26,13 +26,13 @@ public `/api/portal/*` admin endpoints described in
 
 ## Pages
 
-| Route                                       | Purpose                                                                                 |
-| ------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `/w/[tenant]`                               | Catalog: method, path, summary, auth methods, enforced rate limit                       |
-| `/w/[tenant]/docs/[routeId]`                | Plain-text docs, auth/limit details, curl example using the workspace's gateway address |
-| `/w/[tenant]/register`, `/verify`, `/login` | Developer accounts; verification tokens are submitted once                              |
-| `/w/[tenant]/keys`                          | Create (shown once), list and revoke own keys                                           |
-| `/w/[tenant]/usage`                         | Per-key recorded requests, errors, p95, interval table and top paths                    |
+| Route                                       | Purpose                                                                                                     |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `/w/[tenant]`                               | Catalog: method, path, summary, auth methods, enforced rate limit                                           |
+| `/w/[tenant]/docs/[routeId]`                | Plain-text docs, auth/limit details, custom-policy note, curl example using the workspace's gateway address |
+| `/w/[tenant]/register`, `/verify`, `/login` | Developer accounts; verification tokens are submitted once                                                  |
+| `/w/[tenant]/keys`                          | Create (shown once), list and revoke own keys                                                               |
+| `/w/[tenant]/usage`                         | Per-key recorded requests, errors, p95, interval table and top paths                                        |
 
 ## Guardrails
 

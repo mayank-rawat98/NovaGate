@@ -63,6 +63,11 @@ export interface PortalCatalogRoute {
   rateLimit: { requests: number; windowMs: number } | null;
   /** True when an acl plugin restricts access by consumer group. */
   groupRestricted: boolean;
+  /**
+   * True when the route also runs workspace-installed (third-party) plugins,
+   * whose requirements the catalog cannot describe.
+   */
+  customPolicies: boolean;
 }
 export interface PortalCatalog {
   tenantId: string;

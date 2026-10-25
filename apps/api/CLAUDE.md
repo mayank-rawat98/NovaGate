@@ -106,6 +106,24 @@ gateway/
 - OIDC plugin caches JWKS keys in-memory (24h TTL); refreshes on `kid` miss then fails if still not found
 - Bounded HMAC `prepareRequest` captures original bytes before body-aware hooks without authenticating; request policies run in saved order. HMAC admission lasts until response finish/close/cancellation. Stripe and custom timestamp modes sign timestamp.body; body-only mode cannot claim replay protection.
 
+## Third-party plugins (issue #113)
+
+`plugins/third-party/plugin-loader.service.ts` loads operator-pinned npm packages
+from `THIRD_PARTY_PLUGIN_DIR` at module init: the installed manifest must match
+the pinned name and exact version, and the export must pass the same checks as
+`definePlugin` in `libs/plugin-sdk`. Names are scoped package names, so they can
+never replace a built-in plugin. Every loaded package is registered as a
+`GuardedPlugin`: hooks have deadlines, request-hook failures fail closed
+(`502 PLUGIN_FAILED`), response/error-hook failures are skipped, repeated
+failures quarantine (`503 PLUGIN_UNAVAILABLE`) and `TenantConfig.disabledPlugins`
+fails routes closed (`503 PLUGIN_DISABLED`). Packages that did not load register
+an `UnavailablePlugin` placeholder. The process-level crash guard attributes an
+uncaught exception or unhandled rejection to a plugin by the realpath of its
+package root in the stack and quarantines it; anything else keeps Node's default
+crash. The connector sends transient `plugins.status` reports after `auth_ok`, on
+change (debounced 1s) and every 60s. Never let plugin errors carry stacks,
+request data or control characters into reports or logs (`sanitizeError`).
+
 ## Guardrails
 
 - NEVER add tenantId prefix to Redis keys
