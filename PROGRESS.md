@@ -8,6 +8,8 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
+- [Issue #111](https://github.com/mayank-rawat98/NovaGate/issues/111) adds the phase 5.4 Terraform provider: `novagate_service`, `novagate_route`, `novagate_consumer` and `novagate_alert_rule`, with import support, plus `novagate_tenant` and `novagate_consumer` data sources. Acceptance runs the real Terraform 1.16.7 CLI against the real admin API on PostgreSQL. It covers create, in-place update, clearing, import of every resource, scope denial and destroy, and SQL confirms the soft deletes. See the section below.
+
 - [Issue #109](https://github.com/mayank-rawat98/NovaGate/issues/109) implements the phase 5.3 developer portal: a separate Next.js app, public catalog/developer APIs, self-service keys and usage, workspace Settings and route-editor publication. A real-process end-to-end run (admin API, control plane, gateway and portal on local PostgreSQL/Redis, driven by Chromium) registers a developer, confirms the email, creates a key, makes five gateway calls, sees those five recorded requests in the portal and revokes the key, after which the gateway refuses it. It also fixes the gateway rate-limit plugin ignoring its configured window. See the section below.
 
 - [Issue #107](https://github.com/mayank-rawat98/NovaGate/issues/107) adds scoped, expiring, revocable automation tokens for the CLI, Terraform and CI. Only SHA-256 digests are stored; secrets are shown once. Endpoints accept tokens only when they declare a scope (default deny), and token management stays session-only. Verified on Node 26.11.1 with local PostgreSQL 16: **857 admin tests** pass (28 RustFS/S3-dependent tests skipped because this environment has no container runtime), **35 built CLI tests**, 10 dashboard tests, lint/typecheck for the four touched projects, and the full production browser smoke including the new panel, with zero runtime/WCAG findings. Packaged images were not rebuilt in this environment. See the section below.
@@ -1552,7 +1554,7 @@ issues #69, #90 and the remaining #101 investigation stay open.
   #105/PR #106. Scoped/revocable automation tokens are implemented in #107.
   Enterprise RBAC, package distribution and formal acceptance remain.
 - Developer portal: implemented in #109; formal acceptance remains.
-- Terraform provider, tests and resources inside this repository.
+- Terraform provider: implemented in #111; registry publication and formal acceptance remain.
 - Plugin SDK/third-party loading with explicit trust, compatibility and resource limits.
 - External downstream instrumentation/OTLP interoperability for third-party observability.
 
@@ -1814,3 +1816,43 @@ Not verified here: Docker image builds (`docker/Dockerfile.developer-portal`, an
 the extra manifest copy in the other four Dockerfiles), because this environment
 has no container runtime. The compose service sits behind the `portal` profile,
 so default deployments are unchanged. Quotas and formal acceptance remain open.
+
+## Terraform provider — issue #111
+
+`integrations/terraform-provider` is a Go provider on the Terraform Plugin
+Framework 1.19. It is configured with `api_url`, `tenant_id` and a scoped `ngat_`
+automation `token` (or `NOVAGATE_*` variables). It requires HTTPS except on
+loopback, refuses redirects, bounds responses at 4 MiB and never retries writes.
+Resources:
+
+- services: weighted targets, health settings and load balancing; destroy
+  soft-deletes;
+- routes: retry, rate-limit override, normalized sensitive plugin JSON and portal
+  publication, with explicit nulls when a setting is removed; destroy
+  soft-deletes;
+- consumers: the key is returned once and held as a sensitive state value;
+  name/tier changes replace the consumer and groups update in place; destroy
+  revokes;
+- alert rules: revision-checked updates and deletes; channels stay in the
+  dashboard because they hold credentials.
+
+Data sources cover the workspace profile and consumers by unique name. See the
+[provider guide](integrations/terraform-provider/README.md).
+
+Verification (Go 1.25.8, Terraform 1.16.7, Node 26.11.1, local PostgreSQL 16 and
+Redis 7):
+
+- `gofmt`/`go vet` clean; client unit tests (configuration validation, token
+  header, error mapping, refused redirects, response bound).
+- `terraform-provider:acceptance`: a disposable workspace, the built admin API
+  and two minted tokens, then the real CLI through create → update (nested
+  objects, plugin JSON, set changes, alert revision 2) → clear optional
+  settings → import all four resources → destroy. A read-only token is refused
+  with the missing `services:write` scope. SQL confirms the route and service
+  rows remain with `deletedAt` and the consumer with `revokedAt`. Both tokens
+  record last use, and the write token never appears in test output.
+- The example configuration validates against the built provider through a dev
+  override.
+
+Registry signing/publication and formal acceptance remain open. CI installs Go
+and Terraform and runs lint, test, build and acceptance.
