@@ -173,7 +173,7 @@ export class AlertDeliveryService
         );
         if (!owned) return null;
         const [row] = await manager.query<StoredJob[]>(
-          `SELECT e.id, e."ruleId", e."ruleName", e.metric, e.operator, e.threshold,
+          `SELECT e.id, e."ruleId", e."ruleName", e.metric, e.operator, e.threshold, e.anomaly,
         (e."createdAt" < clock_timestamp() - INTERVAL '720 hours') AS expired,
         e."windowMinutes", e.state, e.value, e."createdAt", d.attempts, d.type, d."channelId", d."channelRevision",
         c.type AS "channelType", c.revision AS "currentRevision", c.enabled AS "channelEnabled", c.credentials
@@ -250,6 +250,7 @@ export class AlertDeliveryService
               state: row.state,
               value: row.value,
               createdAt: new Date(row.createdAt).toISOString(),
+              ...(row.anomaly ? { anomaly: row.anomaly } : {}),
             },
           },
         };

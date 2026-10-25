@@ -21,6 +21,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { GatewayStatusPill } from '../../components/gateway-status-pill';
+import { AnomalyFeed } from '../../components/anomaly-feed';
 import { getGatewayStatus, getRoutes, getLogs } from '../../lib/api-client';
 import { useTenantId } from '../../lib/auth';
 import type {
@@ -335,12 +336,19 @@ export default function DashboardPage() {
         </StatCard>
       </div>
 
+      <AnomalyFeed tenantId={tenantId} />
+
       {/* Recent popular routes */}
       <div className="mt-8">
         <h2 className="mb-3 text-base font-semibold text-gray-900">
           Recent popular routes
         </h2>
-        <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div
+          tabIndex={0}
+          role="region"
+          aria-label="Recent popular routes table"
+          className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm"
+        >
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-200 bg-gray-50">

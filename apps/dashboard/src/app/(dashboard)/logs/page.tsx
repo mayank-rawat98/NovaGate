@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import Link from 'next/link';
 import { ChevronDown, ChevronRight, Search } from 'lucide-react';
 import { getLogs } from '../../../lib/api-client';
@@ -79,6 +79,31 @@ export default function LogsPage() {
     },
     [tenantId],
   );
+
+  // Links (for example from the anomaly feed) can prefill the search:
+  // ?path=/orders&from=<ISO>&to=<ISO>. Read after mount so hydration matches.
+  useEffect(() => {
+    if (!tenantId) return;
+    const query = new URLSearchParams(window.location.search);
+    const path = query.get('path') ?? '';
+    const local = (value: string | null) => {
+      const time = value ? new Date(value) : null;
+      if (!time || Number.isNaN(time.getTime())) return '';
+      const shifted = new Date(
+        time.getTime() - time.getTimezoneOffset() * 60000,
+      );
+      return shifted.toISOString().slice(0, 16);
+    };
+    const prefilled = {
+      ...EMPTY_FILTERS,
+      path: path.length <= 512 && !/[?#]/.test(path) ? path : '',
+      from: local(query.get('from')),
+      to: local(query.get('to')),
+    };
+    if (!prefilled.path && !prefilled.from && !prefilled.to) return;
+    setFilters(prefilled);
+    void fetchLogs(1, prefilled);
+  }, [tenantId, fetchLogs]);
 
   function handleSearch(e: React.FormEvent) {
     e.preventDefault();

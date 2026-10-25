@@ -12,6 +12,10 @@ import { AUTOMATION_TOKEN_SCHEMA } from '../automation-tokens/automation-token-s
 import { PORTAL_PUBLIC_SCHEMA, portalSchemaSql } from '../portal/portal-schema';
 import { GATEWAY_PLUGIN_SCHEMA } from '../gateway-plugins/gateway-plugin-schema';
 import {
+  ANOMALY_SCHEDULE_SCHEMA,
+  anomalySchemaSql,
+} from '../anomalies/anomaly-schema';
+import {
   CONSUMER_ROLLUP_PUBLIC_SCHEMA,
   consumerRollupSchemaSql,
 } from '../proxy-config/consumer-rollup-schema';
@@ -54,6 +58,7 @@ export class MigrationService implements OnModuleInit {
       await manager.query(AUTOMATION_TOKEN_SCHEMA);
       await manager.query(PORTAL_PUBLIC_SCHEMA);
       await manager.query(GATEWAY_PLUGIN_SCHEMA);
+      await manager.query(ANOMALY_SCHEDULE_SCHEMA);
       const tenants = await manager.query<Array<{ id: string }>>(
         `SELECT id FROM public.tenants`,
       );
@@ -61,6 +66,7 @@ export class MigrationService implements OnModuleInit {
         const schema = tenantSchema(tenant.id);
         await manager.query(traceSchemaSql(schema));
         await manager.query(alertSchemaSql(tenant.id));
+        await manager.query(anomalySchemaSql(tenant.id));
         await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.metrics_snapshots ALTER COLUMN rps TYPE DOUBLE PRECISION USING rps::double precision`,
         );

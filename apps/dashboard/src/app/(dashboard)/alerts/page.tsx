@@ -33,6 +33,7 @@ import {
   alertValue,
 } from '../../../components/alert-rule-form';
 import { AlertChannelForm } from '../../../components/alert-channel-form';
+import { AnomalySettingsPanel } from '../../../components/anomaly-settings-panel';
 
 type Dialog =
   | { kind: 'rule'; rule?: AlertRule }
@@ -522,6 +523,7 @@ function AlertsWorkspace({ tenantId }: { tenantId: string }) {
               ))}
             </div>
           </section>
+          <AnomalySettingsPanel tenantId={tenantId} channels={data.channels} />
         </>
       )}
       <section
@@ -568,6 +570,11 @@ function AlertsWorkspace({ tenantId }: { tenantId: string }) {
                   {event.state === 'firing' ? 'Firing event' : 'Resolved event'}
                 </Badge>
               </div>
+              {event.anomaly && (
+                <p className="mt-1 break-words text-sm text-slate-700">
+                  {event.anomaly.summary}
+                </p>
+              )}
               <p className="mt-2 text-xs text-slate-600">
                 {timestamp(event.createdAt)} ·{' '}
                 {ALERT_METRIC_LABELS[event.metric]}:{' '}

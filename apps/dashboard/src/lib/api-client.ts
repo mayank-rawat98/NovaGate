@@ -51,6 +51,9 @@ import type {
   SaveDisabledPlugins,
   CircuitBreakerConfig,
   CircuitBreakerSnapshot,
+  Anomaly,
+  AnomalySettings,
+  SaveAnomalySettings,
 } from '@api-gateway/shared-types';
 import { parseCircuitStatuses } from '@api-gateway/shared-types';
 import { getToken, clearToken } from './auth';
@@ -840,6 +843,27 @@ export async function streamMetrics(
     await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
+}
+
+export function getAnomalies(
+  tenantId: string,
+  state: 'active' | 'all' = 'all',
+): Promise<Anomaly[]> {
+  return request(`/tenants/${tenantId}/anomalies?state=${state}`);
+}
+export function getAnomalySettings(tenantId: string): Promise<AnomalySettings> {
+  return request(`/tenants/${tenantId}/anomaly-settings`);
+}
+export function saveAnomalySettings(
+  tenantId: string,
+  input: SaveAnomalySettings,
+  signal?: AbortSignal,
+): Promise<AnomalySettings> {
+  return request(`/tenants/${tenantId}/anomaly-settings`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
 }
 
 /** Validates a circuit snapshot from the admin API or its live stream. */
