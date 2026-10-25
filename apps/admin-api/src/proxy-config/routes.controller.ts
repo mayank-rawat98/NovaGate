@@ -1,3 +1,4 @@
+import { AutomationScope } from '../automation-tokens/automation-scope.decorator';
 import Joi from 'joi';
 import {
   MAX_GRAPHQL_POLICY_DEPTH,
@@ -233,6 +234,7 @@ export class RoutesController {
     private readonly configPush: ConfigPushService,
   ) {}
 
+  @AutomationScope('routes:read')
   @Get()
   async findAll(@Param('tenantId') tenantId: string) {
     const schema = tenantSchema(tenantId);
@@ -241,6 +243,7 @@ export class RoutesController {
     );
   }
 
+  @AutomationScope('routes:write')
   @Post()
   async create(@Param('tenantId') tenantId: string, @Body() body: RouteBody) {
     validatePlugins(body.plugins);
@@ -267,6 +270,7 @@ export class RoutesController {
     return rows[0];
   }
 
+  @AutomationScope('routes:write')
   @Put(':id')
   async update(
     @Param('tenantId') tenantId: string,
@@ -311,6 +315,7 @@ export class RoutesController {
     return rows[0];
   }
 
+  @AutomationScope('routes:write')
   @Delete(':id')
   async remove(@Param('tenantId') tenantId: string, @Param('id') id: string) {
     const schema = tenantSchema(tenantId);

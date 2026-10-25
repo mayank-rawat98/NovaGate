@@ -41,6 +41,9 @@ import type {
   UpdateAlertRuleDto,
   CreateAlertChannelDto,
   UpdateAlertChannelDto,
+  AutomationTokenSummary,
+  CreateAutomationToken,
+  CreatedAutomationToken,
 } from '@api-gateway/shared-types';
 import { getToken, clearToken } from './auth';
 
@@ -852,4 +855,31 @@ export function saveLogRetention(
     body: JSON.stringify(input),
     signal,
   });
+}
+
+export function getAutomationTokens(
+  tenantId: string,
+): Promise<AutomationTokenSummary[]> {
+  return request(`/tenants/${tenantId}/automation-tokens`);
+}
+export function createAutomationToken(
+  tenantId: string,
+  input: CreateAutomationToken,
+  signal?: AbortSignal,
+): Promise<CreatedAutomationToken> {
+  return request(`/tenants/${tenantId}/automation-tokens`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+export function revokeAutomationToken(
+  tenantId: string,
+  tokenId: string,
+  signal?: AbortSignal,
+): Promise<AutomationTokenSummary> {
+  return request(
+    `/tenants/${tenantId}/automation-tokens/${encodeURIComponent(tokenId)}`,
+    { method: 'DELETE', signal },
+  );
 }

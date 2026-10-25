@@ -5,8 +5,11 @@ import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
 import { parseArgs } from 'node:util';
 import {
+  AUTOMATION_TOKEN_PREFIX,
   DECLARATIVE_CONFIG_MAX_BYTES,
   DECLARATIVE_CONFIG_MAX_ENTRIES,
+  MAX_AUTOMATION_TOKEN_DAYS,
+  isAutomationTokenScope,
   type ConfigPreview,
   type ConfigApplyResult,
 } from '@api-gateway/shared-types';
@@ -29,9 +32,13 @@ gwx routes apply [gateway.yml] [--dry-run] [--yes] [--json]
 gwx consumers create --name NAME [--json]
 gwx alerts list [--json]
 gwx logs tail [--once]
+gwx tokens list [--json]
+gwx tokens create --name NAME --scope SCOPE [--scope SCOPE] [--expires-days N] [--json]
+gwx tokens revoke TOKEN_ID [--json]
 
 Global: --api-url URL, --tenant UUID, --help, --version
-Automation: GW_API_URL, GW_TENANT_ID, GW_API_TOKEN.
+Automation: GW_API_URL, GW_TENANT_ID, GW_API_TOKEN (a scoped ngat_ token).
+Token commands need a signed-in session; tokens cannot manage tokens.
 Login: GW_EMAIL, GW_PASSWORD, or interactive hidden password entry.
 Saved sessions: ~/.gwx/credentials (mode 600). GWX_CONFIG_DIR overrides its directory.
 Apply reviews a complete document; missing entries are removed/revoked.
@@ -195,6 +202,8 @@ async function main() {
         name: { type: 'string' },
         output: { type: 'string' },
         once: { type: 'boolean' },
+        scope: { type: 'string', multiple: true },
+        'expires-days': { type: 'string' },
       },
     });
   } catch {
@@ -222,11 +231,18 @@ async function main() {
     'consumers create': ['name'],
     'alerts list': [],
     'logs tail': ['once'],
+    'tokens list': [],
+    'tokens create': ['name', 'scope', 'expires-days'],
+    'tokens revoke': [],
   };
   if (
     !Object.hasOwn(extra, command) ||
     args.length >
-      (command === 'routes apply' ? 3 : command.includes(' ') ? 2 : 1) ||
+      (command === 'routes apply' || command === 'tokens revoke'
+        ? 3
+        : command.includes(' ')
+          ? 2
+          : 1) ||
     Object.keys(flags).some(
       (flag) =>
         ![
@@ -491,6 +507,97 @@ async function main() {
             ),
           ].join('\n') + '\n',
     );
+  } else if (command === 'tokens list') {
+    const list = rows(await client.json(client.path('/automation-tokens'))).map(
+      automationToken,
+    );
+    await out(
+      flags.json
+        ? JSON.stringify(list, null, 2) + '\n'
+        : [
+            'ID\tNAME\tPREFIX\tSCOPES\tEXPIRES\tLAST USED\tSTATUS',
+            ...list.map(
+              (row) =>
+                `${row.id}\t${row.name}\t${row.displayPrefix}\t${row.scopes.join(',')}\t${row.expiresAt}\t${row.lastUsedAt ?? 'never'}\t${row.revokedAt ? 'revoked' : Date.parse(row.expiresAt) <= Date.now() ? 'expired' : 'active'}`,
+            ),
+          ].join('\n') + '\n',
+    );
+  } else if (command === 'tokens create') {
+    const scopes = flags.scope ?? [];
+    if (
+      !flags.name ||
+      flags.name.trim() !== flags.name ||
+      flags.name.length > 64 ||
+      safeText(flags.name) !== flags.name
+    )
+      throw new CliError(
+        'Provide --name with a non-empty name of at most 64 characters.',
+        2,
+      );
+    if (!scopes.length || !scopes.every(isAutomationTokenScope))
+      throw new CliError(
+        'Provide one or more valid --scope values, such as routes:read or config:write.',
+        2,
+      );
+    const days =
+      flags['expires-days'] === undefined
+        ? undefined
+        : Number(flags['expires-days']);
+    if (
+      days !== undefined &&
+      (!/^\d{1,3}$/.test(flags['expires-days'] ?? '') ||
+        days < 1 ||
+        days > MAX_AUTOMATION_TOKEN_DAYS)
+    )
+      throw new CliError(
+        `--expires-days must be a whole number from 1 to ${MAX_AUTOMATION_TOKEN_DAYS}.`,
+        2,
+      );
+    const created = object(
+      await client.json(client.path('/automation-tokens'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: flags.name,
+          scopes: [...new Set(scopes)],
+          ...(days === undefined ? {} : { expiresInDays: days }),
+        }),
+      }),
+    );
+    const row = automationToken(created);
+    if (
+      typeof created.token !== 'string' ||
+      !new RegExp(`^${AUTOMATION_TOKEN_PREFIX}[A-Za-z0-9_-]{43}$`).test(
+        created.token,
+      )
+    )
+      throw new CliError(
+        'API returned an invalid token. List tokens and revoke any you do not recognise.',
+      );
+    process.stderr.write(
+      'Save this token now; it cannot be viewed again. Use it as GW_API_TOKEN.\n',
+    );
+    await out(
+      flags.json
+        ? JSON.stringify({ ...row, token: created.token }, null, 2) + '\n'
+        : `${row.name}\t${row.id}\t${row.scopes.join(',')}\texpires ${row.expiresAt}\n${created.token}\n`,
+    );
+  } else if (command === 'tokens revoke') {
+    const id = args[2];
+    if (!id || !tenantPattern.test(id))
+      throw new CliError('Provide the token ID shown by gwx tokens list.', 2);
+    const row = automationToken(
+      object(
+        await client.json(client.path(`/automation-tokens/${id}`), {
+          method: 'DELETE',
+        }),
+      ),
+    );
+    await out(
+      flags.json
+        ? JSON.stringify(row, null, 2) + '\n'
+        : `Revoked ${row.name} (${row.id}) at ${row.revokedAt}.\n`,
+    );
   } else if (command === 'logs tail') {
     const allowed = [
       'id',
@@ -525,6 +632,33 @@ async function main() {
       await out(JSON.stringify(safe) + '\n');
     }, flags.once === true);
   }
+}
+function automationToken(row: Record<string, unknown>) {
+  const timestamp = (value: unknown) =>
+    typeof value === 'string' && Number.isFinite(Date.parse(value));
+  if (
+    typeof row.id !== 'string' ||
+    !tenantPattern.test(row.id) ||
+    typeof row.name !== 'string' ||
+    typeof row.displayPrefix !== 'string' ||
+    !Array.isArray(row.scopes) ||
+    !row.scopes.every(isAutomationTokenScope) ||
+    !timestamp(row.createdAt) ||
+    !timestamp(row.expiresAt) ||
+    (row.lastUsedAt !== null && !timestamp(row.lastUsedAt)) ||
+    (row.revokedAt !== null && !timestamp(row.revokedAt))
+  )
+    throw new CliError('API returned an invalid token record.');
+  return {
+    id: row.id,
+    name: safeText(row.name),
+    displayPrefix: safeText(row.displayPrefix),
+    scopes: row.scopes as string[],
+    createdAt: row.createdAt as string,
+    expiresAt: row.expiresAt as string,
+    lastUsedAt: row.lastUsedAt as string | null,
+    revokedAt: row.revokedAt as string | null,
+  };
 }
 function consumerKey(row: Record<string, unknown>, tenant: string) {
   if (

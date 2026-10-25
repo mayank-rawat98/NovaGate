@@ -1125,8 +1125,12 @@ or `--yes`. Authenticated live logs use encrypted receipt/UUID cursors and curre
 privacy/retention, with bounded SQL, output and shutdown ownership. See the
 [CLI guide](tools/gwx/README.md) and
 [stream contract](apps/admin-api/src/proxy-config/log-stream.README.md).
-Operation-scoped tokens, revocation, enterprise RBAC, distribution and formal
-acceptance remain required before phase 5.2 is complete.
+Scoped, expiring, revocable automation tokens (`ngat_…`) are implemented in
+[issue #107](https://github.com/mayank-rawat98/NovaGate/issues/107): session-only
+management, default-deny per-endpoint scopes, `gwx tokens` commands and a Settings
+panel. See the [token contract](apps/admin-api/src/automation-tokens/README.md).
+Enterprise RBAC, public distribution and formal acceptance remain before phase 5.2
+is complete.
 
 ---
 

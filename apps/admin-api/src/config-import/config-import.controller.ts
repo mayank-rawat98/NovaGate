@@ -1,3 +1,4 @@
+import { AutomationScope } from '../automation-tokens/automation-scope.decorator';
 import {
   BadRequestException,
   Body,
@@ -16,6 +17,7 @@ import { ConfigImportService } from './config-import.service';
 @Controller('tenants/:tenantId')
 export class ConfigImportController {
   constructor(private readonly service: ConfigImportService) {}
+  @AutomationScope('config:read')
   @Get('export')
   @Header('Cache-Control', 'no-store')
   @Header('Content-Type', 'application/yaml; charset=utf-8')
@@ -23,6 +25,10 @@ export class ConfigImportController {
   export(@Param('tenantId') tenant: string) {
     return this.service.export(tenant);
   }
+  // Previews (the default) are write-free, so a read token can plan changes.
+  @AutomationScope((request) =>
+    request.query.dryRun === 'false' ? 'config:write' : 'config:read',
+  )
   @Post('import')
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')

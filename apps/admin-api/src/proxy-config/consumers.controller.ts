@@ -1,3 +1,4 @@
+import { AutomationScope } from '../automation-tokens/automation-scope.decorator';
 import {
   Controller,
   Get,
@@ -20,6 +21,7 @@ export class ConsumersController {
     private readonly configPush: ConfigPushService,
   ) {}
 
+  @AutomationScope('consumers:read')
   @Get()
   async findAll(@Param('tenantId') tenantId: string) {
     const schema = tenantSchema(tenantId);
@@ -28,6 +30,7 @@ export class ConsumersController {
     );
   }
 
+  @AutomationScope('consumers:write')
   @Post()
   async create(
     @Param('tenantId') tenantId: string,
@@ -53,6 +56,7 @@ export class ConsumersController {
     return { ...rows[0], apiKey: plainKey };
   }
 
+  @AutomationScope('consumers:write')
   @Put(':id')
   async update(
     @Param('tenantId') tenantId: string,
@@ -70,6 +74,7 @@ export class ConsumersController {
     return rows[0];
   }
 
+  @AutomationScope('consumers:write')
   @Delete(':id')
   async remove(@Param('tenantId') tenantId: string, @Param('id') id: string) {
     const schema = tenantSchema(tenantId);

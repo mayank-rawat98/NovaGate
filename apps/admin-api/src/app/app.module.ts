@@ -38,6 +38,8 @@ import { AuthService } from '../auth/auth.service';
 import { EmailService } from '../email/email.service';
 import { MigrationService } from '../database/migration.service';
 import { AlertsModule } from '../alerts/alerts.module';
+import { AutomationTokensController } from '../automation-tokens/automation-tokens.controller';
+import { AutomationTokensService } from '../automation-tokens/automation-tokens.service';
 
 @Module({
   imports: [
@@ -80,6 +82,7 @@ import { AlertsModule } from '../alerts/alerts.module';
     ConsumersController,
     AnalyticsController,
     TracesController,
+    AutomationTokensController,
   ],
   providers: [
     LogStreamService,
@@ -97,6 +100,7 @@ import { AlertsModule } from '../alerts/alerts.module';
     MetricsStreamService,
     ConsumerAnalyticsService,
     ConsumerRollupService,
+    AutomationTokensService,
   ],
 })
 export class AppModule {}

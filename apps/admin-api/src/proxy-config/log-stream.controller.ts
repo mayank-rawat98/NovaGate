@@ -1,3 +1,4 @@
+import { AutomationScope } from '../automation-tokens/automation-scope.decorator';
 import { Controller, Get, Headers, Param, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { LogStreamService } from './log-stream.service';
@@ -5,6 +6,7 @@ import { LogStreamService } from './log-stream.service';
 @Controller('tenants/:tenantId/logs')
 export class LogStreamController {
   constructor(private readonly streams: LogStreamService) {}
+  @AutomationScope('logs:read')
   @Get('stream')
   open(
     @Param('tenantId') tenant: string,

@@ -1,3 +1,4 @@
+import { AutomationScope } from '../automation-tokens/automation-scope.decorator';
 import {
   BadRequestException,
   NotFoundException,
@@ -159,6 +160,7 @@ export class ServicesController {
     private readonly configPush: ConfigPushService,
   ) {}
 
+  @AutomationScope('services:read')
   @Get()
   async findAll(@Param('tenantId') tenantId: string) {
     const schema = tenantSchema(tenantId);
@@ -167,6 +169,7 @@ export class ServicesController {
     );
   }
 
+  @AutomationScope('services:write')
   @Post()
   async create(@Param('tenantId') tenantId: string, @Body() body: ServiceBody) {
     const schema = tenantSchema(tenantId);
@@ -193,6 +196,7 @@ export class ServicesController {
     return rows[0];
   }
 
+  @AutomationScope('services:write')
   @Put(':id')
   async update(
     @Param('tenantId') tenantId: string,
@@ -240,6 +244,7 @@ export class ServicesController {
     return rows[0];
   }
 
+  @AutomationScope('services:write')
   @Delete(':id')
   async remove(@Param('tenantId') tenantId: string, @Param('id') id: string) {
     const schema = tenantSchema(tenantId);
