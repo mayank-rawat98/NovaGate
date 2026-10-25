@@ -138,6 +138,7 @@ export async function verifyAutomationTokensDashboard({
   assert.ok(!persisted.includes(secret), 'Token secret must not persist');
   await saved.getByRole('button', { name: 'I saved the token' }).click();
   await expect(saved).toBeHidden();
+  await expect(opener).toBeFocused();
   await expect(panel.getByRole('status')).toHaveText(
     'Token GitHub deploy created.',
   );
@@ -159,6 +160,7 @@ export async function verifyAutomationTokensDashboard({
   );
   await confirm.getByRole('button', { name: 'Revoke token' }).click();
   await expect(confirm).toBeHidden();
+  await expect(list).toBeFocused();
   await expect(list.getByText('Revoked')).toBeVisible();
   await expect(
     list.getByRole('button', { name: 'Revoke GitHub deploy' }),

@@ -57,11 +57,16 @@ function TokensWorkspace({ tenantId }: { tenantId: string }) {
   const [created, setCreated] = useState<CreatedAutomationToken | null>(null);
   const [revoking, setRevoking] = useState<AutomationTokenSummary | null>(null);
   const [notice, setNotice] = useState('');
+  const opener = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  // Removing an open dialog does not restore focus; return it explicitly.
+  const restore = (target: { current: HTMLElement | null }) =>
+    requestAnimationFrame(() => target.current?.focus());
   const now = Date.now();
   return (
     <section
       aria-label="Automation tokens"
-      className="rounded-3xl border border-indigo-100 bg-[#f8f7ff] p-5 shadow-[0_8px_28px_rgba(70,60,120,0.07)] sm:p-6"
+      className="min-w-0 rounded-3xl border border-indigo-100 bg-[#f8f7ff] p-5 shadow-[0_8px_28px_rgba(70,60,120,0.07)] sm:p-6"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -78,6 +83,7 @@ function TokensWorkspace({ tenantId }: { tenantId: string }) {
           </div>
         </div>
         <button
+          ref={opener}
           type="button"
           disabled={!data || !!error}
           onClick={() => {
@@ -107,12 +113,13 @@ function TokensWorkspace({ tenantId }: { tenantId: string }) {
       )}
       {data && data.length > 0 && (
         <div
-          className="mt-4 overflow-x-auto rounded-2xl bg-white"
+          ref={list}
+          className="relative mt-4 overflow-x-auto rounded-2xl bg-white"
           tabIndex={0}
           role="region"
           aria-label="Automation token list"
         >
-          <table className="w-full min-w-[640px] text-left text-sm">
+          <table className="w-full text-left text-sm">
             <thead className="text-slate-600">
               <tr>
                 <th className="px-4 py-3 font-medium">Name</th>
@@ -218,6 +225,7 @@ function TokensWorkspace({ tenantId }: { tenantId: string }) {
           onClose={() => {
             setCreated(null);
             setNotice(`Token ${created.name} created.`);
+            restore(opener);
           }}
         />
       )}
@@ -228,6 +236,7 @@ function TokensWorkspace({ tenantId }: { tenantId: string }) {
           onClose={() => setRevoking(null)}
           onRevoked={(token) => {
             setRevoking(null);
+            restore(list);
             void mutate(
               (list) =>
                 list?.map((entry) => (entry.id === token.id ? token : entry)),
