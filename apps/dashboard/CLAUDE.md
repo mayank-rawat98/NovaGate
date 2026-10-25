@@ -238,3 +238,20 @@ browser verification covers all providers' explicit activation, pause/resume,
 removal/recreation, read/write failures, stale revisions, unavailable credentials,
 exact large coverage counts, interrupted writes, focus/Escape/Tab and mobile/desktop
 accessibility. No arbitrary source/payload enqueue is exposed by this UI.
+
+Issue #107 adds Settings → Automation tokens through shared token contracts and
+api-client. Create tokens with labelled scope checkboxes and a 1–365 day expiry.
+Show the `ngat_` secret once in a native dialog (never persisted), list
+prefix/scopes/expiry/last use/status, and confirm revocation. Tokens never manage
+tokens; say so in the panel. Restore focus to the opener after creation and to
+the list after revocation.
+
+Issue #109 adds Settings → Developer portal (publish, title, custom domain,
+gateway address for examples, open/closed signup, default key groups, keys per
+developer, developer suspension/activation with revocation counts) and a
+Developer portal section in the route editor's Advanced tab (publish toggle,
+one-line summary, plain-text description). The route DTO always sends `portal`
+(`null` when unpublished and empty). `NEXT_PUBLIC_PORTAL_URL` (build input)
+gives the shared portal host. Scroll containers holding tables with
+screen-reader-only text must be `relative`, and tables inside the flex main
+column must not set a minimum width; either escapes and widens mobile pages.
