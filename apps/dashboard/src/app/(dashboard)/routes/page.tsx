@@ -232,6 +232,9 @@ interface FormState {
   retryAttempts: string;
   retryOn: string;
   retryMethods: string[];
+  portalVisible: boolean;
+  portalSummary: string;
+  portalDescription: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -245,6 +248,9 @@ const EMPTY_FORM: FormState = {
   retryAttempts: '3',
   retryOn: DEFAULT_RETRY_CODES,
   retryMethods: DEFAULT_RETRY_METHODS,
+  portalVisible: false,
+  portalSummary: '',
+  portalDescription: '',
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -684,6 +690,9 @@ function routeToForm(route: Route): FormState {
     retryAttempts: route.retry?.attempts?.toString() ?? '3',
     retryOn: route.retry?.on?.join(',') ?? DEFAULT_RETRY_CODES,
     retryMethods: route.retry?.methods ?? DEFAULT_RETRY_METHODS,
+    portalVisible: route.portal?.visible ?? false,
+    portalSummary: route.portal?.summary ?? '',
+    portalDescription: route.portal?.description ?? '',
   };
 }
 
@@ -713,10 +722,89 @@ function formToDto(
   }
   const plugins = buildPluginsArray(pluginsForm);
   dto.plugins = plugins; // Persist an empty array when all policies are disabled.
+  const summary = form.portalSummary.trim();
+  const description = form.portalDescription.trim();
+  // Keep drafted documentation even while the route is unpublished.
+  dto.portal =
+    form.portalVisible || summary || description
+      ? {
+          visible: form.portalVisible,
+          ...(summary ? { summary } : {}),
+          ...(description ? { description } : {}),
+        }
+      : null;
   return dto;
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
+
+function PortalSection({
+  form,
+  setF,
+}: {
+  form: FormState;
+  setF: (patch: Partial<FormState>) => void;
+}) {
+  const summaryId = useId();
+  const descriptionId = useId();
+  return (
+    <div className="flex flex-col gap-3 border-t border-gray-100 pt-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <span className="text-sm font-medium text-gray-700">
+            Developer portal
+          </span>
+          <p className="text-xs text-gray-500">
+            Publish this route in your portal catalog. The gateway ignores these
+            fields.
+          </p>
+        </div>
+        <Toggle
+          label="Publish in developer portal"
+          value={form.portalVisible}
+          onChange={(v) => setF({ portalVisible: v })}
+        />
+      </div>
+      <div className="flex flex-col gap-1">
+        <label
+          htmlFor={summaryId}
+          className="text-xs font-medium text-gray-700"
+        >
+          Summary
+        </label>
+        <input
+          id={summaryId}
+          maxLength={160}
+          value={form.portalSummary}
+          onChange={(e) => setF({ portalSummary: e.target.value })}
+          placeholder="List users"
+          className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+        />
+      </div>
+      <div className="flex flex-col gap-1">
+        <label
+          htmlFor={descriptionId}
+          className="text-xs font-medium text-gray-700"
+        >
+          Description (plain text)
+        </label>
+        <textarea
+          id={descriptionId}
+          rows={4}
+          maxLength={4000}
+          value={form.portalDescription}
+          onChange={(e) => setF({ portalDescription: e.target.value })}
+          className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+        />
+        <p className="text-xs text-gray-500">
+          The catalog derives authentication and rate limits from this
+          route&apos;s enforced policies. Upstream services and plugin settings
+          are never published.
+        </p>
+      </div>
+    </div>
+  );
+}
 
 function Toggle({
   label,
@@ -2105,6 +2193,7 @@ export default function RoutesPage() {
                         </div>
                       )}
                     </div>
+                    <PortalSection form={form} setF={setF} />
                   </div>
                 )}
 
