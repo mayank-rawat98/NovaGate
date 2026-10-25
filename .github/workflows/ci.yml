@@ -55,6 +55,16 @@ jobs:
           node-version-file: '.nvmrc'
           cache: 'npm'
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: integrations/terraform-provider/go.mod
+          cache-dependency-path: integrations/terraform-provider/go.sum
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.7
+          terraform_wrapper: false
+
       - run: node tools/npm-verified.mjs ci --no-audit --no-fund
 
       - name: Reject failed npm extraction
@@ -100,6 +110,12 @@ jobs:
           E2E_REDIS_URL: redis://127.0.0.1:16379/7
           PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.local-work/playwright
 
+      - name: Terraform provider acceptance
+        run: npm exec nx run terraform-provider:acceptance
+        env:
+          E2E_DATABASE_URL: postgres://novagate_test:local-verification-only@127.0.0.1:15432/novagate_test
+          E2E_REDIS_URL: redis://127.0.0.1:16379/8
+
       - name: Upload dashboard verification evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -111,4 +127,5 @@ jobs:
             .local-work/dashboard-verification/browser-trace.zip
             .local-work/developer-portal-verification/*.json
             .local-work/portal-gateway-e2e/*
+            .local-work/terraform-acceptance/*
           if-no-files-found: ignore

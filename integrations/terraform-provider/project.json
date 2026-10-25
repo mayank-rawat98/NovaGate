@@ -1,0 +1,58 @@
+{
+  "name": "terraform-provider",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "integrations/terraform-provider",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/dist"],
+      "inputs": [
+        "{projectRoot}/**/*.go",
+        "{projectRoot}/go.mod",
+        "{projectRoot}/go.sum"
+      ],
+      "options": {
+        "command": "go build -trimpath -o dist/terraform-provider-novagate .",
+        "cwd": "integrations/terraform-provider"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "inputs": [
+        "{projectRoot}/**/*.go",
+        "{projectRoot}/go.mod",
+        "{projectRoot}/go.sum"
+      ],
+      "options": {
+        "commands": ["test -z \"$(gofmt -l .)\"", "go vet ./..."],
+        "cwd": "integrations/terraform-provider",
+        "parallel": false
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "inputs": [
+        "{projectRoot}/**/*.go",
+        "{projectRoot}/go.mod",
+        "{projectRoot}/go.sum"
+      ],
+      "options": {
+        "command": "go test ./... -count=1",
+        "cwd": "integrations/terraform-provider"
+      }
+    },
+    "acceptance": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "dependsOn": [{ "projects": ["admin-api"], "target": "build" }],
+      "options": {
+        "commands": [
+          "eslint tools/terraform-acceptance.mjs",
+          "node tools/terraform-acceptance.mjs"
+        ],
+        "parallel": false
+      }
+    }
+  }
+}
