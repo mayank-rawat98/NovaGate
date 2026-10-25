@@ -4,8 +4,10 @@ import {
   Injectable,
   NotFoundException,
   OnModuleDestroy,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { BillingService } from '../billing/billing.service';
 import {
   createHash,
   createHmac,
@@ -63,6 +65,7 @@ export class ConfigImportService implements OnModuleDestroy {
   constructor(
     private readonly db: DataSource,
     private readonly push: ConfigPushService,
+    @Optional() private readonly billing?: BillingService,
   ) {}
   async onModuleDestroy() {
     this.stopping = true;
@@ -126,7 +129,7 @@ export class ConfigImportService implements OnModuleDestroy {
     );
     const consumers: ConsumerConfig[] = await manager.query(
       // Developer portal keys belong to developers, not the declarative document.
-      `SELECT id,name,"keyHash","rateLimitTier",groups FROM ${schema}.consumers WHERE "revokedAt" IS NULL AND "portalDeveloperId" IS NULL ORDER BY name COLLATE "C",id LIMIT $1`,
+      `SELECT id,name,"keyHash","rateLimitTier",groups,"monthlyQuota" FROM ${schema}.consumers WHERE "revokedAt" IS NULL AND "portalDeveloperId" IS NULL ORDER BY name COLLATE "C",id LIMIT $1`,
       [DECLARATIVE_CONFIG_MAX_ENTRIES + 1],
     );
     if (
@@ -152,11 +155,14 @@ export class ConfigImportService implements OnModuleDestroy {
           serviceId: names.get(route.serviceId) ?? '',
         }),
       ),
-      consumers: consumers.map(({ name, rateLimitTier, groups }) => ({
-        name,
-        rateLimitTier,
-        groups: groups ?? [],
-      })),
+      consumers: consumers.map(
+        ({ name, rateLimitTier, groups, monthlyQuota }) => ({
+          name,
+          rateLimitTier,
+          groups: groups ?? [],
+          ...(monthlyQuota ? { monthlyQuota } : {}),
+        }),
+      ),
     };
     try {
       normalizeConfigDocument(structuredClone(document));
@@ -360,6 +366,11 @@ export class ConfigImportService implements OnModuleDestroy {
           [tenant],
         );
         const schema = tenantSchema(tenant);
+        // Before the table lock: plan-capped writes take this lock first.
+        const capacity = await this.billing?.capacityCheck(manager, tenant, [
+          'routes',
+          'consumers',
+        ]);
         // Existing CRUD writes use these tables without the parent-row lock.
         // Block them during reconciliation, including inserts, before rechecking.
         await manager.query(
@@ -442,9 +453,9 @@ export class ConfigImportService implements OnModuleDestroy {
           [JSON.stringify(routes)],
         );
         await manager.query(
-          `INSERT INTO ${schema}.consumers AS c (id,name,"keyHash","rateLimitTier",groups)
-          SELECT id,name,"keyHash","rateLimitTier",groups FROM jsonb_to_recordset($1::jsonb) AS x(id uuid,name text,"keyHash" text,"rateLimitTier" text,groups jsonb)
-          ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,"rateLimitTier"=EXCLUDED."rateLimitTier",groups=EXCLUDED.groups`,
+          `INSERT INTO ${schema}.consumers AS c (id,name,"keyHash","rateLimitTier",groups,"monthlyQuota")
+          SELECT id,name,"keyHash","rateLimitTier",groups,"monthlyQuota" FROM jsonb_to_recordset($1::jsonb) AS x(id uuid,name text,"keyHash" text,"rateLimitTier" text,groups jsonb,"monthlyQuota" integer)
+          ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,"rateLimitTier"=EXCLUDED."rateLimitTier",groups=EXCLUDED.groups,"monthlyQuota"=EXCLUDED."monthlyQuota"`,
           [JSON.stringify(consumers)],
         );
         await manager.query(
@@ -459,6 +470,7 @@ export class ConfigImportService implements OnModuleDestroy {
           `UPDATE ${schema}.consumers SET "revokedAt"=clock_timestamp() WHERE "revokedAt" IS NULL AND "portalDeveloperId" IS NULL AND NOT(id=ANY($1::uuid[]))`,
           [consumers.map((row) => row.id)],
         );
+        await capacity?.();
         const payload = await this.push.persistUpdate(tenant, manager);
         return {
           response: {

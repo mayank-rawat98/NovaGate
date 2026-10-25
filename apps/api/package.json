@@ -152,6 +152,27 @@
           ],
           "parallel": false
         }
+      },
+      "billing-e2e": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build",
+          {
+            "projects": [
+              "admin-api",
+              "control-plane"
+            ],
+            "target": "build"
+          }
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/billing-e2e.mjs",
+            "node tools/billing-e2e.mjs"
+          ],
+          "parallel": false
+        }
       }
     }
   },

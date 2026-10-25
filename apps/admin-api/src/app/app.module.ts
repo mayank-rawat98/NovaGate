@@ -50,6 +50,12 @@ import { GatewayPluginsController } from '../gateway-plugins/gateway-plugins.con
 import { GatewayPluginsService } from '../gateway-plugins/gateway-plugins.service';
 import { CircuitBreakersController } from '../circuit-breakers/circuit-breakers.controller';
 import { CircuitBreakersService } from '../circuit-breakers/circuit-breakers.service';
+import {
+  BillingController,
+  StripeWebhookController,
+} from '../billing/billing.controller';
+import { BillingService } from '../billing/billing.service';
+import { StripeService } from '../billing/stripe.service';
 
 @Module({
   imports: [
@@ -98,6 +104,8 @@ import { CircuitBreakersService } from '../circuit-breakers/circuit-breakers.ser
     PortalAdminController,
     GatewayPluginsController,
     CircuitBreakersController,
+    BillingController,
+    StripeWebhookController,
   ],
   providers: [
     LogStreamService,
@@ -121,6 +129,8 @@ import { CircuitBreakersService } from '../circuit-breakers/circuit-breakers.ser
     PortalDeveloperGuard,
     GatewayPluginsService,
     CircuitBreakersService,
+    BillingService,
+    StripeService,
   ],
 })
 export class AppModule {}

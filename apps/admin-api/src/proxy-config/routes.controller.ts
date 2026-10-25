@@ -20,8 +20,10 @@ import {
   Body,
   BadRequestException,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { BillingService } from '../billing/billing.service';
 import { ConfigPushService } from '../config-push/config-push.service';
 import { tenantSchema } from '../tenants/tenant-schema';
 import { validateRoutePortal } from '../portal/portal-catalog';
@@ -256,6 +258,7 @@ export class RoutesController {
   constructor(
     private readonly dataSource: DataSource,
     private readonly configPush: ConfigPushService,
+    @Optional() private readonly billing?: BillingService,
   ) {}
 
   @AutomationScope('routes:read')
@@ -274,24 +277,28 @@ export class RoutesController {
     validateGraphql(body.graphql);
     const portal = validateRoutePortal(body.portal);
     const schema = tenantSchema(tenantId);
-    const rows = await this.dataSource.query(
-      `INSERT INTO ${schema}.routes
+    const insert = (db: Pick<DataSource, 'query'>) =>
+      db.query(
+        `INSERT INTO ${schema}.routes
          (method, "pathPattern", "serviceId", "authRequired", "rateLimitOverride", enabled,
           retry, plugins, graphql, portal)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-      [
-        body.method,
-        body.pathPattern,
-        body.serviceId,
-        body.authRequired ?? false,
-        body.rateLimitOverride ?? null,
-        body.enabled ?? true,
-        body.retry ? JSON.stringify(body.retry) : null,
-        body.plugins ? JSON.stringify(body.plugins) : null,
-        body.graphql ? JSON.stringify(body.graphql) : null,
-        portal ? JSON.stringify(portal) : null,
-      ],
-    );
+        [
+          body.method,
+          body.pathPattern,
+          body.serviceId,
+          body.authRequired ?? false,
+          body.rateLimitOverride ?? null,
+          body.enabled ?? true,
+          body.retry ? JSON.stringify(body.retry) : null,
+          body.plugins ? JSON.stringify(body.plugins) : null,
+          body.graphql ? JSON.stringify(body.graphql) : null,
+          portal ? JSON.stringify(portal) : null,
+        ],
+      );
+    const rows = this.billing
+      ? await this.billing.withCapacity(tenantId, ['routes'], insert)
+      : await insert(this.dataSource);
     await this.configPush.triggerUpdate(tenantId);
     return rows[0];
   }

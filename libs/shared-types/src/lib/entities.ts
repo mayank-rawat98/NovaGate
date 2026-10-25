@@ -73,6 +73,8 @@ export interface ConsumerEntity {
   groups?: string[];
   /** Set for keys a developer created in the portal; excluded from declarative config. */
   portalDeveloperId?: string | null;
+  /** Requests per UTC calendar month; null is unlimited. */
+  monthlyQuota?: number | null;
   createdAt: string;
   revokedAt?: string;
 }

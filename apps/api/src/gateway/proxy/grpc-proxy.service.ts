@@ -39,6 +39,7 @@ import {
   CircuitBreakerService,
   type CircuitAdmission,
 } from '../circuit-breaker/circuit-breaker.service';
+import { MeteringService } from '../metering/metering.service';
 
 /** gRPC statuses that say the upstream service itself is failing. */
 const GRPC_UPSTREAM_FAILURES = new Set([4, 13, 14]);
@@ -122,8 +123,32 @@ export class GrpcProxyService
     private readonly runner: PluginRunnerService,
     @Optional() private readonly tracing?: OtelService,
     @Optional() private readonly circuits?: CircuitBreakerService,
+    @Optional() private readonly metering?: MeteringService,
   ) {
     this.settings = configService.get('grpc', { infer: true }) ?? DEFAULT_GRPC;
+  }
+  /** Workspace suspension and consumer quotas map to RESOURCE_EXHAUSTED. */
+  private async meterCall(consumerId: string | undefined) {
+    const config = this.configManager.getConfig();
+    const until = config?.suspended ? Date.parse(config.suspended.until) : NaN;
+    if (until > Date.now()) {
+      this.metricsService.incrementQuotaRejection('workspace');
+      throw new GrpcFailure(8, 'Workspace monthly quota exhausted');
+    }
+    if (!this.metering) return;
+    const consumer = consumerId
+      ? config?.consumers.find((item) => item.id === consumerId)
+      : undefined;
+    const result = await this.metering.admit(
+      consumer?.id,
+      consumer?.monthlyQuota,
+    );
+    if (result.allowed) {
+      if (result.degraded) this.metricsService.incrementMeteringError();
+      return;
+    }
+    this.metricsService.incrementQuotaRejection('consumer');
+    throw new GrpcFailure(8, 'Consumer monthly quota exhausted');
   }
   onModuleInit() {
     this.unsubscribe = this.configManager.subscribeConfig(() =>
@@ -383,7 +408,7 @@ export class GrpcProxyService
     const hash = createHash('sha256').update(token).digest('hex');
     const consumer = config?.consumers.find((item) => item.keyHash === hash);
     if (consumer) {
-      ctx.req.user = { id: consumer.id };
+      ctx.req.user = { id: consumer.id, consumerId: consumer.id };
       return;
     }
     try {
@@ -665,6 +690,8 @@ export class GrpcProxyService
       );
       if (call.done) return;
       if (!quota.allowed) throw new GrpcFailure(8, 'Rate limit exceeded');
+      await this.meterCall(ctx.req.user?.consumerId);
+      if (call.done) return;
       const currentService = this.configManager
         .getConfig()
         ?.services.find((item) => item.id === service.id);

@@ -37,6 +37,8 @@ import {
   parsePluginStatuses,
   parseCircuitStatuses,
   CircuitStateMessage,
+  parseUsageReport,
+  UsageReportMessage,
 } from '@api-gateway/shared-types';
 
 import Redis from 'ioredis';
@@ -262,10 +264,11 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
     return this.dataSource.transaction('REPEATABLE READ', async (manager) => {
       const [tenant] = await manager.query(
         // to_jsonb tolerates a schema admin-api has not upgraded yet.
-        `SELECT "gatewayConfigVersion", "caCertPem", "logPrivacy", to_jsonb(t)->'disabledPlugins' AS "disabledPlugins" FROM public.tenants t WHERE id = $1`,
+        `SELECT "gatewayConfigVersion", "caCertPem", "logPrivacy", to_jsonb(t)->'disabledPlugins' AS "disabledPlugins", to_jsonb(t)->>'quotaSuspendedUntil' AS "quotaSuspendedUntil" FROM public.tenants t WHERE id = $1`,
         [tenantId],
       );
       if (!tenant) throw new Error('Tenant not found');
+      const suspendedUntil = Date.parse(tenant.quotaSuspendedUntil ?? '');
       const routes = await manager.query(
         `SELECT r.* FROM ${schema}.routes r WHERE "deletedAt" IS NULL AND enabled = true
           ORDER BY (to_jsonb(r)->>'configOrder')::integer NULLS LAST,(to_jsonb(r)->>'createdAt')::timestamp NULLS LAST,id`,
@@ -295,6 +298,13 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
           logPrivacy: logPrivacyPolicy(tenant.logPrivacy),
           rateLimit: { windowMs: 60000, unauthMax: 100, authMax: 500 },
           disabledPlugins: disabledPluginList(tenant.disabledPlugins),
+          suspended:
+            suspendedUntil > Date.now()
+              ? {
+                  reason: 'QUOTA_EXCEEDED',
+                  until: new Date(suspendedUntil).toISOString(),
+                }
+              : null,
         },
         version: tenant.gatewayConfigVersion,
       };
@@ -409,11 +419,66 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
         await this.redisPub.publish(`circuits:${tenant}`, snapshot);
         break;
       }
+      case 'usage.report': {
+        const report = parseUsageReport(
+          (message as UsageReportMessage).payload,
+        );
+        if (!report) {
+          this.logger.warn(`Rejected invalid usage report from ${tenantId}`);
+          break;
+        }
+        await this.recordUsage(tenantId, report);
+        break;
+      }
       case 'pong':
         this.logger.debug(`Received pong from ${tenantId}`);
         break;
       default:
         this.logger.warn(`Unknown message type: ${message.type}`);
+    }
+  }
+
+  /**
+   * Reports carry cumulative totals, so keeping the largest value per source
+   * makes repeated, reordered or missed reports harmless.
+   */
+  private async recordUsage(
+    tenantId: string,
+    report: NonNullable<ReturnType<typeof parseUsageReport>>,
+  ) {
+    try {
+      for (const month of report.months) {
+        await this.dataSource.query(
+          `INSERT INTO public.usage_meters ("tenantId", month, source, requests)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT ("tenantId", month, source) DO UPDATE
+             SET requests = GREATEST(public.usage_meters.requests, EXCLUDED.requests),
+                 "updatedAt" = NOW()`,
+          [tenantId, month.month, report.source, month.requests],
+        );
+        if (!month.consumers.length) continue;
+        await this.dataSource.query(
+          `INSERT INTO public.consumer_usage_meters ("tenantId", month, source, "consumerId", requests)
+           SELECT $1, $2, $3, c.id, c.requests
+             FROM unnest($4::uuid[], $5::bigint[]) AS c(id, requests)
+           ON CONFLICT ("tenantId", month, source, "consumerId") DO UPDATE
+             SET requests = GREATEST(public.consumer_usage_meters.requests, EXCLUDED.requests)`,
+          [
+            tenantId,
+            month.month,
+            report.source,
+            month.consumers.map((c) => c.consumerId),
+            month.consumers.map((c) => c.requests),
+          ],
+        );
+      }
+    } catch (error) {
+      // The admin API owns this schema; before its upgrade, drop the report.
+      if ((error as { code?: string }).code === '42P01') {
+        this.logger.warn('Usage meters are not installed yet; report dropped');
+        return;
+      }
+      throw error;
     }
   }
 

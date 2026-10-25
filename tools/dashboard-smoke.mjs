@@ -27,6 +27,10 @@ import {
   anomaliesBrowserFixture,
   verifyAnomaliesDashboard,
 } from './anomalies-dashboard-smoke.mjs';
+import {
+  billingBrowserFixture,
+  verifyBillingDashboard,
+} from './billing-dashboard-smoke.mjs';
 import { createServer } from 'node:http';
 import {
   existsSync,
@@ -75,6 +79,7 @@ let developerPortalEvidence;
 let gatewayPluginsEvidence;
 let circuitBreakersEvidence;
 let anomaliesEvidence;
+let billingEvidence;
 let coldLoads = 0;
 const startedAt = Date.now();
 let metricsConnections = 0;
@@ -137,6 +142,7 @@ const developerPortalFixture = developerPortalBrowserFixture();
 const gatewayPluginsFixture = gatewayPluginsBrowserFixture();
 const circuitBreakersFixture = await circuitBreakersBrowserFixture();
 const anomaliesFixture = anomaliesBrowserFixture();
+const billingFixture = billingBrowserFixture(base);
 const service = '23456789-1234-1234-1234-123456789abc';
 const traceId = '0123456789abcdef0123456789abcdef';
 let traceMode = 'normal';
@@ -294,6 +300,7 @@ const handleApiFixture = async (route) => {
   if (await gatewayPluginsFixture.handle(route)) return;
   if (await circuitBreakersFixture.handle(route)) return;
   if (await anomaliesFixture.handle(route)) return;
+  if (await billingFixture.handle(route)) return;
   if (resource === 'log-retention') {
     const tenant =
       url.pathname.split('/')[url.pathname.split('/').indexOf('tenants') + 1];
@@ -2586,6 +2593,12 @@ try {
     audit,
     fixture: anomaliesFixture,
   });
+  billingEvidence = await verifyBillingDashboard({
+    page,
+    base,
+    audit,
+    fixture: billingFixture,
+  });
   writeFileSync(
     resolve(artifacts, 'accessibility.json'),
     JSON.stringify(violations, null, 2),
@@ -2643,6 +2656,7 @@ try {
           gatewayPlugins: gatewayPluginsEvidence,
           circuitBreakers: circuitBreakersEvidence,
           anomalies: anomaliesEvidence,
+          billing: billingEvidence,
           runtimeErrors,
           accessibilityViolations: violations,
         },

@@ -158,6 +158,17 @@ export class MetricsService {
     labelNames: ['service'],
     registers: [this.registry],
   });
+  private readonly quotaRejectionsTotal = new Counter({
+    name: 'gateway_quota_rejections_total',
+    help: 'Requests refused with QUOTA_EXCEEDED',
+    labelNames: ['scope'],
+    registers: [this.registry],
+  });
+  private readonly meteringErrorsTotal = new Counter({
+    name: 'gateway_metering_redis_errors_total',
+    help: 'Requests admitted without metering because Redis failed',
+    registers: [this.registry],
+  });
   private readonly circuitRejectionsTotal = new Counter({
     name: 'gateway_circuit_breaker_rejections_total',
     help: 'Requests refused because the service circuit was open',
@@ -239,6 +250,14 @@ export class MetricsService {
 
   incrementDownstreamTimeout(service: string): void {
     this.downstreamTimeoutTotal.labels(service).inc();
+  }
+
+  incrementQuotaRejection(scope: 'workspace' | 'consumer'): void {
+    this.quotaRejectionsTotal.labels(scope).inc();
+  }
+
+  incrementMeteringError(): void {
+    this.meteringErrorsTotal.inc();
   }
 
   incrementCircuitRejection(service: string): void {

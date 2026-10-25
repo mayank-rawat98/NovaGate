@@ -19,6 +19,7 @@ import {
   Activity,
   Bell,
   ArrowUpRight,
+  CreditCard,
 } from 'lucide-react';
 import { containDialogFocus } from './workspace-dialog';
 import { GatewayStatusPill } from './gateway-status-pill';
@@ -68,6 +69,12 @@ const NAV_ITEMS = [
     label: 'Errors',
     icon: AlertTriangle,
     group: 'Observability',
+  },
+  {
+    href: '/billing',
+    label: 'Plan & usage',
+    icon: CreditCard,
+    group: 'Workspace settings',
   },
   {
     href: '/settings',

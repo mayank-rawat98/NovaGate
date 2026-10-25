@@ -54,6 +54,8 @@ import type {
   Anomaly,
   AnomalySettings,
   SaveAnomalySettings,
+  BillingOverview,
+  ConsumerQuotaUsage,
 } from '@api-gateway/shared-types';
 import { parseCircuitStatuses } from '@api-gateway/shared-types';
 import { getToken, clearToken } from './auth';
@@ -126,8 +128,13 @@ export type CreateConsumerDto = {
   name: string;
   rateLimitTier?: string;
   groups?: string[];
+  /** Requests per UTC month; null or omitted for no quota. */
+  monthlyQuota?: number | null;
 };
-export type UpdateConsumerDto = { groups?: string[] };
+export type UpdateConsumerDto = {
+  groups?: string[];
+  monthlyQuota?: number | null;
+};
 export type CreateConsumerResult = ConsumerEntity & { apiKey: string };
 
 // Same-origin requests use the Next.js admin API rewrite in each deployment.
@@ -1022,6 +1029,26 @@ export function saveDisabledPlugins(
   return request(`/tenants/${tenantId}/gateway-plugins`, {
     method: 'PUT',
     body: JSON.stringify(input),
+    signal,
+  });
+}
+export function getBilling(tenantId: string): Promise<BillingOverview> {
+  return request(`/tenants/${tenantId}/billing`);
+}
+export function getConsumerQuotas(
+  tenantId: string,
+): Promise<ConsumerQuotaUsage[]> {
+  return request(`/tenants/${tenantId}/billing/consumer-quotas`);
+}
+/** Returns the Stripe Checkout address to send the browser to. */
+export function startCheckout(
+  tenantId: string,
+  planId: string,
+  signal?: AbortSignal,
+): Promise<{ url: string }> {
+  return request(`/tenants/${tenantId}/billing/checkout`, {
+    method: 'POST',
+    body: JSON.stringify({ planId }),
     signal,
   });
 }

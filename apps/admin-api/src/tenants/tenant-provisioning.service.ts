@@ -1,5 +1,6 @@
 import { alertSchemaSql } from '../alerts/alert-schema';
 import { anomalySchemaSql } from '../anomalies/anomaly-schema';
+import { billingTenantSql } from '../billing/billing-schema';
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import * as crypto from 'crypto';
@@ -148,6 +149,7 @@ export class TenantProvisioningService {
       `);
       await manager.query(alertSchemaSql(tenantId));
       await manager.query(anomalySchemaSql(tenantId));
+      await manager.query(billingTenantSql(tenantId));
       await manager.query(
         `CREATE INDEX IF NOT EXISTS metrics_snapshots_time ON ${schemaName}.metrics_snapshots (timestamp DESC)`,
       );

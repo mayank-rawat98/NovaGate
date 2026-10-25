@@ -41,10 +41,12 @@ export class TenantAuthGuard implements CanActivate {
       PATH_METADATA,
       context.getClass(),
     );
-    // Portal controllers authenticate developers with their own guard.
+    // Portal controllers authenticate developers with their own guard;
+    // Stripe webhooks are authenticated by their signature.
     if (
       controllerPath === 'auth' ||
       controllerPath === 'health' ||
+      controllerPath === 'billing/stripe' ||
       controllerPath === 'portal' ||
       controllerPath?.startsWith('portal/')
     )

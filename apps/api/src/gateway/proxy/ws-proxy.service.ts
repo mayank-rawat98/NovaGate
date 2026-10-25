@@ -44,6 +44,7 @@ import {
   CircuitBreakerService,
   type CircuitAdmission,
 } from '../circuit-breaker/circuit-breaker.service';
+import { MeteringService } from '../metering/metering.service';
 
 interface Connection {
   socket: net.Socket;
@@ -93,11 +94,49 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
     private readonly runner: PluginRunnerService,
     @Optional() private readonly tracing?: OtelService,
     @Optional() private readonly circuits?: CircuitBreakerService,
+    @Optional() private readonly metering?: MeteringService,
   ) {
     this.settings = {
       ...DEFAULT_WEBSOCKET,
       ...this.configService.get('websocket', { infer: true }),
     };
+  }
+  /** Workspace suspension and consumer monthly quotas apply to upgrades. */
+  private async meterUpgrade(consumerId: string | undefined) {
+    const config = this.configManager.getConfig();
+    const until = config?.suspended ? Date.parse(config.suspended.until) : NaN;
+    if (until > Date.now()) {
+      this.metricsService.incrementQuotaRejection('workspace');
+      throw new WsFailure(
+        429,
+        'QUOTA_EXCEEDED',
+        'The monthly request quota for this workspace is exhausted',
+        { 'retry-after': String(Math.ceil((until - Date.now()) / 1000)) },
+      );
+    }
+    if (!this.metering) return;
+    const consumer = consumerId
+      ? config?.consumers.find((item) => item.id === consumerId)
+      : undefined;
+    const result = await this.metering.admit(
+      consumer?.id,
+      consumer?.monthlyQuota,
+    );
+    if (result.allowed) {
+      if (result.degraded) this.metricsService.incrementMeteringError();
+      return;
+    }
+    this.metricsService.incrementQuotaRejection('consumer');
+    throw new WsFailure(
+      429,
+      'QUOTA_EXCEEDED',
+      'The monthly request quota for this consumer is exhausted',
+      {
+        'retry-after': String(
+          Math.ceil((result.resetAt.getTime() - Date.now()) / 1000),
+        ),
+      },
+    );
   }
   get occupiedConnections() {
     return this.connections.size + this.detachedAdmissions.size;
@@ -249,7 +288,7 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
       .getConfig()
       ?.consumers.find((item) => item.keyHash === hash);
     if (consumer) {
-      ctx.req.user = { id: consumer.id };
+      ctx.req.user = { id: consumer.id, consumerId: consumer.id };
       return;
     }
     try {
@@ -467,6 +506,8 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
       if (active.done) return;
       if (!quota.allowed)
         throw new WsFailure(429, 'RATE_LIMIT_EXCEEDED', 'Rate limit exceeded');
+      await this.meterUpgrade(ctx.req.user?.consumerId);
+      if (active.done) return;
       if (!this.current(active))
         throw new WsFailure(
           503,

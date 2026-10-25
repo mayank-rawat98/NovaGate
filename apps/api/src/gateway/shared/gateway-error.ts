@@ -13,7 +13,8 @@ export type GatewayErrorCode =
   | 'SERVICE_NOT_FOUND'
   | 'IP_RESTRICTED'
   | 'REQUEST_TOO_LARGE'
-  | 'CIRCUIT_OPEN';
+  | 'CIRCUIT_OPEN'
+  | 'QUOTA_EXCEEDED';
 
 export class GatewayError extends HttpException {
   readonly code: GatewayErrorCode;
