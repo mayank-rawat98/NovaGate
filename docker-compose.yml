@@ -179,8 +179,31 @@ services:
       - gateway-net
       - edge # reached by the shared Caddy in the squadup stack
 
-networks:
-  gateway-net:
+  # Opt in with `docker compose --profile portal up -d`. Route the shared host
+  # and any workspace custom domains to this service over HTTPS.
+  developer-portal:
+    image: ghcr.io/${NOVAGATE_IMAGE_OWNER:-mayank-rawat98}/developer-portal:${NOVAGATE_IMAGE_TAG:-latest}
+    profiles: ['portal']
+    environment:
+      ADMIN_API_URL: http://admin-api:3001
+      PORT: 3004
+      HOSTNAME: '0.0.0.0'
+      # Hosts that serve every workspace under /w/:tenantId; other hosts are
+      # resolved as workspace custom domains.
+      PORTAL_SHARED_HOSTS: ${PORTAL_SHARED_HOSTS:-localhost,127.0.0.1}
+    depends_on:
+      admin-api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3004/ || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - gateway-net
+      - edge
+
     driver: bridge
 
   # TLS and routing for novagate.dev are handled by the Caddy in the squadup

@@ -20,6 +20,9 @@
     },
     {
       "path": "./tools/gwx"
+    },
+    {
+      "path": "./apps/developer-portal"
     }
   ]
 }

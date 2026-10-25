@@ -17,7 +17,7 @@ env:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine
@@ -88,6 +88,18 @@ jobs:
           NEXT_PUBLIC_ADMIN_API_URL: '/'
           PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.local-work/playwright
 
+      - name: Developer portal browser and accessibility checks
+        run: npm exec nx run developer-portal:ui-smoke
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.local-work/playwright
+
+      - name: Developer portal to gateway end-to-end
+        run: npm exec nx run developer-portal:gateway-e2e
+        env:
+          E2E_DATABASE_URL: postgres://novagate_test:local-verification-only@127.0.0.1:15432/novagate_test
+          E2E_REDIS_URL: redis://127.0.0.1:16379/7
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.local-work/playwright
+
       - name: Upload dashboard verification evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -97,4 +109,6 @@ jobs:
             .local-work/dashboard-verification/*.png
             .local-work/dashboard-verification/*.json
             .local-work/dashboard-verification/browser-trace.zip
+            .local-work/developer-portal-verification/*.json
+            .local-work/portal-gateway-e2e/*
           if-no-files-found: ignore
