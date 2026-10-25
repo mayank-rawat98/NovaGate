@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import * as http from 'http';
 import { performance } from 'node:perf_hooks';
 import type * as net from 'net';
@@ -33,6 +33,10 @@ import {
   RequestBodyService,
   BodyCaptureError,
 } from '../shared/request-body.service';
+import {
+  CircuitBreakerService,
+  type CircuitAdmission,
+} from '../circuit-breaker/circuit-breaker.service';
 
 // Per-request context attached to the request object so cached handlers can
 // read retry state without holding per-request closures.
@@ -46,6 +50,8 @@ interface RetryContext {
   upstreamStarted?: boolean;
   trace?: GatewayTraceHandle;
   outcome?: number;
+  /** Circuit-breaker admission for this attempt; settles at upstream classification. */
+  circuit?: CircuitAdmission;
 }
 
 interface PluginState {
@@ -93,7 +99,37 @@ export class ProxyService {
       new ConfigService(),
     ),
     private readonly config: ConfigService = new ConfigService(),
-  ) {}
+    @Optional() private readonly circuits?: CircuitBreakerService,
+  ) {
+    circuits?.onChange(() => {
+      const names = new Map(
+        (this.configManager.getConfig()?.services ?? []).map((service) => [
+          service.id,
+          service.name,
+        ]),
+      );
+      this.metricsService.setCircuitStates(
+        circuits.statuses().map((status) => ({
+          service: names.get(status.serviceId) ?? status.serviceId,
+          state: status.state,
+        })),
+      );
+    });
+  }
+
+  /** Admits one upstream attempt or refuses it while the service's circuit is open. */
+  private admitCircuit(service: ServiceConfig): CircuitAdmission | undefined {
+    if (!this.circuits) return undefined;
+    const admission = this.circuits.admit(service.id);
+    if (admission.allowed) return admission;
+    this.metricsService.incrementCircuitRejection(service.name);
+    throw new GatewayError(
+      'CIRCUIT_OPEN',
+      'Upstream service is temporarily unavailable',
+      503,
+      { 'Retry-After': String(admission.retryAfterSeconds) },
+    );
+  }
 
   async forward(request: Request, response: ResponseWithLocals): Promise<void> {
     const originalUrl = request.originalUrl ?? request.url ?? '';
@@ -253,13 +289,21 @@ export class ProxyService {
         service.id,
       );
       const isLastAttempt = attempt === maxAttempts - 1;
-      const lease = this.loadBalancer.acquireTarget(
-        service.id,
-        service.targets,
-        healthyUrls,
-        service.unhealthyFallback === true,
-        service.loadBalancing,
-      );
+      // Retried attempts never commit a response, so refusing here is safe.
+      const circuit = this.admitCircuit(service);
+      let lease: TargetLease;
+      try {
+        lease = this.loadBalancer.acquireTarget(
+          service.id,
+          service.targets,
+          healthyUrls,
+          service.unhealthyFallback === true,
+          service.loadBalancing,
+        );
+      } catch (error) {
+        circuit?.settle('neutral');
+        throw error;
+      }
       const targetUrl = lease.url;
       const attemptTrace = response.locals.trace?.child(
         useH2 ? 'upstream HTTP2' : 'upstream HTTP1',
@@ -275,30 +319,38 @@ export class ProxyService {
       // Reset the URL for each attempt (safe for GET/HEAD/OPTIONS which have no body)
       request.url = finalUrl;
 
-      const statusCode = useH2
-        ? await this.callH2Proxy(
-            targetUrl,
-            finalUrl,
-            service,
-            route,
-            request,
-            response,
-            canRetry && !isLastAttempt,
-            retryOn,
-            lease,
-            attemptTrace,
-          )
-        : await this.callProxy(
-            targetUrl,
-            service,
-            request,
-            response,
-            !canRetry || isLastAttempt,
-            retryOn,
-            undefined,
-            lease,
-            attemptTrace,
-          );
+      let statusCode: number;
+      try {
+        statusCode = useH2
+          ? await this.callH2Proxy(
+              targetUrl,
+              finalUrl,
+              service,
+              route,
+              request,
+              response,
+              canRetry && !isLastAttempt,
+              retryOn,
+              lease,
+              attemptTrace,
+              circuit,
+            )
+          : await this.callProxy(
+              targetUrl,
+              service,
+              request,
+              response,
+              !canRetry || isLastAttempt,
+              retryOn,
+              undefined,
+              lease,
+              attemptTrace,
+              circuit,
+            );
+      } finally {
+        // No upstream classification (for example a client body failure).
+        circuit?.settle('neutral');
+      }
 
       if (canRetry && !isLastAttempt && retryOn.includes(statusCode)) {
         this.metricsService.incrementProxyRetry(route.pathPattern, attempt + 1);
@@ -323,6 +375,7 @@ export class ProxyService {
     absoluteTimeoutMs?: number,
     lease?: TargetLease,
     attemptTrace?: GatewayTraceHandle,
+    circuit?: CircuitAdmission,
   ): Promise<number> {
     const retryContext: RetryContext = {
       retryOn,
@@ -333,6 +386,7 @@ export class ProxyService {
       upstreamStarted: false,
       trace: attemptTrace,
       outcome: 499,
+      circuit,
     };
     return new Promise<number>((resolve) => {
       let settled = false;
@@ -361,13 +415,24 @@ export class ProxyService {
         );
         resolveOnce(response.writableFinished ? response.statusCode : 499);
       };
+      // The proxy's idle timeout also applies to the client socket and can
+      // close it before the upstream timeout reports. A fully received
+      // request that times out is waiting on the upstream; a stalled upload
+      // is the caller's.
+      const onSocketTimeout = () => {
+        if (request.complete) circuit?.record(504);
+        else circuit?.settle('neutral');
+      };
+      const socket = request.socket;
       cleanup = () => {
         clearTimeout(deadline);
         response.off('finish', onFinish);
         response.off('close', onClose);
+        socket?.off('timeout', onSocketTimeout);
       };
       response.once('finish', onFinish);
       response.once('close', onClose);
+      if (circuit) socket?.once('timeout', onSocketTimeout);
       if (absoluteTimeoutMs !== undefined) {
         deadline = setTimeout(() => {
           if (settled) return;
@@ -387,6 +452,7 @@ export class ProxyService {
               }),
             );
           } else {
+            circuit?.record(504);
             if (isLastAttempt) {
               this.metricsService.incrementDownstreamTimeout(service.name);
               response.statusCode = 504;
@@ -410,6 +476,7 @@ export class ProxyService {
         response as unknown as http.ServerResponse,
         (err?: unknown) => {
           if (err && !response.headersSent) {
+            circuit?.record(502);
             resolveOnce(502);
           } else {
             resolveOnce(response.statusCode ?? 200);
@@ -436,6 +503,7 @@ export class ProxyService {
     retryOn: number[],
     lease: TargetLease,
     attemptTrace?: GatewayTraceHandle,
+    circuit?: CircuitAdmission,
   ): Promise<number> {
     const requestId = this.getRequestIdFromRequest(request, response);
 
@@ -488,6 +556,7 @@ export class ProxyService {
       );
 
       outcome = h2res.statusCode;
+      circuit?.record(h2res.statusCode);
       // A retryable status with attempts left: don't commit the response —
       // let the outer loop retry, mirroring the HTTP/1 proxy path.
       if (retriesRemaining && retryOn.includes(h2res.statusCode)) {
@@ -541,6 +610,7 @@ export class ProxyService {
             remaining,
             lease,
             fallbackTrace,
+            circuit,
           );
         }
         failure = new Http2PoolError(504, 'DOWNSTREAM_TIMEOUT');
@@ -554,6 +624,8 @@ export class ProxyService {
           ? failure.code
           : 'DOWNSTREAM_ERROR';
       outcome = status;
+      // Client body failures say nothing about the upstream service.
+      if (!(failure instanceof BodyCaptureError)) circuit?.record(status);
       if (status === 504)
         this.metricsService.incrementDownstreamTimeout(service.name);
       this.logger.warn(
@@ -634,6 +706,9 @@ export class ProxyService {
               retryContext.lease?.release();
               retryContext.trace?.end(retryContext.outcome);
             });
+            // The upstream deadline fires here even when the client socket's
+            // own timeout closes the connection and suppresses the error event.
+            proxyReq.once('timeout', () => retryContext.circuit?.record(504));
             if (retryContext.trace) {
               for (const header of ['traceparent', 'tracestate', 'baggage'])
                 proxyReq.removeHeader(header);
@@ -672,6 +747,7 @@ export class ProxyService {
             req as unknown as GwRequest
           ).__gw_retry;
           if (retryCtx) retryCtx.outcome = statusCode;
+          retryCtx?.circuit?.record(statusCode);
           const requestId = this.getRequestId(req, res);
 
           if (
@@ -742,6 +818,10 @@ export class ProxyService {
           const nodeError = error as NodeJS.ErrnoException;
           const isTimeout = this.isTimeoutError(nodeError);
           const statusCode = isTimeout ? 504 : 502;
+          // Caller cancellation (ECANCELED) is neutral for the breaker.
+          if (nodeError.code === 'ECANCELED')
+            retryCtx?.circuit?.settle('neutral');
+          else retryCtx?.circuit?.record(statusCode);
 
           // Run onError plugins — first short-circuit wins
           const pluginState: PluginState | undefined = (

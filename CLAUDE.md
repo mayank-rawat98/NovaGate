@@ -136,6 +136,7 @@ metrics/        MetricsService (prom-client) + MetricsController (/metrics)
 health/         HealthController (/health) + UpstreamHealthService (polls targets every 10s)
 config-manager/ GatewayConfigManagerService — in-memory config + Redis warm-start
 connector/      ControlPlaneConnectorService — WS lifecycle, reconnect, message buffer
+circuit-breaker/ CircuitBreakerService — per-service circuits for every protocol (#115)
 telemetry/      GatewayTelemetryService — batches telemetry to send upstream
 services/       ServicesModule — TypeORM entity + repository for service config
 plugins/        PluginRegistryService + PluginRunnerService + 12 built-in plugins

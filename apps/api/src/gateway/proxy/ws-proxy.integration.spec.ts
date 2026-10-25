@@ -26,6 +26,8 @@ import { AclPlugin } from '../plugins/acl/acl.plugin';
 import { IpRestrictionPlugin } from '../plugins/ip-restriction/ip-restriction.plugin';
 import { OidcPlugin } from '../plugins/oidc/oidc.plugin';
 import { OAuth2ClientCredentialsPlugin } from '../plugins/oauth2-client-credentials/oauth2-client-credentials.plugin';
+import { CircuitBreakerService } from '../circuit-breaker/circuit-breaker.service';
+import { DEFAULT_CIRCUIT_BREAKER } from '@api-gateway/shared-types';
 
 const secret = 'websocket-verification-secret-at-least-32-characters';
 const key = 'websocket-consumer-verification-key';
@@ -46,7 +48,8 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
   let manager: GatewayConfigManagerService;
   let config: TenantConfig;
   let healthy: boolean;
-  let mode: 'echo' | 'stall' | 'refuse' | 'invalid' | 'flood';
+  let mode: 'echo' | 'stall' | 'refuse' | 'unavailable' | 'invalid' | 'flood';
+  let circuits: CircuitBreakerService | undefined;
   let received: Array<{ url: string; headers: http.IncomingHttpHeaders }>;
   let version: number;
   let base: string;
@@ -64,6 +67,7 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
     incrementWsConnections: jest.fn(),
     decrementWsConnections: jest.fn(),
     incrementWsBytes: jest.fn(),
+    incrementCircuitRejection: jest.fn(),
   };
   let extraPlugins: GatewayPlugin[];
   const redis = {
@@ -117,6 +121,7 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
       ]),
       new PluginRunnerService(),
       tracing,
+      circuits,
     );
   }
   async function restart(settings: Partial<WebSocketSettings> = {}) {
@@ -188,6 +193,12 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
       if (mode === 'stall') return;
       if (mode === 'refuse') {
         socket.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n');
+        return;
+      }
+      if (mode === 'unavailable') {
+        socket.end(
+          'HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n',
+        );
         return;
       }
       if (mode === 'invalid') {
@@ -582,6 +593,47 @@ describe('authenticated WebSocket tunnels over real sockets', () => {
       expect(metrics.incrementWsConnections).not.toHaveBeenCalled();
     },
   );
+  it('refuses upgrades while the service circuit is open, then probes and closes it', async () => {
+    circuits = new CircuitBreakerService(manager);
+    circuits.onModuleInit();
+    try {
+      config.services[0].circuitBreaker = {
+        ...DEFAULT_CIRCUIT_BREAKER,
+        minimumRequests: 2,
+        openMs: 1000,
+      };
+      await install();
+      await restart();
+      // Upstream 4xx refusals are not failures of the service.
+      mode = 'refuse';
+      for (let i = 0; i < 3; i++)
+        expect((await reject()).body.error).toBe('DOWNSTREAM_ERROR');
+      expect(circuits.stateOf('service')).toBe('closed');
+      mode = 'unavailable';
+      // 3 refusals + 4 failures: 4/7 > 50%.
+      for (let i = 0; i < 4; i++) await reject();
+      expect(circuits.stateOf('service')).toBe('open');
+      const before = received.length;
+      const refused = await reject();
+      expect(refused.status).toBe(503);
+      expect(refused.body.error).toBe('CIRCUIT_OPEN');
+      expect(refused.headers['retry-after']).toBe('1');
+      expect(received).toHaveLength(before);
+      expect(metrics.incrementCircuitRejection).toHaveBeenCalledWith('Echo');
+      mode = 'echo';
+      await new Promise((resolve) => setTimeout(resolve, 1050));
+      for (let i = 0; i < 2; i++) {
+        const ws = connect();
+        await once(ws, 'open');
+        ws.close();
+        await once(ws, 'close');
+      }
+      expect(circuits.stateOf('service')).toBe('closed');
+    } finally {
+      circuits.onModuleDestroy();
+      circuits = undefined;
+    }
+  });
   it('rejects unavailable peers unless fallback is explicitly enabled', async () => {
     healthy = false;
     expect((await reject()).body.error).toBe('NO_HEALTHY_TARGETS');

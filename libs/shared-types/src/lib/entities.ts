@@ -57,6 +57,8 @@ export interface ServiceEntity {
   loadBalancing?: 'weighted-round-robin' | 'least-connections';
   h2?: boolean;
   supportsWebSocket?: boolean;
+  /** Null for services created before roadmap 6.2 until a breaker is enabled. */
+  circuitBreaker?: import('./circuit-breaker.ts').CircuitBreakerConfig | null;
   timeoutMs: number;
   createdAt: string;
   deletedAt?: string;

@@ -117,7 +117,7 @@ export class ConfigImportService implements OnModuleDestroy {
     );
     if (!profile) throw new NotFoundException('Workspace not found');
     const services: ServiceConfig[] = await manager.query(
-      `SELECT id,name,targets,"healthCheckPath","timeoutMs","healthCheckIntervalMs","healthCheckProtocol","healthCheckService","unhealthyFallback",h2,"supportsWebSocket","loadBalancing" FROM ${schema}.services WHERE "deletedAt" IS NULL ORDER BY name COLLATE "C",id LIMIT $1`,
+      `SELECT id,name,targets,"healthCheckPath","timeoutMs","healthCheckIntervalMs","healthCheckProtocol","healthCheckService","unhealthyFallback",h2,"supportsWebSocket","loadBalancing","circuitBreaker" FROM ${schema}.services WHERE "deletedAt" IS NULL ORDER BY name COLLATE "C",id LIMIT $1`,
       [DECLARATIVE_CONFIG_MAX_ENTRIES + 1],
     );
     const routes: Snapshot['routes'] = await manager.query(
@@ -428,10 +428,10 @@ export class ConfigImportService implements OnModuleDestroy {
           };
         });
         await manager.query(
-          `INSERT INTO ${schema}.services AS s (id,name,targets,"healthCheckPath","timeoutMs","healthCheckIntervalMs","healthCheckProtocol","healthCheckService","unhealthyFallback",h2,"supportsWebSocket","loadBalancing")
-          SELECT id,name,targets,"healthCheckPath","timeoutMs","healthCheckIntervalMs","healthCheckProtocol","healthCheckService","unhealthyFallback",h2,"supportsWebSocket","loadBalancing"
-          FROM jsonb_to_recordset($1::jsonb) AS x(id uuid,name text,targets jsonb,"healthCheckPath" text,"timeoutMs" integer,"healthCheckIntervalMs" integer,"healthCheckProtocol" text,"healthCheckService" text,"unhealthyFallback" boolean,h2 boolean,"supportsWebSocket" boolean,"loadBalancing" text)
-          ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,targets=EXCLUDED.targets,"healthCheckPath"=EXCLUDED."healthCheckPath","timeoutMs"=EXCLUDED."timeoutMs","healthCheckIntervalMs"=EXCLUDED."healthCheckIntervalMs","healthCheckProtocol"=EXCLUDED."healthCheckProtocol","healthCheckService"=EXCLUDED."healthCheckService","unhealthyFallback"=EXCLUDED."unhealthyFallback",h2=EXCLUDED.h2,"supportsWebSocket"=EXCLUDED."supportsWebSocket","loadBalancing"=EXCLUDED."loadBalancing"`,
+          `INSERT INTO ${schema}.services AS s (id,name,targets,"healthCheckPath","timeoutMs","healthCheckIntervalMs","healthCheckProtocol","healthCheckService","unhealthyFallback",h2,"supportsWebSocket","loadBalancing","circuitBreaker")
+          SELECT id,name,targets,"healthCheckPath","timeoutMs","healthCheckIntervalMs","healthCheckProtocol","healthCheckService","unhealthyFallback",h2,"supportsWebSocket","loadBalancing","circuitBreaker"
+          FROM jsonb_to_recordset($1::jsonb) AS x(id uuid,name text,targets jsonb,"healthCheckPath" text,"timeoutMs" integer,"healthCheckIntervalMs" integer,"healthCheckProtocol" text,"healthCheckService" text,"unhealthyFallback" boolean,h2 boolean,"supportsWebSocket" boolean,"loadBalancing" text,"circuitBreaker" jsonb)
+          ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,targets=EXCLUDED.targets,"healthCheckPath"=EXCLUDED."healthCheckPath","timeoutMs"=EXCLUDED."timeoutMs","healthCheckIntervalMs"=EXCLUDED."healthCheckIntervalMs","healthCheckProtocol"=EXCLUDED."healthCheckProtocol","healthCheckService"=EXCLUDED."healthCheckService","unhealthyFallback"=EXCLUDED."unhealthyFallback",h2=EXCLUDED.h2,"supportsWebSocket"=EXCLUDED."supportsWebSocket","loadBalancing"=EXCLUDED."loadBalancing","circuitBreaker"=EXCLUDED."circuitBreaker"`,
           [JSON.stringify(services)],
         );
         await manager.query(

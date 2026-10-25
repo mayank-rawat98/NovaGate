@@ -72,6 +72,18 @@ const documentSchema = Joi.object({
         loadBalancing: Joi.string()
           .valid('weighted-round-robin', 'least-connections')
           .default('weighted-round-robin'),
+        // Explicit in documents: absent means no breaker, so older exports
+        // never change traffic when re-imported.
+        circuitBreaker: Joi.object({
+          enabled: bool.required(),
+          windowSize: integer(5, 100).required(),
+          failureRatePercent: integer(1, 99).required(),
+          minimumRequests: integer(1, 100).required(),
+          openMs: integer(1000, 300000).required(),
+          halfOpenSuccesses: integer(1, 10).required(),
+        })
+          .allow(null)
+          .default(null),
       }),
     )
     .required(),

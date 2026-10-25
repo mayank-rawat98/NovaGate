@@ -12,3 +12,4 @@ export * from './lib/alerts.ts';
 export * from './lib/automation-tokens.ts';
 export * from './lib/portal.ts';
 export * from './lib/third-party-plugins.ts';
+export * from './lib/circuit-breaker.ts';

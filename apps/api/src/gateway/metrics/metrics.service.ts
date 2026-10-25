@@ -158,6 +158,18 @@ export class MetricsService {
     labelNames: ['service'],
     registers: [this.registry],
   });
+  private readonly circuitRejectionsTotal = new Counter({
+    name: 'gateway_circuit_breaker_rejections_total',
+    help: 'Requests refused because the service circuit was open',
+    labelNames: ['service'],
+    registers: [this.registry],
+  });
+  private readonly circuitState = new Gauge({
+    name: 'gateway_circuit_breaker_state',
+    help: 'Circuit state per service: 0 closed, 1 half-open, 2 open',
+    labelNames: ['service'],
+    registers: [this.registry],
+  });
   private readonly proxyRetriesTotal = new Counter({
     name: 'gateway_proxy_retries_total',
     help: 'Total proxy retry attempts',
@@ -227,6 +239,21 @@ export class MetricsService {
 
   incrementDownstreamTimeout(service: string): void {
     this.downstreamTimeoutTotal.labels(service).inc();
+  }
+
+  incrementCircuitRejection(service: string): void {
+    this.circuitRejectionsTotal.labels(service).inc();
+  }
+
+  /** Replaces every circuit state, so removed services drop their series. */
+  setCircuitStates(
+    states: Array<{ service: string; state: 'closed' | 'half-open' | 'open' }>,
+  ): void {
+    this.circuitState.reset();
+    for (const { service, state } of states)
+      this.circuitState
+        .labels(service)
+        .set(state === 'open' ? 2 : state === 'half-open' ? 1 : 0);
   }
 
   incrementProxyRetry(route: string, attempt: number): void {

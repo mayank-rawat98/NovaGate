@@ -34,19 +34,37 @@ type targetModel struct {
 	Weight types.Int64  `tfsdk:"weight"`
 }
 
+type circuitBreakerModel struct {
+	Enabled            types.Bool  `tfsdk:"enabled"`
+	WindowSize         types.Int64 `tfsdk:"window_size"`
+	FailureRatePercent types.Int64 `tfsdk:"failure_rate_percent"`
+	MinimumRequests    types.Int64 `tfsdk:"minimum_requests"`
+	OpenMs             types.Int64 `tfsdk:"open_ms"`
+	HalfOpenSuccesses  types.Int64 `tfsdk:"half_open_successes"`
+}
+
 type serviceModel struct {
-	ID                    types.String  `tfsdk:"id"`
-	Name                  types.String  `tfsdk:"name"`
-	Targets               []targetModel `tfsdk:"targets"`
-	HealthCheckPath       types.String  `tfsdk:"health_check_path"`
-	TimeoutMs             types.Int64   `tfsdk:"timeout_ms"`
-	HealthCheckIntervalMs types.Int64   `tfsdk:"health_check_interval_ms"`
-	HealthCheckProtocol   types.String  `tfsdk:"health_check_protocol"`
-	HealthCheckService    types.String  `tfsdk:"health_check_service"`
-	UnhealthyFallback     types.Bool    `tfsdk:"unhealthy_fallback"`
-	H2                    types.Bool    `tfsdk:"h2"`
-	SupportsWebSocket     types.Bool    `tfsdk:"supports_websocket"`
-	LoadBalancing         types.String  `tfsdk:"load_balancing"`
+	ID                    types.String         `tfsdk:"id"`
+	Name                  types.String         `tfsdk:"name"`
+	Targets               []targetModel        `tfsdk:"targets"`
+	HealthCheckPath       types.String         `tfsdk:"health_check_path"`
+	TimeoutMs             types.Int64          `tfsdk:"timeout_ms"`
+	HealthCheckIntervalMs types.Int64          `tfsdk:"health_check_interval_ms"`
+	HealthCheckProtocol   types.String         `tfsdk:"health_check_protocol"`
+	HealthCheckService    types.String         `tfsdk:"health_check_service"`
+	UnhealthyFallback     types.Bool           `tfsdk:"unhealthy_fallback"`
+	H2                    types.Bool           `tfsdk:"h2"`
+	SupportsWebSocket     types.Bool           `tfsdk:"supports_websocket"`
+	LoadBalancing         types.String         `tfsdk:"load_balancing"`
+	CircuitBreaker        *circuitBreakerModel `tfsdk:"circuit_breaker"`
+}
+
+func boundedInt(def, min, max int64, description string) schema.Int64Attribute {
+	return schema.Int64Attribute{
+		Optional: true, Computed: true, Default: int64default.StaticInt64(def),
+		Validators:  []validator.Int64{int64validator.Between(min, max)},
+		Description: description,
+	}
 }
 
 func NewServiceResource() resource.Resource { return &serviceResource{} }
@@ -98,6 +116,18 @@ func (r *serviceResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Optional: true, Computed: true, Default: stringdefault.StaticString("weighted-round-robin"),
 				Validators: []validator.String{stringvalidator.OneOf("weighted-round-robin", "least-connections")},
 			},
+			"circuit_breaker": schema.SingleNestedAttribute{
+				Optional:    true,
+				Description: "Per-service circuit breaker. Omit for none. The gateway refuses requests with 503 CIRCUIT_OPEN while the circuit is open.",
+				Attributes: map[string]schema.Attribute{
+					"enabled":              schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true)},
+					"window_size":          boundedInt(20, 5, 100, "Completed upstream attempts in the sliding window."),
+					"failure_rate_percent": boundedInt(50, 1, 99, "Open when the window's failure rate is above this percentage."),
+					"minimum_requests":     boundedInt(5, 1, 100, "Fewest attempts in the window before the circuit may open; at most window_size."),
+					"open_ms":              boundedInt(10000, 1000, 300000, "Time an open circuit refuses traffic before probing."),
+					"half_open_successes":  boundedInt(2, 1, 10, "Consecutive successful probes that close the circuit."),
+				},
+			},
 		},
 	}
 }
@@ -123,6 +153,21 @@ func (m *serviceModel) request() client.Service {
 		H2:                    m.H2.ValueBool(),
 		SupportsWebSocket:     m.SupportsWebSocket.ValueBool(),
 		LoadBalancing:         m.LoadBalancing.ValueString(),
+		CircuitBreaker:        m.CircuitBreaker.request(),
+	}
+}
+
+func (b *circuitBreakerModel) request() *client.CircuitBreaker {
+	if b == nil {
+		return nil
+	}
+	return &client.CircuitBreaker{
+		Enabled:            b.Enabled.ValueBool(),
+		WindowSize:         b.WindowSize.ValueInt64(),
+		FailureRatePercent: b.FailureRatePercent.ValueInt64(),
+		MinimumRequests:    b.MinimumRequests.ValueInt64(),
+		OpenMs:             b.OpenMs.ValueInt64(),
+		HalfOpenSuccesses:  b.HalfOpenSuccesses.ValueInt64(),
 	}
 }
 
@@ -142,6 +187,17 @@ func (m *serviceModel) refresh(service *client.Service) {
 	m.H2 = types.BoolValue(service.H2)
 	m.SupportsWebSocket = types.BoolValue(service.SupportsWebSocket)
 	m.LoadBalancing = types.StringValue(service.LoadBalancing)
+	m.CircuitBreaker = nil
+	if breaker := service.CircuitBreaker; breaker != nil {
+		m.CircuitBreaker = &circuitBreakerModel{
+			Enabled:            types.BoolValue(breaker.Enabled),
+			WindowSize:         types.Int64Value(breaker.WindowSize),
+			FailureRatePercent: types.Int64Value(breaker.FailureRatePercent),
+			MinimumRequests:    types.Int64Value(breaker.MinimumRequests),
+			OpenMs:             types.Int64Value(breaker.OpenMs),
+			HalfOpenSuccesses:  types.Int64Value(breaker.HalfOpenSuccesses),
+		}
+	}
 }
 
 func (r *serviceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {

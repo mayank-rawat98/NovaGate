@@ -35,6 +35,13 @@ import {
   grpcMetadata,
   grpcHeaderBytes,
 } from './grpc-wire';
+import {
+  CircuitBreakerService,
+  type CircuitAdmission,
+} from '../circuit-breaker/circuit-breaker.service';
+
+/** gRPC statuses that say the upstream service itself is failing. */
+const GRPC_UPSTREAM_FAILURES = new Set([4, 13, 14]);
 
 interface SessionEntry {
   tenantId: string | null;
@@ -54,6 +61,8 @@ interface Call {
   certificateTrust?: string;
   target?: string;
   releaseTarget?: () => void;
+  /** Circuit-breaker admission, settled at the upstream response. */
+  circuit?: CircuitAdmission;
   upstreamTrace?: GatewayTraceHandle;
   rpcStatus?: number;
   upstream?: http2.ClientHttp2Stream;
@@ -112,6 +121,7 @@ export class GrpcProxyService
     private readonly registry: PluginRegistryService,
     private readonly runner: PluginRunnerService,
     @Optional() private readonly tracing?: OtelService,
+    @Optional() private readonly circuits?: CircuitBreakerService,
   ) {
     this.settings = configService.get('grpc', { infer: true }) ?? DEFAULT_GRPC;
   }
@@ -663,13 +673,28 @@ export class GrpcProxyService
       const targets = service.targets.filter((target) =>
         currentService.targets.some((current) => current.url === target.url),
       );
-      const lease = this.loadBalancer.acquireTarget(
-        service.id,
-        targets,
-        this.upstreamHealth.getHealthyUrls(targets, service.id),
-        currentService.unhealthyFallback === true,
-        currentService.loadBalancing,
-      );
+      const circuit = this.circuits?.admit(service.id);
+      if (circuit && !circuit.allowed) {
+        this.metricsService.incrementCircuitRejection(service.name);
+        throw new GrpcFailure(
+          14,
+          'Upstream service is temporarily unavailable',
+        );
+      }
+      call.circuit = circuit;
+      let lease;
+      try {
+        lease = this.loadBalancer.acquireTarget(
+          service.id,
+          targets,
+          this.upstreamHealth.getHealthyUrls(targets, service.id),
+          currentService.unhealthyFallback === true,
+          currentService.loadBalancing,
+        );
+      } catch (error) {
+        circuit?.settle('neutral');
+        throw error;
+      }
       call.releaseTarget = lease.release;
       const target = lease.url;
       call.target = target;
@@ -704,6 +729,11 @@ export class GrpcProxyService
         }
         upstream = entry.session.request(headers);
       } catch (error) {
+        // Connection or deadline failures before dispatch count against the
+        // service; a caller that left does not.
+        if (call.done || call.abort.signal.aborted)
+          call.circuit?.settle('neutral');
+        else call.circuit?.record(502);
         entry.active--;
         entry.lastUsed = Date.now();
         if (!entry.ready && !entry.active) this.retire(entry, true);
@@ -711,6 +741,7 @@ export class GrpcProxyService
       }
       call.upstream = upstream;
       upstream.once('close', () => {
+        call.circuit?.settle('neutral');
         call.releaseTarget?.();
         const rpcStatus = call.rpcStatus ?? status;
         call.upstreamTrace?.set({ 'rpc.grpc.status_code': rpcStatus });
@@ -725,9 +756,11 @@ export class GrpcProxyService
         if (!call.done && !upstream.readableEnded)
           call.fail(new GrpcFailure(14, 'Upstream stream closed'));
       });
-      upstream.on('error', () =>
-        call.fail(new GrpcFailure(14, 'Upstream unavailable')),
-      );
+      upstream.on('error', () => {
+        if (call.done) call.circuit?.settle('neutral');
+        else call.circuit?.record(502);
+        call.fail(new GrpcFailure(14, 'Upstream unavailable'));
+      });
       let trailers: http2.IncomingHttpHeaders = {};
       let status = 2;
       upstream.once('response', async (headers) => {
@@ -738,15 +771,24 @@ export class GrpcProxyService
               8,
               'Upstream headers exceed configured limit',
             );
-          if (headers[':status'] !== 200 || !isGrpcRequest(headers))
+          if (headers[':status'] !== 200 || !isGrpcRequest(headers)) {
+            call.circuit?.record(502);
             throw new GrpcFailure(
               14,
               'Upstream returned an invalid gRPC response',
             );
+          }
           if (headers['grpc-status'] !== undefined) {
             status = this.status(headers['grpc-status']);
             trailers = headers;
           }
+          // Trailers-only failures (UNAVAILABLE, DEADLINE_EXCEEDED, INTERNAL)
+          // count against the service; a started response stream succeeds.
+          call.circuit?.record(
+            trailers === headers && GRPC_UPSTREAM_FAILURES.has(status)
+              ? 502
+              : 200,
+          );
           const output = grpcMetadata(headers);
           await this.runner.runOnResponse(plugins, {
             ...ctx,

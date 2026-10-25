@@ -14,6 +14,8 @@ import { sign } from 'jsonwebtoken';
 import type { TenantConfig } from '@api-gateway/shared-types';
 import { GrpcProxyService } from './grpc-proxy.service';
 import { DEFAULT_GRPC, type GrpcSettings } from '../../config/configuration';
+import { CircuitBreakerService } from '../circuit-breaker/circuit-breaker.service';
+import { DEFAULT_CIRCUIT_BREAKER } from '@api-gateway/shared-types';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 import { LoadBalancerService } from './load-balancer.service';
 import { PluginRegistryService } from '../plugins/plugin-registry.service';
@@ -49,7 +51,15 @@ describe('native gRPC through a real listener and upstream', () => {
   let config: TenantConfig;
   let version: number;
   let received: http2.IncomingHttpHeaders[];
-  let mode: 'echo' | 'stall' | 'oversize' | 'early' | 'trailers-only' | 'flood';
+  let mode:
+    | 'echo'
+    | 'stall'
+    | 'oversize'
+    | 'early'
+    | 'trailers-only'
+    | 'unavailable'
+    | 'flood';
+  let circuits: CircuitBreakerService | undefined;
   let closures: number;
   let floodProduced: number;
   const floodPacket = Buffer.concat(
@@ -61,6 +71,7 @@ describe('native gRPC through a real listener and upstream', () => {
   const metrics = {
     incrementGrpcRequests: jest.fn(),
     setGrpcActiveCalls: jest.fn(),
+    incrementCircuitRejection: jest.fn(),
   };
   const upstreamSessions = new Set<http2.ServerHttp2Session>();
   let tracing: OtelService;
@@ -113,6 +124,7 @@ describe('native gRPC through a real listener and upstream', () => {
       registry,
       new PluginRunnerService(),
       tracing,
+      circuits,
     );
   }
   async function restart(settings: Partial<GrpcSettings>, ca?: Buffer) {
@@ -197,6 +209,16 @@ describe('native gRPC through a real listener and upstream', () => {
       stream.once('close', () => closures++);
       if (mode === 'stall') {
         stream.resume();
+        return;
+      }
+      if (mode === 'unavailable') {
+        stream.respond({
+          ':status': 200,
+          'content-type': 'application/grpc',
+          'grpc-status': '14',
+          'grpc-message': 'overloaded',
+        });
+        stream.end();
         return;
       }
       if (mode === 'trailers-only') {
@@ -602,6 +624,43 @@ describe('native gRPC through a real listener and upstream', () => {
     expect((await finished).body).toEqual(
       Buffer.concat([first, frame('second')]),
     );
+  });
+  it('opens the service circuit on UNAVAILABLE, refuses calls without dispatch, then recovers', async () => {
+    circuits = new CircuitBreakerService(manager);
+    circuits.onModuleInit();
+    try {
+      config.services[0].circuitBreaker = {
+        ...DEFAULT_CIRCUIT_BREAKER,
+        minimumRequests: 2,
+        openMs: 1000,
+      };
+      await install();
+      await restart({});
+      const call = async () => {
+        const { stream, finished } = request();
+        stream.end(frame('test'));
+        return (await finished).status;
+      };
+      // Application errors (PERMISSION_DENIED) are successes for the breaker.
+      mode = 'trailers-only';
+      for (let i = 0; i < 2; i++) expect(await call()).toBe('7');
+      expect(circuits.stateOf('service')).toBe('closed');
+      mode = 'unavailable';
+      for (let i = 0; i < 3; i++) expect(await call()).toBe('14');
+      expect(circuits.stateOf('service')).toBe('open');
+      const dispatched = received.length;
+      expect(await call()).toBe('14');
+      expect(received).toHaveLength(dispatched);
+      expect(metrics.incrementCircuitRejection).toHaveBeenCalled();
+      mode = 'echo';
+      await new Promise((resolve) => setTimeout(resolve, 1050));
+      expect(await call()).toBe('0');
+      expect(await call()).toBe('0');
+      expect(circuits.stateOf('service')).toBe('closed');
+    } finally {
+      circuits.onModuleDestroy();
+      circuits = undefined;
+    }
   });
   it('handles a trailers-only upstream rejection', async () => {
     mode = 'trailers-only';

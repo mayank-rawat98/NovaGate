@@ -104,6 +104,10 @@ export class MigrationService implements OnModuleInit {
         await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "loadBalancing" VARCHAR NOT NULL DEFAULT 'weighted-round-robin' CHECK ("loadBalancing" IN ('weighted-round-robin', 'least-connections'))`,
         );
+        // Existing services keep their behaviour (no breaker) until enabled.
+        await manager.query(
+          `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "circuitBreaker" JSONB`,
+        );
         await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "healthCheckIntervalMs" INTEGER NOT NULL DEFAULT 10000, ADD COLUMN IF NOT EXISTS "unhealthyFallback" BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS "healthCheckProtocol" VARCHAR NOT NULL DEFAULT 'http', ADD COLUMN IF NOT EXISTS "healthCheckService" VARCHAR NOT NULL DEFAULT ''`,
         );

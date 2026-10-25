@@ -49,7 +49,10 @@ import type {
   PortalDeveloper,
   GatewayPluginState,
   SaveDisabledPlugins,
+  CircuitBreakerConfig,
+  CircuitBreakerSnapshot,
 } from '@api-gateway/shared-types';
+import { parseCircuitStatuses } from '@api-gateway/shared-types';
 import { getToken, clearToken } from './auth';
 
 export type {
@@ -111,6 +114,8 @@ export type CreateServiceDto = Pick<ServiceEntity, 'name' | 'targets'> & {
   supportsWebSocket?: boolean;
   unhealthyFallback?: boolean;
   timeoutMs?: number;
+  /** Null: no breaker. Omitted on create: the default breaker. */
+  circuitBreaker?: CircuitBreakerConfig | null;
 };
 export type UpdateServiceDto = Partial<CreateServiceDto>;
 
@@ -829,6 +834,92 @@ export async function streamMetrics(
       }
       if (pending.length > 4096)
         throw new Error('Live metrics frame too large');
+    }
+  } finally {
+    clearInterval(watchdog);
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
+/** Validates a circuit snapshot from the admin API or its live stream. */
+export function validateCircuitSnapshot(
+  value: unknown,
+): CircuitBreakerSnapshot {
+  const input = value as Record<string, unknown> | null;
+  const services = parseCircuitStatuses(input?.services);
+  if (
+    !services ||
+    !(
+      input?.reportedAt === null ||
+      (typeof input?.reportedAt === 'string' &&
+        !Number.isNaN(Date.parse(input.reportedAt)))
+    )
+  )
+    throw new Error('Invalid circuit status');
+  return { reportedAt: input.reportedAt as string | null, services };
+}
+
+export async function getCircuitBreakers(
+  tenantId: string,
+  signal?: AbortSignal,
+): Promise<CircuitBreakerSnapshot> {
+  return validateCircuitSnapshot(
+    await request(`/tenants/${tenantId}/circuit-breakers`, { signal }),
+  );
+}
+
+/** Authenticated fetch-based SSE: each frame is a full circuit snapshot. */
+export async function streamCircuitBreakers(
+  tenantId: string,
+  signal: AbortSignal,
+  onSnapshot: (snapshot: CircuitBreakerSnapshot) => void,
+): Promise<void> {
+  const response = await authorizedFetch(
+    `/tenants/${encodeURIComponent(tenantId)}/circuit-breakers/stream`,
+    { signal, headers: { Accept: 'text/event-stream' }, cache: 'no-store' },
+  );
+  if (
+    !response.headers.get('content-type')?.includes('text/event-stream') ||
+    !response.body
+  )
+    throw new Error('Live circuit status unavailable');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const maxFrame = 131072;
+  let pending = '';
+  let activity = Date.now();
+  const watchdog = setInterval(() => {
+    if (Date.now() - activity > 45000)
+      void reader.cancel().catch(() => undefined);
+  }, 5000);
+  try {
+    while (!signal.aborted) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error('Live circuit connection ended');
+      activity = Date.now();
+      pending = (pending + decoder.decode(value, { stream: true })).replace(
+        /\r\n/g,
+        '\n',
+      );
+      let boundary: number;
+      while ((boundary = pending.indexOf('\n\n')) >= 0) {
+        const frame = pending.slice(0, boundary);
+        pending = pending.slice(boundary + 2);
+        const lines = frame.split('\n');
+        const event = lines
+          .find((line) => line.startsWith('event:'))
+          ?.slice(6)
+          .trim();
+        const data = lines
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
+          .join('\n');
+        if (event === 'circuits')
+          onSnapshot(validateCircuitSnapshot(JSON.parse(data)));
+      }
+      if (pending.length > maxFrame)
+        throw new Error('Live circuit frame too large');
     }
   } finally {
     clearInterval(watchdog);
