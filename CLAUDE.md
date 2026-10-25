@@ -96,6 +96,7 @@ CUSTOMER'S VPS                         SAAS SERVERS
 | `apps/developer-portal`           | Next.js developer portal for a workspace's API consumers — catalog, self-service keys, usage; shared host or custom domain     |
 | `integrations/terraform-provider` | Go Terraform provider (`novagate_*`) using scoped automation tokens against the admin API                                      |
 | `libs/shared-types`               | Single source of truth for TypeScript interfaces: WS message types, DB entities, `TenantConfig`                                |
+| `libs/plugin-sdk`                 | `@api-gateway/plugin-sdk`: `definePlugin` and test helpers for operator-pinned third-party gateway plugins                     |
 
 **shared-types change order is non-negotiable:** update `shared-types` first, then the sender, then the receiver.
 
@@ -150,6 +151,8 @@ shared/         GatewayExceptionFilter, GatewayError, redis.tokens, request-cont
 - Phase 2: `oidc` (JWKS-based JWT validation), `oauth2-client-credentials` (introspection or grant injection), `hmac-auth` (Stripe-style HMAC signatures), `acl` (consumer group allow/deny), `mtls` (client cert validation)
 
 Plugins run in listed order; returning a `PluginShortCircuit` stops the chain.
+
+Third-party plugins (#113) are npm packages the gateway operator installs and pins (`THIRD_PARTY_PLUGIN_DIR`, `THIRD_PARTY_PLUGINS`). Their names are scoped package names; they run behind `GuardedPlugin` (deadlines, fail-closed request hooks, quarantine, crash attribution) and the workspace kill switch `TenantConfig.disabledPlugins`. See [`libs/plugin-sdk/README.md`](libs/plugin-sdk/README.md).
 
 **Import rules:** `proxy`, `rate-limit`, `logging` may import from `metrics`. Nothing else imports from `proxy`, `logging`, or `auth` except `gateway.module.ts`. Shared state between subfolders belongs in `shared/`.
 

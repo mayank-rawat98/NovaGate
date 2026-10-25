@@ -8,6 +8,7 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
+- [Issue #113](https://github.com/mayank-rawat98/NovaGate/issues/113) adds phase 5.5: operator-pinned third-party plugins loaded from npm packages, `libs/plugin-sdk`, a workspace kill switch, gateway status reports through the control plane, and dashboard/route-editor support. A real-process run installs packed tarballs with npm. It checks that hooks fire on live traffic and that an uninstalled package fails closed. Timer and unhandled-rejection crashes quarantine the plugin while the gateway keeps serving, and the kill switch reaches the gateway. Verified on Node 26.11.1 with local PostgreSQL 16 and Redis 7: **878 admin tests** (21 RustFS-dependent skipped; no container runtime), **132 control-plane**, **598/599 gateway** (the remaining test needs IPv6, which this container lacks), 4 SDK, 10 dashboard, 5 portal and 35 CLI tests. Lint/typecheck pass, as do both production browser smokes with zero WCAG/runtime findings and the portal → gateway end-to-end run. See the section below.
 - [Issue #111](https://github.com/mayank-rawat98/NovaGate/issues/111) adds the phase 5.4 Terraform provider: `novagate_service`, `novagate_route`, `novagate_consumer` and `novagate_alert_rule`, with import support, plus `novagate_tenant` and `novagate_consumer` data sources. Acceptance runs the real Terraform 1.16.7 CLI against the real admin API on PostgreSQL. It covers create, in-place update, clearing, import of every resource, scope denial and destroy, and SQL confirms the soft deletes. See the section below.
 
 - [Issue #109](https://github.com/mayank-rawat98/NovaGate/issues/109) implements the phase 5.3 developer portal: a separate Next.js app, public catalog/developer APIs, self-service keys and usage, workspace Settings and route-editor publication. A real-process end-to-end run (admin API, control plane, gateway and portal on local PostgreSQL/Redis, driven by Chromium) registers a developer, confirms the email, creates a key, makes five gateway calls, sees those five recorded requests in the portal and revokes the key, after which the gateway refuses it. It also fixes the gateway rate-limit plugin ignoring its configured window. See the section below.
@@ -1555,7 +1556,7 @@ issues #69, #90 and the remaining #101 investigation stay open.
   Enterprise RBAC, package distribution and formal acceptance remain.
 - Developer portal: implemented in #109; formal acceptance remains.
 - Terraform provider: implemented in #111; registry publication and formal acceptance remain.
-- Plugin SDK/third-party loading with explicit trust, compatibility and resource limits.
+- Plugin SDK/third-party loading: implemented in #113 (trust-based, pinned versions, bounded hooks, quarantine and kill switch); npm publication of the SDK, a WASM sandbox (6.6) and formal acceptance remain.
 - External downstream instrumentation/OTLP interoperability for third-party observability.
 
 ### Phase 6 — beyond Kong roadmap
@@ -1856,3 +1857,58 @@ Redis 7):
 
 Registry signing/publication and formal acceptance remain open. CI installs Go
 and Terraform and runs lint, test, build and acceptance.
+
+## Third-party plugins — issue #113
+
+Gateway operators install plugin packages with npm in a directory mounted into
+the gateway and pin each one (`THIRD_PARTY_PLUGIN_DIR`, `THIRD_PARTY_PLUGINS`).
+At startup the gateway checks that each installed manifest matches its pinned
+name and exact version, and validates the export. It registers the plugin under
+its scoped package name, so a plugin can never replace a built-in. At runtime:
+
+- every hook has a deadline; a failing request hook refuses the request
+  (`502 PLUGIN_FAILED`), and failing response/error hooks are skipped;
+- repeated failures, or an uncaught exception or unhandled rejection whose stack
+  points into the plugin's installed directory, pause the plugin for the
+  quarantine period (`503 PLUGIN_UNAVAILABLE`); other crashes keep Node's default
+  behaviour;
+- packages that failed to load, and plugins the workspace disabled
+  (`503 PLUGIN_DISABLED`), fail their routes closed.
+
+The gateway reports each plugin's version, state, failure count and bounded
+last error to the control plane after authentication, on change and every 60 s.
+The control plane validates the report and keeps it in Redis for 180 s; the admin
+API re-validates it on read. `GET/PUT /tenants/:id/gateway-plugins` exposes the
+report and the disabled list. Writes are session-only, and each change publishes
+a configuration version through the durable outbox. Routes, declarative
+configuration and the Terraform provider accept scoped plugin names with a JSON
+object of at most 16 KiB (up to 32 plugins per route). The portal flags routes
+whose third-party policies it cannot describe. The control plane's `auth_ok`
+snapshot now also omits the admin-only portal columns, matching published
+updates.
+
+Verification (Node 26.11.1, PostgreSQL 16, Redis 7):
+
+- `@api-gateway/api:plugins-e2e`: `npm pack` + `npm install --ignore-scripts`
+  of both examples, then built admin API, control plane and gateway. Request and
+  response hooks stamp live traffic, and an uninstalled pinned package answers
+  503 and is reported `failed`. Timer and unhandled-rejection crashes each
+  quarantine the plugin while the gateway process stays up and other routes keep
+  serving. The admin kill switch disables and re-enables the plugin on the
+  gateway.
+- Admin integration (real PostgreSQL/Redis/HTTP): report reads and corrupt
+  reports, cross-workspace denial, the outbox version and published payload,
+  no-op saves, invalid lists, read-token access with session-only writes, route
+  validation bounds and a lossless export → import preview.
+- Control-plane integration: tenant-attributed reports with TTL, invalid reports
+  ignored, `disabledPlugins` and stripped portal fields in `auth_ok`, and
+  tolerance of a schema without the new column.
+- Gateway loader specs (pinning, invalid exports, collisions, timeouts,
+  quarantine and recovery, crash attribution, disabled list) and SDK specs.
+- Dashboard and portal production browser smokes (states, failure retry,
+  reversible unreported names, route-editor validation and order, mobile and
+  axe WCAG A/AA).
+
+Not verified here: the gateway Docker image with a mounted plugin directory (no
+container runtime). npm publication of `@api-gateway/plugin-sdk`, a sandbox for
+untrusted plugins (phase 6.6) and formal acceptance remain.
