@@ -103,7 +103,7 @@ The code contains substantial work for phases 0–3, but file presence does not 
 | 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                                                                                                                         | Native gRPC/WebSocket checks exist (#41/#43), bounded AST GraphQL policies are verified (#53), and issue #55 hardens HTTP/2 lifecycle, limits and health-compatible fallback; issue #57 adds verified least-connections; formal protocol acceptance remains                                                 |
 | 4     | RustFS archives (#37), traces (#61), live metrics (#63), alerts (#65), external delivery (#95), bounded consumer rollups (#99)                                                                    | Larger workloads/provider acceptance, hydration (#69), RustFS cleanup (#90), formal acceptance and release remain                                                                                                                                                                                           |
 | 5     | REST configuration, reviewed declarative import/export (#103), private CLI/live logs (#105), automation tokens (#107), portal (#109), Terraform (#111), plugin SDK and third-party loading (#113) | CLI distribution, npm/registry publication, configuration history/rollback and formal acceptance remain                                                                                                                                                                                                     |
-| 6     | No verified implementations                                                                                                                                                                       | Anomalies, circuit breaker, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                                                                   |
+| 6     | Circuit breaker (#115)                                                                                                                                                                            | Anomalies, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                                                                                    |
 
 ### Prerequisites discovered by audit
 
@@ -1282,6 +1282,19 @@ This phase targets an integrated operating experience. Compare each capability a
 ---
 
 ### 6.2 Automatic Circuit Breaker
+
+Implemented in [issue #115](https://github.com/mayank-rawat98/NovaGate/issues/115).
+The service lives at `apps/api/src/gateway/circuit-breaker/` rather than `proxy/`
+because the connector reports it, and the gateway import rules forbid importing
+from `proxy`. Settings are per service (`ServiceConfig.circuitBreaker`, with the
+roadmap values as defaults). New services get them; existing services keep their
+behaviour until enabled. It covers HTTP/1, HTTP/2, WebSocket upgrades and native
+gRPC. Probes run sequentially after the open period: a successful probe admits
+the next immediately, while a failed one waits a full open period. The roadmap's
+`circuit.state` message carries a full per-gateway snapshot. The control plane
+keeps it in Redis and publishes it; the admin API serves it as a snapshot and an
+SSE stream that the Services page shows live. `@api-gateway/api:circuit-e2e`
+verifies the exit criterion on real processes.
 
 **Differentiation target:** Integrated configuration and operation with measurable customer benefit.
 
