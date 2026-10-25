@@ -59,8 +59,33 @@ describe('RoutesController', () => {
         null,
         null,
         null,
+        null,
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
+    });
+
+    it('stores validated portal metadata and rejects invalid publication', async () => {
+      const ds = mockDataSource();
+      const cp = mockConfigPush();
+      ds.query.mockResolvedValue([{ id: 'new-route' }]);
+      const { controller } = await build(ds, cp);
+      await controller.create(TENANT, {
+        method: 'GET',
+        pathPattern: '/api/users',
+        serviceId: 'svc-1',
+        portal: { visible: true, summary: 'List users', description: '' },
+      });
+      expect(ds.query.mock.calls[0][1].at(-1)).toBe(
+        JSON.stringify({ visible: true, summary: 'List users' }),
+      );
+      await expect(
+        controller.create(TENANT, {
+          method: 'GET',
+          pathPattern: '/api/users',
+          serviceId: 'svc-1',
+          portal: { visible: true, script: '<b>' },
+        }),
+      ).rejects.toThrow('Portal metadata');
     });
   });
 

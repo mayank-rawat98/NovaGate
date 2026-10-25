@@ -40,6 +40,12 @@ import { MigrationService } from '../database/migration.service';
 import { AlertsModule } from '../alerts/alerts.module';
 import { AutomationTokensController } from '../automation-tokens/automation-tokens.controller';
 import { AutomationTokensService } from '../automation-tokens/automation-tokens.service';
+import { PortalService } from '../portal/portal.service';
+import { PortalDevelopersService } from '../portal/portal-developers.service';
+import { PortalPublicController } from '../portal/portal-public.controller';
+import { PortalDeveloperController } from '../portal/portal-developer.controller';
+import { PortalAdminController } from '../portal/portal-admin.controller';
+import { PortalDeveloperGuard } from '../portal/portal-developer.guard';
 
 @Module({
   imports: [
@@ -83,6 +89,9 @@ import { AutomationTokensService } from '../automation-tokens/automation-tokens.
     AnalyticsController,
     TracesController,
     AutomationTokensController,
+    PortalPublicController,
+    PortalDeveloperController,
+    PortalAdminController,
   ],
   providers: [
     LogStreamService,
@@ -101,6 +110,9 @@ import { AutomationTokensService } from '../automation-tokens/automation-tokens.
     ConsumerAnalyticsService,
     ConsumerRollupService,
     AutomationTokensService,
+    PortalService,
+    PortalDevelopersService,
+    PortalDeveloperGuard,
   ],
 })
 export class AppModule {}

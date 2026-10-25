@@ -9,6 +9,7 @@ import { traceSchemaSql } from './trace-schema';
 import { ALERT_SCHEDULE_SCHEMA, alertSchemaSql } from '../alerts/alert-schema';
 import { tenantSchema } from '../tenants/tenant-schema';
 import { AUTOMATION_TOKEN_SCHEMA } from '../automation-tokens/automation-token-schema';
+import { PORTAL_PUBLIC_SCHEMA, portalSchemaSql } from '../portal/portal-schema';
 import {
   CONSUMER_ROLLUP_PUBLIC_SCHEMA,
   consumerRollupSchemaSql,
@@ -50,6 +51,7 @@ export class MigrationService implements OnModuleInit {
       await manager.query(EXPORT_DELIVERY_SCHEMA);
       await manager.query(ALERT_SCHEDULE_SCHEMA);
       await manager.query(AUTOMATION_TOKEN_SCHEMA);
+      await manager.query(PORTAL_PUBLIC_SCHEMA);
       const tenants = await manager.query<Array<{ id: string }>>(
         `SELECT id FROM public.tenants`,
       );
@@ -152,6 +154,7 @@ export class MigrationService implements OnModuleInit {
         await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "supportsWebSocket" BOOLEAN DEFAULT false`,
         );
+        await manager.query(portalSchemaSql(schema));
       }
       return tenants.length;
     });

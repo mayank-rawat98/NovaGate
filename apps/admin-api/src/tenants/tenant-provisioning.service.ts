@@ -5,6 +5,7 @@ import * as crypto from 'crypto';
 import { traceSchemaSql } from '../database/trace-schema';
 import { tenantSchema } from './tenant-schema';
 import { consumerRollupSchemaSql } from '../proxy-config/consumer-rollup-schema';
+import { portalSchemaSql } from '../portal/portal-schema';
 
 @Injectable()
 export class TenantProvisioningService {
@@ -102,6 +103,7 @@ export class TenantProvisioningService {
         `CREATE INDEX IF NOT EXISTS request_logs_consumer_time ON ${schemaName}.request_logs ("consumerId", timestamp DESC, id DESC) WHERE "consumerId" IS NOT NULL`,
       );
       await manager.query(consumerRollupSchemaSql(tenantId));
+      await manager.query(portalSchemaSql(schemaName));
 
       await manager.query(`
         CREATE TABLE IF NOT EXISTS ${schemaName}.error_events (

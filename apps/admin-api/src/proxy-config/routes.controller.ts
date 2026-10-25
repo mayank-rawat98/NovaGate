@@ -21,6 +21,7 @@ import {
 import { DataSource } from 'typeorm';
 import { ConfigPushService } from '../config-push/config-push.service';
 import { tenantSchema } from '../tenants/tenant-schema';
+import { validateRoutePortal } from '../portal/portal-catalog';
 
 // Plugin names accepted by the admin-api. Reject unknown names so the
 // gateway never tries to resolve a plugin that doesn't exist.
@@ -59,6 +60,7 @@ interface RouteBody {
     maxComplexity?: number;
     introspectionAllowed?: boolean;
   } | null;
+  portal?: unknown;
 }
 
 const providerEndpoint = Joi.string()
@@ -248,12 +250,13 @@ export class RoutesController {
   async create(@Param('tenantId') tenantId: string, @Body() body: RouteBody) {
     validatePlugins(body.plugins);
     validateGraphql(body.graphql);
+    const portal = validateRoutePortal(body.portal);
     const schema = tenantSchema(tenantId);
     const rows = await this.dataSource.query(
       `INSERT INTO ${schema}.routes
          (method, "pathPattern", "serviceId", "authRequired", "rateLimitOverride", enabled,
-          retry, plugins, graphql)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+          retry, plugins, graphql, portal)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
       [
         body.method,
         body.pathPattern,
@@ -264,6 +267,7 @@ export class RoutesController {
         body.retry ? JSON.stringify(body.retry) : null,
         body.plugins ? JSON.stringify(body.plugins) : null,
         body.graphql ? JSON.stringify(body.graphql) : null,
+        portal ? JSON.stringify(portal) : null,
       ],
     );
     await this.configPush.triggerUpdate(tenantId);
@@ -279,6 +283,7 @@ export class RoutesController {
   ) {
     validatePlugins(body.plugins);
     validateGraphql(body.graphql);
+    const portal = validateRoutePortal(body.portal);
     const schema = tenantSchema(tenantId);
     const rows = await this.dataSource.query(
       `WITH updated AS (UPDATE ${schema}.routes
@@ -290,7 +295,8 @@ export class RoutesController {
            enabled = COALESCE($7, enabled),
            retry = CASE WHEN $12 THEN $8::jsonb ELSE retry END,
            plugins = CASE WHEN $13 THEN $9::jsonb ELSE plugins END,
-           graphql = CASE WHEN $14 THEN $10::jsonb ELSE graphql END
+           graphql = CASE WHEN $14 THEN $10::jsonb ELSE graphql END,
+           portal = CASE WHEN $16 THEN $15::jsonb ELSE portal END
        WHERE id = $1 AND "deletedAt" IS NULL RETURNING *) SELECT * FROM updated`,
       [
         id,
@@ -307,6 +313,8 @@ export class RoutesController {
         body.retry !== undefined,
         body.plugins !== undefined,
         body.graphql !== undefined,
+        portal ? JSON.stringify(portal) : null,
+        portal !== undefined,
       ],
     );
     if (!rows.length)

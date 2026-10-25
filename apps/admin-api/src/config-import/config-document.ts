@@ -15,6 +15,7 @@ import {
   validateGraphql,
   validatePlugins,
 } from '../proxy-config/routes.controller';
+import { validateRoutePortal } from '../portal/portal-catalog';
 
 export const routeKey = (route: { method: string; pathPattern: string }) =>
   `${route.method} ${route.pathPattern}`;
@@ -124,6 +125,8 @@ const documentSchema = Joi.object({
           )
           .default([]),
         graphql: Joi.object().unknown(true).allow(null).default(null),
+        // Validated precisely by validateRoutePortal; absent means unpublished.
+        portal: Joi.object().unknown(true).allow(null),
       }),
     )
     .required(),
@@ -318,6 +321,9 @@ export function normalizeConfigDocument(
     }
     validatePlugins(route.plugins);
     validateGraphql(route.graphql);
+    const portal = validateRoutePortal(route.portal);
+    if (portal) route.portal = portal;
+    else delete route.portal;
     if (
       (route.plugins ?? []).some(
         (plugin) =>

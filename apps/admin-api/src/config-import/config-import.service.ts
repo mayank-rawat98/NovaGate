@@ -121,11 +121,12 @@ export class ConfigImportService implements OnModuleDestroy {
       [DECLARATIVE_CONFIG_MAX_ENTRIES + 1],
     );
     const routes: Snapshot['routes'] = await manager.query(
-      `SELECT id,method,"pathPattern","serviceId","authRequired","rateLimitOverride",enabled,retry,plugins,graphql,"configOrder" FROM ${schema}.routes WHERE "deletedAt" IS NULL ORDER BY "configOrder" NULLS LAST,"createdAt",id LIMIT $1`,
+      `SELECT id,method,"pathPattern","serviceId","authRequired","rateLimitOverride",enabled,retry,plugins,graphql,portal,"configOrder" FROM ${schema}.routes WHERE "deletedAt" IS NULL ORDER BY "configOrder" NULLS LAST,"createdAt",id LIMIT $1`,
       [DECLARATIVE_CONFIG_MAX_ENTRIES + 1],
     );
     const consumers: ConsumerConfig[] = await manager.query(
-      `SELECT id,name,"keyHash","rateLimitTier",groups FROM ${schema}.consumers WHERE "revokedAt" IS NULL ORDER BY name COLLATE "C",id LIMIT $1`,
+      // Developer portal keys belong to developers, not the declarative document.
+      `SELECT id,name,"keyHash","rateLimitTier",groups FROM ${schema}.consumers WHERE "revokedAt" IS NULL AND "portalDeveloperId" IS NULL ORDER BY name COLLATE "C",id LIMIT $1`,
       [DECLARATIVE_CONFIG_MAX_ENTRIES + 1],
     );
     if (
@@ -141,12 +142,16 @@ export class ConfigImportService implements OnModuleDestroy {
     const document: DeclarativeConfig = {
       version: 1,
       services: services.map(({ id: _id, ...service }) => service),
-      routes: routes.map(({ id: _id, configOrder: _order, ...route }) => ({
-        ...route,
-        plugins: route.plugins ?? [],
-        graphql: route.graphql ?? null,
-        serviceId: names.get(route.serviceId) ?? '',
-      })),
+      routes: routes.map(
+        ({ id: _id, configOrder: _order, portal, ...route }) => ({
+          ...route,
+          plugins: route.plugins ?? [],
+          graphql: route.graphql ?? null,
+          // Unpublished routes keep their existing document shape.
+          ...(portal ? { portal } : {}),
+          serviceId: names.get(route.serviceId) ?? '',
+        }),
+      ),
       consumers: consumers.map(({ name, rateLimitTier, groups }) => ({
         name,
         rateLimitTier,
@@ -233,7 +238,10 @@ export class ConfigImportService implements OnModuleDestroy {
             fields: Object.keys(row),
           });
         else {
-          const fields = Object.keys(row).filter(
+          // Union: an omitted optional field (such as portal) is a removal.
+          const fields = [
+            ...new Set([...Object.keys(row), ...Object.keys(previous)]),
+          ].filter(
             (field) =>
               canonical((row as unknown as Record<string, unknown>)[field]) !==
               canonical(
@@ -427,10 +435,10 @@ export class ConfigImportService implements OnModuleDestroy {
           [JSON.stringify(services)],
         );
         await manager.query(
-          `INSERT INTO ${schema}.routes AS r (id,method,"pathPattern","serviceId","authRequired","rateLimitOverride",enabled,retry,plugins,graphql,"configOrder")
-          SELECT id,method,"pathPattern","serviceId","authRequired","rateLimitOverride",enabled,retry,plugins,graphql,"configOrder"
-          FROM jsonb_to_recordset($1::jsonb) AS x(id uuid,method text,"pathPattern" text,"serviceId" uuid,"authRequired" boolean,"rateLimitOverride" integer,enabled boolean,retry jsonb,plugins jsonb,graphql jsonb,"configOrder" integer)
-          ON CONFLICT(id) DO UPDATE SET method=EXCLUDED.method,"pathPattern"=EXCLUDED."pathPattern","serviceId"=EXCLUDED."serviceId","authRequired"=EXCLUDED."authRequired","rateLimitOverride"=EXCLUDED."rateLimitOverride",enabled=EXCLUDED.enabled,retry=EXCLUDED.retry,plugins=EXCLUDED.plugins,graphql=EXCLUDED.graphql,"configOrder"=EXCLUDED."configOrder"`,
+          `INSERT INTO ${schema}.routes AS r (id,method,"pathPattern","serviceId","authRequired","rateLimitOverride",enabled,retry,plugins,graphql,portal,"configOrder")
+          SELECT id,method,"pathPattern","serviceId","authRequired","rateLimitOverride",enabled,retry,plugins,graphql,portal,"configOrder"
+          FROM jsonb_to_recordset($1::jsonb) AS x(id uuid,method text,"pathPattern" text,"serviceId" uuid,"authRequired" boolean,"rateLimitOverride" integer,enabled boolean,retry jsonb,plugins jsonb,graphql jsonb,portal jsonb,"configOrder" integer)
+          ON CONFLICT(id) DO UPDATE SET method=EXCLUDED.method,"pathPattern"=EXCLUDED."pathPattern","serviceId"=EXCLUDED."serviceId","authRequired"=EXCLUDED."authRequired","rateLimitOverride"=EXCLUDED."rateLimitOverride",enabled=EXCLUDED.enabled,retry=EXCLUDED.retry,plugins=EXCLUDED.plugins,graphql=EXCLUDED.graphql,portal=EXCLUDED.portal,"configOrder"=EXCLUDED."configOrder"`,
           [JSON.stringify(routes)],
         );
         await manager.query(
@@ -448,7 +456,7 @@ export class ConfigImportService implements OnModuleDestroy {
           [services.map((row) => row.id)],
         );
         await manager.query(
-          `UPDATE ${schema}.consumers SET "revokedAt"=clock_timestamp() WHERE "revokedAt" IS NULL AND NOT(id=ANY($1::uuid[]))`,
+          `UPDATE ${schema}.consumers SET "revokedAt"=clock_timestamp() WHERE "revokedAt" IS NULL AND "portalDeveloperId" IS NULL AND NOT(id=ANY($1::uuid[]))`,
           [consumers.map((row) => row.id)],
         );
         const payload = await this.push.persistUpdate(tenant, manager);

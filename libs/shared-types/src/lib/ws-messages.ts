@@ -332,6 +332,8 @@ export interface RouteConfig {
     deny?: string[];
   };
   graphql?: GraphqlPolicy | null;
+  /** Developer portal publication; administration only, never sent to gateways. */
+  portal?: import('./portal.ts').RoutePortalMetadata | null;
 }
 
 export const MAX_SERVICE_TARGETS = 256;
