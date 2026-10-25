@@ -8,6 +8,7 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
+- [Issue #117](https://github.com/mayank-rawat98/NovaGate/issues/117) adds phase 6.1 statistical per-route anomaly detection. A 7-day baseline of 15-minute windows from received request logs is compared every minute with the latest 5 minutes as z-scores (5xx rate, p95 latency, traffic spikes and drops), with floors and hysteresis. Anomalies open and resolve Phase 4 alert events and deliveries, and the overview feed links to prefilled logs and traces. In the real-process run, an injected latency spike delivered a signed webhook alert about **6 seconds** after injection. Verified on Node 26.11.1 with PostgreSQL 16 and Redis 7: **894 admin tests**, 615/616 gateway (the remaining test needs IPv6), 144 control-plane, 35 CLI, 10 dashboard, 5 portal and 4 SDK tests. The dashboard browser smoke passes with zero WCAG/runtime findings. See the section below.
 - [Issue #115](https://github.com/mayank-rawat98/NovaGate/issues/115) adds the phase 6.2 automatic circuit breaker: per-service sliding-window circuits on the gateway for HTTP/1, HTTP/2, WebSocket upgrades and native gRPC, `503 CIRCUIT_OPEN` with `Retry-After`, sequential half-open probes and Prometheus state. Live state flows from the gateway through the control plane to the admin API and the dashboard. The real-process run opens a circuit at a 60% upstream failure rate and refuses traffic without upstream calls. The admin snapshot and live stream show `closed → open → half-open → closed`, and recovery closes the circuit. Verified on Node 26.11.1 with PostgreSQL 16 and Redis 7: **615/616 gateway tests** (the remaining test needs IPv6), **881 admin**, **144 control-plane**, 35 CLI, 10 dashboard, 5 portal and 4 SDK tests. Terraform acceptance passes with the new `circuit_breaker` block, and the dashboard browser smoke passes with zero WCAG/runtime findings. See the section below.
 - [Issue #113](https://github.com/mayank-rawat98/NovaGate/issues/113) adds phase 5.5: operator-pinned third-party plugins loaded from npm packages, `libs/plugin-sdk`, a workspace kill switch, gateway status reports through the control plane, and dashboard/route-editor support. A real-process run installs packed tarballs with npm. It checks that hooks fire on live traffic and that an uninstalled package fails closed. Timer and unhandled-rejection crashes quarantine the plugin while the gateway keeps serving, and the kill switch reaches the gateway. Verified on Node 26.11.1 with local PostgreSQL 16 and Redis 7: **878 admin tests** (21 RustFS-dependent skipped; no container runtime), **132 control-plane**, **598/599 gateway** (the remaining test needs IPv6, which this container lacks), 4 SDK, 10 dashboard, 5 portal and 35 CLI tests. Lint/typecheck pass, as do both production browser smokes with zero WCAG/runtime findings and the portal → gateway end-to-end run. See the section below.
 - [Issue #111](https://github.com/mayank-rawat98/NovaGate/issues/111) adds the phase 5.4 Terraform provider: `novagate_service`, `novagate_route`, `novagate_consumer` and `novagate_alert_rule`, with import support, plus `novagate_tenant` and `novagate_consumer` data sources. Acceptance runs the real Terraform 1.16.7 CLI against the real admin API on PostgreSQL. It covers create, in-place update, clearing, import of every resource, scope denial and destroy, and SQL confirms the soft deletes. See the section below.
@@ -1562,7 +1563,7 @@ issues #69, #90 and the remaining #101 investigation stay open.
 
 ### Phase 6 — beyond Kong roadmap
 
-- Anomaly detection and automatic delivered alerts.
+- Anomaly detection: implemented in #117 (per-route z-scores over 15-minute windows, delivered through Phase 4 alerting, overview feed); tuning on production traffic and formal acceptance remain.
 - Circuit breakers: implemented in #115 (per-service sliding window across HTTP/1, HTTP/2, WebSocket and gRPC, live dashboard status, Terraform and declarative support); load measurements and formal acceptance remain.
 - Multi-region control-plane failover, durable configuration and observability attribution
   across multiple gateways/regions; current alert aggregation rejects ambiguous overlap.
@@ -1964,3 +1965,45 @@ Verification (Node 26.11.1, PostgreSQL 16, Redis 7):
 
 Not verified here: behaviour under load and across several gateway replicas.
 Circuits are per process by design.
+
+## Anomaly detection — issue #117
+
+Routes (method plus the logged route pattern) get a 7-day baseline of completed
+15-minute windows from received request logs: requests, 5xx and p95. Every minute
+(`ANOMALY_EVALUATION_INTERVAL_MS`) the latest 5 minutes are scored as z-scores:
+
+- 5xx rate and p95 latency upward;
+- traffic spikes, and drops on configured routes.
+
+Floors on the standard deviation and on the absolute change, minimum request and
+baseline-window counts, and three calm evaluations before resolving keep normal
+traffic quiet. Anomalies open and resolve Phase 4 alert events (`anomalyId`, plus
+an `anomaly` description) and deliveries to the channels chosen in Alerts →
+Anomaly detection. The delivery worker, signing, retries and history are reused
+unchanged. Detection runs in admin-api under per-workspace leases, with a
+compare-and-set window cursor.
+
+Verification (Node 26.11.1, PostgreSQL 16, Redis 7):
+
+- `admin-api:anomaly-e2e`: built admin API, control plane and gateway, and a real
+  webhook channel. Eight baseline windows are seeded (p95 20–26 ms; materializing
+  windows from request logs is covered below). Forty requests then go through the
+  gateway at about 400 ms. The signed webhook alert ("Unusual 1796% rise in p95
+  latency on GET /orders: baseline 23 ms, current 436 ms") arrived about 6 s after
+  injection. The feed listed exactly that anomaly, and alert history recorded the
+  delivery.
+- Real PostgreSQL integration:
+  - materialization from backdated receipts, idempotence and quiet normal traffic;
+  - opening with an alert event and a queued delivery, in-place updates, and
+    resolution after three calm evaluations with a resolved event;
+  - error spikes, and drops limited to configured routes;
+  - disabled detection, missing baselines;
+  - settings validation, revision conflicts and channel ownership.
+- Unit tests for the statistics and guards, and transport tests for anomaly
+  webhook payloads and Slack text.
+- Dashboard browser smoke: feed states, logs/traces links that prefill and
+  search, settings validation and revision reload, channel selection, alert
+  history summary, mobile/axe.
+
+Not verified here: tuning against production traffic. The E2E seeds its baseline
+because hours of real traffic would be needed otherwise.
