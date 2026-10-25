@@ -103,7 +103,7 @@ The code contains substantial work for phases 0–3, but file presence does not 
 | 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                                                                                                                         | Native gRPC/WebSocket checks exist (#41/#43), bounded AST GraphQL policies are verified (#53), and issue #55 hardens HTTP/2 lifecycle, limits and health-compatible fallback; issue #57 adds verified least-connections; formal protocol acceptance remains                                                 |
 | 4     | RustFS archives (#37), traces (#61), live metrics (#63), alerts (#65), external delivery (#95), bounded consumer rollups (#99)                                                                    | Larger workloads/provider acceptance, hydration (#69), RustFS cleanup (#90), formal acceptance and release remain                                                                                                                                                                                           |
 | 5     | REST configuration, reviewed declarative import/export (#103), private CLI/live logs (#105), automation tokens (#107), portal (#109), Terraform (#111), plugin SDK and third-party loading (#113) | CLI distribution, npm/registry publication, configuration history/rollback and formal acceptance remain                                                                                                                                                                                                     |
-| 6     | Circuit breaker (#115), anomaly detection (#117)                                                                                                                                                  | Regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                                                                                               |
+| 6     | Circuit breaker (#115), anomaly detection (#117), quotas and billing metering (#119)                                                                                                              | Regional failover, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                                                                                                       |
 
 ### Prerequisites discovered by audit
 
@@ -1345,6 +1345,19 @@ Architecture:
 ---
 
 ### 6.4 Per-Tenant Usage Quotas and Billing Metering
+
+Implemented in [issue #119](https://github.com/mayank-rawat98/NovaGate/issues/119).
+The roadmap below counts in a Redis key per tenant. Instead, gateways meter in their
+own Redis (no tenant prefix; `meter:<YYYYMM>:*`) and report cumulative totals,
+because live traffic never reaches the SaaS servers. The admin API keeps the
+largest total per source, enforces plans in a worker and pushes
+`suspended: { reason, until }` (until the next UTC month) rather than a boolean, so
+the gateway lifts it at the reset on its own. Consumer monthly quotas are enforced
+on the gateway at request time. Plan enforcement is opt-in per installation
+(`BILLING_QUOTAS_ENABLED`). Stripe Checkout and signed webhooks change plans.
+`@api-gateway/api:billing-e2e` verifies the exit criterion; the dashboard's 98%
+warning is covered by the browser smoke. See the
+[billing guide](apps/admin-api/src/billing/README.md).
 
 **Differentiation target:** Tenant and consumer usage controls with transparent, reproducible metering.
 

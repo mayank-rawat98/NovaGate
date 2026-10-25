@@ -89,11 +89,13 @@ gateway/
 
 ## Redis keys (no tenantId prefix — single tenant per instance)
 
-| Key               | Purpose                | TTL      |
-| ----------------- | ---------------------- | -------- |
-| `cfg:default`     | Full TenantConfig JSON | 7 days   |
-| `rl:<clientKey>`  | Rate-limit sorted set  | windowMs |
-| `apikey:<sha256>` | Consumer key cache     | 5 min    |
+| Key                | Purpose                | TTL      |
+| ------------------ | ---------------------- | -------- |
+| `cfg:default`      | Full TenantConfig JSON | 7 days   |
+| `rl:<clientKey>`   | Rate-limit sorted set  | windowMs |
+| `apikey:<sha256>`  | Consumer key cache     | 5 min    |
+| `meter:<YYYYMM>:*` | Usage meters (#119)    | 40 days  |
+| `meter:source`     | Meter source ID        | none     |
 
 ## Plugin system rules
 
@@ -123,6 +125,20 @@ CIRCUIT_OPEN` + `Retry-After`, WebSocket 503, gRPC `UNAVAILABLE`); half-open
 admits one probe at a time, and a probe unsettled for 3× `openMs` is replaced.
 Changing a service's breaker settings resets its circuit. State changes are
 reported as `circuit.state` snapshots (debounced 200 ms, heartbeat 30 s).
+
+## Usage metering and quotas (issue #119)
+
+`metering/metering.service.ts` counts proxied requests per UTC month in local
+Redis (`meter:*`, see REDIS_KEY_DESIGN.md) with one Lua script that refuses a
+consumer at `ConsumerConfig.monthlyQuota` without counting. HTTP meters after
+the authentication check (preflights excluded); WebSocket upgrades and gRPC
+calls meter by `req.user.consumerId`. Refusals are `429 QUOTA_EXCEEDED` with
+`Retry-After` and `X-Quota-*` headers (gRPC `RESOURCE_EXHAUSTED`). While
+`TenantConfig.suspended.until` is in the future every route is refused before
+metering; an expired suspension is ignored without a push. Redis failures
+admit the request and increment `gateway_metering_redis_errors_total`. The
+connector sends cumulative totals as transient `usage.report` frames, one month
+per frame, every 30s and after `auth_ok`.
 
 ## Third-party plugins (issue #113)
 

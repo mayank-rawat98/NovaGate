@@ -39,6 +39,11 @@ database/
 | `pong`           | Refreshes `gw:online` Redis key                                                               | Response to server-sent ping                              |
 | `plugins.status` | `parsePluginStatuses` → Redis `gw:plugins:<tenant>` (TTL 180s)                                | Third-party plugin states; invalid reports are dropped    |
 | `circuit.state`  | `parseCircuitStatuses` → Redis `gw:circuits:<tenant>` (TTL 90s) + publish `circuits:<tenant>` | Per-service circuit snapshot; invalid reports are dropped |
+| `usage.report`   | `parseUsageReport` → `public.usage_meters` / `consumer_usage_meters` (GREATEST per source)    | Cumulative monthly totals; dropped before admin migration |
+
+Initial `auth_ok` snapshots include `suspended` from `tenants."quotaSuspendedUntil"`
+(tolerant read; only a future time is sent), matching the admin API's published
+configuration (issue #119).
 
 ## Config push rule
 

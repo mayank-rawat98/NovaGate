@@ -732,6 +732,17 @@ acceptance remains separate from local development checks.
 
 Every route is compared with its own last 7 days, without rules to write. Each minute, the latest 5 minutes of 5xx rate, p95 latency and traffic are scored as a z-score against the route's 15-minute windows (issue #117). The dashboard overview lists anomalies such as "Unusual 800% rise in p95 latency on GET /api/orders: baseline 42 ms, current 380 ms", with links to that route's logs and traces. **Alerts → Anomaly detection** sets the sensitivity (z-score, default 3), the minimum request count (default 20) and up to five notification channels. Anomalies use the same alert history, delivery retries and signed webhooks as alert rules; webhook payloads carry an `anomaly` description. Operators can change the evaluation interval with `ANOMALY_EVALUATION_INTERVAL_MS` on the admin API (default 60000). See [the anomaly guide](apps/admin-api/src/anomalies/README.md). `npm exec nx run admin-api:anomaly-e2e` verifies that an injected latency spike delivers a webhook alert.
 
+### Quotas, plans and billing
+
+Gateways meter every proxied request in their own Redis and report cumulative monthly totals through the control plane (issue #119), so request traffic never reaches the SaaS servers.
+
+- **Consumer quotas:** a consumer can have a monthly request quota (Consumers page, API or declarative `monthlyQuota`). At the quota, that key gets `429 QUOTA_EXCEEDED` with `Retry-After` and `X-Quota-*` headers until the 1st (UTC).
+- **Plan limits:** plans (`public.plans`: Free, Pro and Enterprise seeded) set monthly requests, consumers, routes and log retention. With `BILLING_QUOTAS_ENABLED=true` on the admin API, a workspace that uses its monthly requests is paused until the monthly reset (every route answers 429), and creating consumers or routes past the plan returns `402 PLAN_LIMIT`.
+- **Plan & usage page:** shows the meters, with warnings at 80% and 98%.
+- **Stripe (optional):** with `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `STRIPE_PRICES`, the page offers Stripe Checkout upgrades. A signed webhook at `/api/billing/stripe/webhook` changes the plan and lifts a pause immediately.
+
+See [the billing guide](apps/admin-api/src/billing/README.md). `npm exec nx run @api-gateway/api:billing-e2e` verifies a consumer 429, a workspace pause and an upgrade that resumes traffic on real processes.
+
 ### Database request-log retention
 
 Settings → **Log retention** sets a tenant's database request-log lifetime to 1–90

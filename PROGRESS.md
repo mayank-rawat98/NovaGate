@@ -8,6 +8,21 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
+- [Issue #119](https://github.com/mayank-rawat98/NovaGate/issues/119) adds phase 6.4 usage metering, quotas and billing:
+  - The gateway meters requests in its own Redis and enforces per-consumer monthly quotas (429 `QUOTA_EXCEEDED`).
+  - The control plane stores cumulative per-source totals.
+  - The admin API adds plans, plan caps, opt-in workspace suspension until the monthly reset, Stripe Checkout and signed idempotent webhooks.
+  - The dashboard adds Plan & usage, with 80%/98% warnings, and per-consumer quota usage.
+
+  The real-process run hit a consumer 429 and a workspace pause, then resumed traffic through a signed upgrade webhook.
+
+  Verified on Node 26.11.1 with PostgreSQL 16 and Redis 7:
+  - **907 admin tests** (21 RustFS-dependent skipped);
+  - 619/620 gateway (the remaining test needs IPv6);
+  - 145 control-plane, 35 CLI, 10 dashboard, 5 portal and 4 SDK tests.
+
+  The dashboard browser smoke passes with zero WCAG/runtime findings. One earlier run hit an intermittent React #418 hydration error on `/settings`, a page this change does not touch (see #69). See the section below.
+
 - [Issue #117](https://github.com/mayank-rawat98/NovaGate/issues/117) adds phase 6.1 statistical per-route anomaly detection. A 7-day baseline of 15-minute windows from received request logs is compared every minute with the latest 5 minutes as z-scores (5xx rate, p95 latency, traffic spikes and drops), with floors and hysteresis. Anomalies open and resolve Phase 4 alert events and deliveries, and the overview feed links to prefilled logs and traces. In the real-process run, an injected latency spike delivered a signed webhook alert about **6 seconds** after injection. Verified on Node 26.11.1 with PostgreSQL 16 and Redis 7: **894 admin tests**, 615/616 gateway (the remaining test needs IPv6), 144 control-plane, 35 CLI, 10 dashboard, 5 portal and 4 SDK tests. The dashboard browser smoke passes with zero WCAG/runtime findings. See the section below.
 - [Issue #115](https://github.com/mayank-rawat98/NovaGate/issues/115) adds the phase 6.2 automatic circuit breaker: per-service sliding-window circuits on the gateway for HTTP/1, HTTP/2, WebSocket upgrades and native gRPC, `503 CIRCUIT_OPEN` with `Retry-After`, sequential half-open probes and Prometheus state. Live state flows from the gateway through the control plane to the admin API and the dashboard. The real-process run opens a circuit at a 60% upstream failure rate and refuses traffic without upstream calls. The admin snapshot and live stream show `closed → open → half-open → closed`, and recovery closes the circuit. Verified on Node 26.11.1 with PostgreSQL 16 and Redis 7: **615/616 gateway tests** (the remaining test needs IPv6), **881 admin**, **144 control-plane**, 35 CLI, 10 dashboard, 5 portal and 4 SDK tests. Terraform acceptance passes with the new `circuit_breaker` block, and the dashboard browser smoke passes with zero WCAG/runtime findings. See the section below.
 - [Issue #113](https://github.com/mayank-rawat98/NovaGate/issues/113) adds phase 5.5: operator-pinned third-party plugins loaded from npm packages, `libs/plugin-sdk`, a workspace kill switch, gateway status reports through the control plane, and dashboard/route-editor support. A real-process run installs packed tarballs with npm. It checks that hooks fire on live traffic and that an uninstalled package fails closed. Timer and unhandled-rejection crashes quarantine the plugin while the gateway keeps serving, and the kill switch reaches the gateway. Verified on Node 26.11.1 with local PostgreSQL 16 and Redis 7: **878 admin tests** (21 RustFS-dependent skipped; no container runtime), **132 control-plane**, **598/599 gateway** (the remaining test needs IPv6, which this container lacks), 4 SDK, 10 dashboard, 5 portal and 35 CLI tests. Lint/typecheck pass, as do both production browser smokes with zero WCAG/runtime findings and the portal → gateway end-to-end run. See the section below.
@@ -1567,7 +1582,7 @@ issues #69, #90 and the remaining #101 investigation stay open.
 - Circuit breakers: implemented in #115 (per-service sliding window across HTTP/1, HTTP/2, WebSocket and gRPC, live dashboard status, Terraform and declarative support); load measurements and formal acceptance remain.
 - Multi-region control-plane failover, durable configuration and observability attribution
   across multiple gateways/regions; current alert aggregation rejects ambiguous overlap.
-- Usage quotas, billing metering and threshold UX.
+- Usage quotas and billing metering: implemented in #119 (gateway-side metering and consumer quotas, plan caps, opt-in workspace suspension, Stripe Checkout/webhooks, Plan & usage page); invoicing beyond Stripe subscriptions, Terraform `monthly_quota` and formal acceptance remain.
 - Kubernetes controller/CRD reconciliation inside this repository.
 - WASM sandbox, resource limits and isolation checks.
 - GraphQL federation with subgraph failure and query-budget behavior.
@@ -2007,3 +2022,68 @@ Verification (Node 26.11.1, PostgreSQL 16, Redis 7):
 
 Not verified here: tuning against production traffic. The E2E seeds its baseline
 because hours of real traffic would be needed otherwise.
+
+## Quotas and billing — issue #119
+
+Gateways count each proxied request after authentication in local Redis
+(`meter:<YYYYMM>:requests`, per-consumer counters and a consumer set). One Lua
+script refuses a consumer at `monthlyQuota` without counting. Every 30 s, and
+after `auth_ok`, the connector sends cumulative totals as transient `usage.report`
+frames, one per month. The control plane keeps the largest value per workspace,
+month and source in `public.usage_meters` and `public.consumer_usage_meters`, so
+lost or repeated reports are harmless.
+
+Plans live in `public.plans` and set requests, consumers, routes and retention.
+With `BILLING_QUOTAS_ENABLED=true`:
+
+- the admin API's worker suspends an exhausted workspace until the next UTC
+  month and pushes `suspended`;
+- the gateway refuses every route with 429 and `Retry-After`;
+- consumer and route creation past the plan returns `402 PLAN_LIMIT` (API,
+  import and portal keys);
+- retention is capped.
+
+Stripe Checkout sessions carry the workspace and plan. Signed webhooks are
+verified over the raw body with a 300 s tolerance and recorded once per event
+ID. They change the plan and lift or apply the suspension in the same
+transaction as the configuration push.
+
+Verification (Node 26.11.1, PostgreSQL 16, Redis 7):
+
+- `@api-gateway/api:billing-e2e` ran the built admin API, control plane and
+  gateway, a local fake Stripe and a 12-request free plan:
+  - The consumer (quota 3) got 200 three times. Then it got 429 with
+    `X-Quota-Limit: 3`, and the upstream saw no fourth request.
+  - Anonymous traffic used the plan. Usage arrived through the control plane,
+    the worker suspended the workspace, and the gateway answered 429 with
+    `Retry-After` pointing at November 1 (UTC), without upstream calls.
+  - Checkout sent the workspace and price to Stripe. An unsigned webhook was
+    refused. The signed `checkout.session.completed` moved the workspace to Pro
+    and traffic resumed; a replay was acknowledged as a duplicate.
+  - Raising the consumer's quota took effect on the next configuration.
+- Admin integration on PostgreSQL:
+  - overview, and meters summed across sources;
+  - consumer quotas, and four concurrent creations against a cap of five that
+    let exactly two through;
+  - route and retention caps, and upgrade lifting them;
+  - suspension stability, wrong and missing signatures, duplicates;
+  - cancellation back to Free, monthly reset;
+  - checkout form fields, and enforcement turned off.
+- Declarative import/export round-trips `monthlyQuota`; null and absent are
+  equivalent.
+- Control-plane integration: keeping the largest total, invalid reports, and
+  `suspended` in `auth_ok` (future only).
+- Gateway: the Lua admission and fail-open path on Redis, plus quotas and
+  suspension through the real proxy.
+- Dashboard browser smoke:
+  - 80%/98% banners, checkout failure then redirect, the paused banner;
+  - consumer quota meter at 99%, quota input bounds;
+  - desktop/mobile axe.
+
+  One smoke run failed on an intermittent React #418 hydration error on
+  `/settings`. That page is unchanged here; this looks like #69. The rerun was
+  clean.
+
+Not verified here: real Stripe accounts (the API is faked locally) and load
+across many gateways. Usage lags by up to one report interval plus the worker
+interval, so a workspace can overshoot its plan by that much traffic.

@@ -25,6 +25,7 @@ connections.
 | `/(dashboard)/logs`      | `app/(dashboard)/logs/page.tsx`      | Filterable request logs                                |
 | `/(dashboard)/errors`    | `app/(dashboard)/errors/page.tsx`    | Error tracking and resolution                          |
 | `/(dashboard)/settings`  | `app/(dashboard)/settings/page.tsx`  | Tenant info, API key, Docker Compose                   |
+| `/(dashboard)/billing`   | `app/(dashboard)/billing/page.tsx`   | Plan & usage: meters, suspension, Stripe upgrade       |
 
 ## API client (`src/lib/api-client.ts`)
 
@@ -278,3 +279,15 @@ Third-party plugins section at the end of the route editor's Plugins tab. Custom
 entries are a scoped package name plus a JSON object; invalid names, duplicates,
 invalid JSON and oversized configuration are rejected before the request. Edited
 entries keep their saved position; new ones are appended.
+
+Issue #119 adds Plan & usage (`/billing`): request/consumer/route meters and log
+retention against the plan, an 80% warning and a 98% critical banner, a paused
+banner with the UTC reset date while the workspace is suspended, and plan cards
+whose upgrade button sends the browser to the Stripe Checkout URL from
+`startCheckout` (session only; the webhook, not the redirect, changes the
+plan). `?checkout=` is read after mount. Limits are labelled informational when
+the installation does not enforce them. The Consumers page adds a This month
+column (`getConsumerQuotas`: usage against each consumer's monthly quota, a
+labelled meter, an "Almost exhausted" warning at 98%) and a bounded Monthly
+request quota input; blank means no quota. `402 PLAN_LIMIT` messages are shown
+as returned.
