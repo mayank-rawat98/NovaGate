@@ -1,0 +1,11 @@
+# An upstream service. Its NovaGate name is k8s:<namespace>/<name>.
+apiVersion: novagate.dev/v1alpha1
+kind: GatewayService
+metadata:
+  name: users
+spec:
+  targets:
+    - url: http://users.default.svc.cluster.local:8080
+      weight: 100
+  healthCheckPath: /health
+  timeoutMs: 10000

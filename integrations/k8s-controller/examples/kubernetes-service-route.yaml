@@ -1,0 +1,13 @@
+# Forward to a Kubernetes Service through cluster DNS; the controller
+# manages the NovaGate service k8s:<namespace>/svc/orders:8080.
+apiVersion: novagate.dev/v1alpha1
+kind: GatewayRoute
+metadata:
+  name: orders-api
+spec:
+  method: ANY
+  path: /orders
+  authRequired: true
+  backend:
+    service: orders
+    port: 8080

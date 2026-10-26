@@ -76,6 +76,9 @@ jobs:
       - name: Typecheck
         run: npm exec nx run-many -- -t typecheck
 
+      - name: Kubernetes API server binaries for the controller
+        run: echo "KUBEBUILDER_ASSETS=$(cd integrations/k8s-controller && go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.19 use 1.31.x -p path --bin-dir ../../.local-work/envtest)" >> "$GITHUB_ENV"
+
       - name: Test
         run: npm exec nx run-many -- -t test --skipNxCache
         env:
@@ -116,6 +119,12 @@ jobs:
           E2E_DATABASE_URL: postgres://novagate_test:local-verification-only@127.0.0.1:15432/novagate_test
           E2E_REDIS_URL: redis://127.0.0.1:16379/8
 
+      - name: Kubernetes controller end-to-end
+        run: npm exec nx run k8s-controller:e2e
+        env:
+          E2E_DATABASE_URL: postgres://novagate_test:local-verification-only@127.0.0.1:15432/novagate_test
+          E2E_REDIS_URL: redis://127.0.0.1:16379/9
+
       - name: Upload dashboard verification evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -128,4 +137,5 @@ jobs:
             .local-work/developer-portal-verification/*.json
             .local-work/portal-gateway-e2e/*
             .local-work/terraform-acceptance/*
+            .local-work/k8s-e2e/*
           if-no-files-found: ignore

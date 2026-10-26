@@ -1,0 +1,75 @@
+# Namespace, service account, RBAC binding and Deployment. Create the
+# credentials first (an automation token with routes:write and
+# services:write):
+#   kubectl -n novagate-system create secret generic novagate-api \
+#     --from-literal=NOVAGATE_API_URL=https://admin.example.com/api \
+#     --from-literal=NOVAGATE_TENANT_ID=<workspace id> \
+#     --from-literal=NOVAGATE_TOKEN=ngat_...
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: novagate-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: novagate-controller
+  namespace: novagate-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: novagate-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: novagate-controller
+subjects:
+  - kind: ServiceAccount
+    name: novagate-controller
+    namespace: novagate-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: novagate-controller
+  namespace: novagate-system
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: novagate-controller
+  template:
+    metadata:
+      labels:
+        app: novagate-controller
+    spec:
+      serviceAccountName: novagate-controller
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: ghcr.io/mayank-rawat98/novagate-controller:latest
+          args: ['--leader-elect']
+          envFrom:
+            - secretRef:
+                name: novagate-api
+          ports:
+            - name: metrics
+              containerPort: 8080
+            - name: probes
+              containerPort: 8081
+          livenessProbe:
+            httpGet: { path: /healthz, port: probes }
+          readinessProbe:
+            httpGet: { path: /readyz, port: probes }
+          resources:
+            requests: { cpu: 10m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ['ALL']
