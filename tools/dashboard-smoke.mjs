@@ -11,6 +11,10 @@ import {
   automationTokensBrowserFixture,
   verifyAutomationTokensDashboard,
 } from './automation-tokens-dashboard-smoke.mjs';
+import {
+  developerPortalBrowserFixture,
+  verifyDeveloperPortalDashboard,
+} from './developer-portal-dashboard-smoke.mjs';
 import { createServer } from 'node:http';
 import {
   existsSync,
@@ -55,6 +59,7 @@ let exportDestinationsEvidence;
 let exportDeliveryEvidence;
 let configImportEvidence;
 let automationTokensEvidence;
+let developerPortalEvidence;
 let coldLoads = 0;
 const startedAt = Date.now();
 let metricsConnections = 0;
@@ -113,6 +118,7 @@ const metricsOrigin = `http://127.0.0.1:${metricsServer.address().port}`;
 const tenant = '12345678-1234-1234-1234-123456789abc';
 const exportDestinationsFixture = exportDestinationsBrowserFixture();
 const automationTokensFixture = automationTokensBrowserFixture();
+const developerPortalFixture = developerPortalBrowserFixture();
 const service = '23456789-1234-1234-1234-123456789abc';
 const traceId = '0123456789abcdef0123456789abcdef';
 let traceMode = 'normal';
@@ -266,6 +272,7 @@ const handleApiFixture = async (route) => {
   const resource = url.pathname.split('/').at(-1);
   if (await exportDestinationsFixture.handle(route)) return;
   if (await automationTokensFixture.handle(route)) return;
+  if (await developerPortalFixture.handle(route)) return;
   if (resource === 'log-retention') {
     const tenant =
       url.pathname.split('/')[url.pathname.split('/').indexOf('tenants') + 1];
@@ -2529,6 +2536,14 @@ try {
     audit,
     fixture: automationTokensFixture,
   });
+  developerPortalEvidence = await verifyDeveloperPortalDashboard({
+    page,
+    context,
+    base,
+    tenant,
+    audit,
+    fixture: developerPortalFixture,
+  });
   writeFileSync(
     resolve(artifacts, 'accessibility.json'),
     JSON.stringify(violations, null, 2),
@@ -2581,6 +2596,7 @@ try {
           exportDelivery: exportDeliveryEvidence,
           configImport: configImportEvidence,
           automationTokens: automationTokensEvidence,
+          developerPortal: developerPortalEvidence,
           runtimeErrors,
           accessibilityViolations: violations,
         },

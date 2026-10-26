@@ -44,6 +44,9 @@ import type {
   AutomationTokenSummary,
   CreateAutomationToken,
   CreatedAutomationToken,
+  PortalSettings,
+  SavePortalSettings,
+  PortalDeveloper,
 } from '@api-gateway/shared-types';
 import { getToken, clearToken } from './auth';
 
@@ -93,6 +96,7 @@ export type CreateRouteDto = Pick<
   retry?: RouteEntity['retry'];
   plugins?: RouteEntity['plugins'];
   graphql?: RouteEntity['graphql'];
+  portal?: RouteEntity['portal'];
 };
 export type UpdateRouteDto = Partial<CreateRouteDto>;
 export type CreateServiceDto = Pick<ServiceEntity, 'name' | 'targets'> & {
@@ -119,6 +123,10 @@ export type CreateConsumerResult = ConsumerEntity & { apiKey: string };
 // Same-origin requests use the Next.js admin API rewrite in each deployment.
 // An explicit public origin remains available for installations that need it.
 const BASE = (process.env.NEXT_PUBLIC_ADMIN_API_URL ?? '').replace(/\/$/, '');
+/** Shared developer portal host for workspaces without a custom domain. */
+export const PORTAL_URL = (
+  process.env.NEXT_PUBLIC_PORTAL_URL ?? 'http://localhost:3004'
+).replace(/\/+$/, '');
 function toQuery(
   params: Record<string, string | number | boolean | undefined>,
 ): string {
@@ -881,5 +889,36 @@ export function revokeAutomationToken(
   return request(
     `/tenants/${tenantId}/automation-tokens/${encodeURIComponent(tokenId)}`,
     { method: 'DELETE', signal },
+  );
+}
+
+export function getPortalSettings(tenantId: string): Promise<PortalSettings> {
+  return request(`/tenants/${tenantId}/portal-settings`);
+}
+export function savePortalSettings(
+  tenantId: string,
+  input: SavePortalSettings,
+  signal?: AbortSignal,
+): Promise<PortalSettings> {
+  return request(`/tenants/${tenantId}/portal-settings`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+export function getPortalDevelopers(
+  tenantId: string,
+): Promise<PortalDeveloper[]> {
+  return request(`/tenants/${tenantId}/portal/developers`);
+}
+export function setPortalDeveloperStatus(
+  tenantId: string,
+  developerId: string,
+  status: 'active' | 'suspended',
+  signal?: AbortSignal,
+): Promise<{ status: 'active' | 'suspended'; revokedKeys: number }> {
+  return request(
+    `/tenants/${tenantId}/portal/developers/${encodeURIComponent(developerId)}`,
+    { method: 'PUT', body: JSON.stringify({ status }), signal },
   );
 }

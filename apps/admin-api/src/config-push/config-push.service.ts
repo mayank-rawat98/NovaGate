@@ -146,11 +146,20 @@ export class ConfigPushService
 
     const caCertPem: string | undefined = tenantRows[0]?.caCertPem ?? undefined;
 
+    // Portal publication and developer ownership are administration-only.
     const config: TenantConfig = {
       logPrivacy: logPrivacyPolicy(tenantRows[0]?.logPrivacy),
-      routes,
+      routes: routes.map(
+        ({ portal: _portal, ...route }: Record<string, unknown>) => route,
+      ),
       services,
-      consumers,
+      consumers: consumers.map(
+        ({
+          portalDeveloperId: _developer,
+          portalKeyName: _key,
+          ...consumer
+        }: Record<string, unknown>) => consumer,
+      ),
       rateLimit: { windowMs: 60000, unauthMax: 100, authMax: 500 },
     };
     if (caCertPem) config.caCertPem = caCertPem;

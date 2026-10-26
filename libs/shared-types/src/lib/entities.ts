@@ -34,6 +34,7 @@ export interface RouteEntity {
     methods: string[];
   };
   graphql?: GraphqlPolicy | null;
+  portal?: import('./portal.ts').RoutePortalMetadata | null;
   plugins?: Array<{ name: string; config: Record<string, unknown> }>;
   acl?: {
     allow?: string[];
@@ -68,6 +69,8 @@ export interface ConsumerEntity {
   keyHash: string;
   rateLimitTier: string;
   groups?: string[];
+  /** Set for keys a developer created in the portal; excluded from declarative config. */
+  portalDeveloperId?: string | null;
   createdAt: string;
   revokedAt?: string;
 }

@@ -36,9 +36,14 @@ export class RateLimitService implements OnModuleDestroy {
     }
   }
 
-  async check(clientKey: string, limit: number): Promise<RateLimitResult> {
+  /** Sliding window; a route policy may supply its own window length. */
+  async check(
+    clientKey: string,
+    limit: number,
+    windowMs = this.windowMs,
+  ): Promise<RateLimitResult> {
     const now = Date.now();
-    const windowStart = now - this.windowMs;
+    const windowStart = now - windowMs;
     const key = `rl:${clientKey}`;
     const member = `${now}-${Math.random()}`;
 
@@ -47,7 +52,7 @@ export class RateLimitService implements OnModuleDestroy {
     pipeline.zadd(key, now, member);
     pipeline.zcard(key);
     pipeline.zrange(key, 0, 0, 'WITHSCORES');
-    pipeline.expire(key, Math.ceil(this.windowMs / 1000));
+    pipeline.expire(key, Math.ceil(windowMs / 1000));
 
     const results = await pipeline.exec();
     if (!results || results.length !== 5 || results.some(([error]) => error))
@@ -63,7 +68,7 @@ export class RateLimitService implements OnModuleDestroy {
     }
 
     const oldestScore = oldest && oldest.length >= 2 ? Number(oldest[1]) : now;
-    const retryAfterMs = Math.max(0, oldestScore + this.windowMs - now);
+    const retryAfterMs = Math.max(0, oldestScore + windowMs - now);
 
     return { allowed: false, retryAfterMs };
   }

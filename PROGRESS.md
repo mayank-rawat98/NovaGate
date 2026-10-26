@@ -8,6 +8,8 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
+- [Issue #109](https://github.com/mayank-rawat98/NovaGate/issues/109) implements the phase 5.3 developer portal: a separate Next.js app, public catalog/developer APIs, self-service keys and usage, workspace Settings and route-editor publication. A real-process end-to-end run (admin API, control plane, gateway and portal on local PostgreSQL/Redis, driven by Chromium) registers a developer, confirms the email, creates a key, makes five gateway calls, sees those five recorded requests in the portal and revokes the key, after which the gateway refuses it. It also fixes the gateway rate-limit plugin ignoring its configured window. See the section below.
+
 - [Issue #107](https://github.com/mayank-rawat98/NovaGate/issues/107) adds scoped, expiring, revocable automation tokens for the CLI, Terraform and CI. Only SHA-256 digests are stored; secrets are shown once. Endpoints accept tokens only when they declare a scope (default deny), and token management stays session-only. Verified on Node 26.11.1 with local PostgreSQL 16: **857 admin tests** pass (28 RustFS/S3-dependent tests skipped because this environment has no container runtime), **35 built CLI tests**, 10 dashboard tests, lint/typecheck for the four touched projects, and the full production browser smoke including the new panel, with zero runtime/WCAG findings. Packaged images were not rebuilt in this environment. See the section below.
 
 - [Issue #105](https://github.com/mayank-rawat98/NovaGate/issues/105) / [PR #106](https://github.com/mayank-rawat98/NovaGate/pull/106) finishes the preserved private `gwx` CLI and authenticated live request logs. Current checks pass **862 admin tests / 48 suites**, including 15 real HTTP/PostgreSQL stream cases, and **27 built CLI tests on both Node 26 and Node 24**, with no failures or skips. Six-project static checks, five production builds, real POSIX terminal checks and four rebuilt guarded non-root images pass. The cleanup disposition covers all 85 original source paths: 19 already merged, four stale/unnecessary changes omitted and 62 useful changes reconciled through PRs #104 and #106. Scoped/revocable automation, public CLI distribution and formal phase acceptance remain open. Main remains reserved for final acceptance.
@@ -1549,7 +1551,7 @@ issues #69, #90 and the remaining #101 investigation stay open.
 - The private `gwx` commands and authenticated live logs are implemented through
   #105/PR #106. Scoped/revocable automation tokens are implemented in #107.
   Enterprise RBAC, package distribution and formal acceptance remain.
-- Developer portal with route catalog, scoped self-service keys and private usage views.
+- Developer portal: implemented in #109; formal acceptance remains.
 - Terraform provider, tests and resources inside this repository.
 - Plugin SDK/third-party loading with explicit trust, compatibility and resource limits.
 - External downstream instrumentation/OTLP interoperability for third-party observability.
@@ -1765,3 +1767,50 @@ Verification (Node 26.11.1, local PostgreSQL 16 and Redis 7, x86-64 Linux):
 Not repeated here: packaged image builds and the packaged CLI/runtime pipeline,
 because Docker is unavailable in this environment. Team RBAC, immutable audit
 history and formal phase acceptance remain open.
+
+## Developer portal — issue #109
+
+`apps/developer-portal` is a new Next.js 16 app for a workspace's own API
+consumers. It runs on a shared host (`/w/:tenantId`) or on a workspace custom
+domain resolved by `src/proxy.ts`. The admin API adds `portal/` with settings
+(revisioned), a public catalog, developer registration with email confirmation,
+sign-in with lockout, and developer keys and usage. Developer sessions use a
+derived signing key and a distinct audience, and they end on suspension or
+unpublishing. Developer keys are tenant consumers tagged `portalDeveloperId`:
+the gateway is unchanged, both ownership columns are stripped from gateway
+payloads, and declarative replacement never revokes developer keys. Routes
+carry `portal` metadata (`visible`, summary, plain-text description) through the
+route API, Settings route editor and declarative documents. The catalog derives
+authentication methods and the enforced rate limit, and never exposes upstreams
+or plugin configuration. See the
+[contract](apps/admin-api/src/portal/README.md).
+
+The catalog work exposed a gateway bug, fixed here: the `rate-limit` plugin
+ignored its validated `windowMs`, so 30 per second was enforced as 30 per minute.
+
+Verification (Node 26.11.1, local PostgreSQL 16 and Redis 7):
+
+- 9 real PostgreSQL/HTTP portal cases: settings, catalog leaks, registration,
+  lockout, session isolation, keys, usage, suspension and declarative round
+  trips. Config-import (22), token (18) and guard suites pass with them. Two new
+  gateway rate-limit window tests pass.
+- Developer portal: lint/typecheck, 5 component tests, production build, and a
+  production browser smoke. The smoke covers catalog/docs, registration and
+  verification, keys, usage, sign-in, custom domains via Chromium host mapping,
+  CSP/frame headers, mobile layout and axe WCAG A/AA, with zero runtime findings.
+  It found and fixed a Next 16 proxy rewrite that self-proxied over HTTP and
+  dropped the custom-domain host.
+- Dashboard: lint/typecheck/tests and the full production browser smoke with a
+  new portal verifier (settings revision conflict, publish with domain,
+  suspension, route publication, focus, mobile axe). It found and fixed mobile
+  overflow and missing focus restoration in the new panels; the token-panel fix
+  is also pushed to PR #108.
+- `developer-portal:gateway-e2e` on real processes: route delivery, the
+  emailed confirmation link, key creation in the browser, five accepted gateway
+  calls plus one invalid-key rejection, five recorded requests in portal usage,
+  and revocation reaching the gateway.
+
+Not verified here: Docker image builds (`docker/Dockerfile.developer-portal`, and
+the extra manifest copy in the other four Dockerfiles), because this environment
+has no container runtime. The compose service sits behind the `portal` profile,
+so default deployments are unchanged. Quotas and formal acceptance remain open.

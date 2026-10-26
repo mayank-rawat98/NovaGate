@@ -41,7 +41,14 @@ export class TenantAuthGuard implements CanActivate {
       PATH_METADATA,
       context.getClass(),
     );
-    if (controllerPath === 'auth' || controllerPath === 'health') return true;
+    // Portal controllers authenticate developers with their own guard.
+    if (
+      controllerPath === 'auth' ||
+      controllerPath === 'health' ||
+      controllerPath === 'portal' ||
+      controllerPath?.startsWith('portal/')
+    )
+      return true;
 
     context.switchToHttp().getResponse().setHeader('Cache-Control', 'no-store');
     const req = context.switchToHttp().getRequest<{

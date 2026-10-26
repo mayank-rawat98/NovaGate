@@ -1,0 +1,34 @@
+FROM node:26.11.1-alpine AS builder
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY libs/shared-types/package.json ./libs/shared-types/package.json
+COPY apps/api/package.json ./apps/api/package.json
+COPY apps/admin-api/package.json ./apps/admin-api/package.json
+COPY apps/control-plane/package.json ./apps/control-plane/package.json
+COPY apps/dashboard/package.json ./apps/dashboard/package.json
+COPY apps/developer-portal/package.json ./apps/developer-portal/package.json
+COPY tools/gwx/package.json ./tools/gwx/package.json
+COPY tools/npm-verified.mjs ./tools/npm-verified.mjs
+ENV NX_DAEMON=false NX_NO_CLOUD=true
+RUN --mount=type=cache,target=/root/.npm node tools/npm-verified.mjs ci --no-audit --no-fund --ignore-scripts
+COPY . .
+ENV NEXT_TELEMETRY_DISABLED=1
+# Rewrites to the admin API are fixed at build time; the custom-domain proxy
+# reads ADMIN_API_URL again at runtime.
+ARG ADMIN_API_URL=http://admin-api:3001
+ENV ADMIN_API_URL=$ADMIN_API_URL
+RUN npm exec nx build developer-portal
+
+FROM node:26.11.1-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY --from=builder /app/dist/apps/developer-portal/.next/standalone ./
+COPY --from=builder /app/dist/apps/developer-portal/.next/static ./dist/apps/developer-portal/.next/static
+COPY --from=builder /app/apps/developer-portal/public ./apps/developer-portal/public
+USER node
+EXPOSE 3004
+ENV PORT=3004
+HEALTHCHECK --interval=30s --timeout=5s \
+  CMD wget -qO- http://127.0.0.1:3004/ || exit 1
+CMD ["node", "apps/developer-portal/server.js"]

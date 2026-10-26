@@ -1136,6 +1136,21 @@ is complete.
 
 ### 5.3 Developer Portal
 
+Implemented in [issue #109](https://github.com/mayank-rawat98/NovaGate/issues/109).
+`apps/developer-portal` serves the catalog, plain-text docs with curl examples,
+developer registration/verification/sign-in, self-service keys and per-key usage
+on a shared host (`/w/:tenantId`) or a workspace custom domain. Developer keys
+are ordinary consumers tagged `portalDeveloperId`, so the gateway is unchanged
+and declarative import never revokes them. The settings endpoint is
+`PUT /tenants/:id/portal-settings` with a revision, rather than `POST`. The
+catalog derives `rateLimit` from the route's enforced `rate-limit` plugin or
+override, rather than a separate `portal.rateLimit` field that could disagree
+with enforcement. Doing so exposed and fixed a gateway bug: the plugin ignored
+its configured `windowMs`. See the
+[portal API contract](apps/admin-api/src/portal/README.md) and
+[app guide](apps/developer-portal/CLAUDE.md). Quotas ("quota remaining") arrive
+with phase 6.4. Formal acceptance remains separate.
+
 **Who it serves:** When a GatewayX customer exposes APIs to _their_ customers, those customers need self-service key management.
 
 `apps/developer-portal/` — new Next.js app (separate from `apps/dashboard`):

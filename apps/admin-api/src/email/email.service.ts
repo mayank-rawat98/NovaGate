@@ -126,4 +126,44 @@ export class EmailService {
       throw err;
     }
   }
+
+  /** Developer portal signup; the workspace-chosen title is escaped. */
+  async sendPortalVerification(
+    to: string,
+    verifyUrl: string,
+    portalTitle: string,
+  ): Promise<void> {
+    const title = portalTitle.replace(
+      /[&<>"']/g,
+      (char) =>
+        ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;',
+        })[char] as string,
+    );
+    try {
+      await this.send({
+        to,
+        subject: `Confirm your ${portalTitle.replace(/[\r\n]/g, ' ')} developer account`,
+        html: `
+          <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+            <h2 style="color:#111">Confirm your email</h2>
+            <p style="color:#555">Finish creating your developer account for ${title}. This link expires in 24 hours.</p>
+            <a href="${verifyUrl}"
+               style="display:inline-block;margin:16px 0;padding:12px 24px;background:#4338ca;color:#fff;border-radius:6px;text-decoration:none;font-weight:600">
+              Confirm email
+            </a>
+            <p style="color:#888;font-size:13px">If you didn't request this, you can safely ignore this email.</p>
+            <p style="color:#bbb;font-size:12px">Link: ${verifyUrl}</p>
+          </div>
+        `,
+      });
+    } catch (err) {
+      this.logger.error('Failed to send portal verification email', err);
+      throw err;
+    }
+  }
 }

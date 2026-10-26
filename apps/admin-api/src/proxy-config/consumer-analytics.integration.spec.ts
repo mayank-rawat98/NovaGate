@@ -24,6 +24,10 @@ const NOW = Date.parse('2026-10-06T12:00:00.000Z');
 integration(
   'Consumer analytics over actual PostgreSQL and authenticated HTTP',
   () => {
+    // A disposable database: this fixture's partial public.tenants must never
+    // leak into the shared database other projects' suites initialize.
+    const database = `novagate_analytics_${randomUUID().replaceAll('-', '')}`;
+    let root: DataSource;
     let db: DataSource;
     let app: INestApplication;
     let url: string;
@@ -53,9 +57,17 @@ integration(
     }
     beforeAll(async () => {
       process.env.PLATFORM_JWT_SECRET = SECRET;
-      db = new DataSource({
+      root = new DataSource({
         type: 'postgres',
         url: process.env.TEST_DATABASE_URL,
+      });
+      await root.initialize();
+      await root.query(`CREATE DATABASE ${database}`);
+      const isolated = new URL(process.env.TEST_DATABASE_URL as string);
+      isolated.pathname = `/${database}`;
+      db = new DataSource({
+        type: 'postgres',
+        url: isolated.toString(),
         extra: {
           max: 8,
           connectionTimeoutMillis: 3000,
@@ -116,15 +128,10 @@ integration(
     afterAll(async () => {
       clock?.mockRestore();
       await app?.close();
-      if (db?.isInitialized) {
-        for (const tenant of tenants)
-          await db.query(
-            `DROP SCHEMA IF EXISTS ${tenantSchema(tenant)} CASCADE`,
-          );
-        await db.query(`DELETE FROM public.tenants WHERE id=ANY($1::uuid[])`, [
-          tenants,
-        ]);
-        await db.destroy();
+      if (db?.isInitialized) await db.destroy();
+      if (root?.isInitialized) {
+        await root.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
+        await root.destroy();
       }
       if (previousSecret === undefined) delete process.env.PLATFORM_JWT_SECRET;
       else process.env.PLATFORM_JWT_SECRET = previousSecret;
