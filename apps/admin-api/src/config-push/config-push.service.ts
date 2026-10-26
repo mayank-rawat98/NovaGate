@@ -137,7 +137,7 @@ export class ConfigPushService
       `SELECT * FROM ${schema}.consumers WHERE "revokedAt" IS NULL`,
     );
     const tenantRows = await manager.query(
-      `SELECT "caCertPem", "logPrivacy", "disabledPlugins", "quotaSuspendedUntil" FROM public.tenants WHERE id = $1`,
+      `SELECT "caCertPem", "logPrivacy", "disabledPlugins", "quotaSuspendedUntil", "preferredRegion" FROM public.tenants WHERE id = $1`,
       [tenantId],
     );
 
@@ -176,6 +176,7 @@ export class ConfigPushService
       rateLimit: { windowMs: 60000, unauthMax: 100, authMax: 500 },
       disabledPlugins: disabledPluginList(tenantRows[0]?.disabledPlugins),
       suspended: null,
+      preferredRegion: tenantRows[0]?.preferredRegion ?? null,
     };
     const suspendedUntil: Date | null = tenantRows[0]?.quotaSuspendedUntil;
     if (suspendedUntil && suspendedUntil.getTime() > Date.now())

@@ -7,6 +7,7 @@ import { ConfigImportPanel } from '../../../components/config-import-panel';
 import { AutomationTokensPanel } from '../../../components/automation-tokens-panel';
 import { DeveloperPortalPanel } from '../../../components/developer-portal-panel';
 import { GatewayPluginsPanel } from '../../../components/gateway-plugins-panel';
+import { ControlPlaneRegionsPanel } from '../../../components/control-plane-regions-panel';
 import { LogPrivacyPanel } from '../../../components/log-privacy-panel';
 import { LogExportPanel } from '../../../components/log-export-panel';
 import { LogExportSchedulePanel } from '../../../components/log-export-schedule-panel';
@@ -364,6 +365,7 @@ export default function SettingsPage() {
       <AutomationTokensPanel tenantId={tenantId} />
       <DeveloperPortalPanel tenantId={tenantId} />
       <GatewayPluginsPanel tenantId={tenantId} />
+      <ControlPlaneRegionsPanel tenantId={tenantId} />
       <LogPrivacyPanel tenantId={tenantId} />
       <LogRetentionPanel tenantId={tenantId} />
       <LogExportSchedulePanel tenantId={tenantId} />

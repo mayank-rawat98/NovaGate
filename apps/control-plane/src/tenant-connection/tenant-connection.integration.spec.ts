@@ -495,16 +495,27 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
   });
 
   it('keeps the largest cumulative usage per source and month and sends suspensions', async () => {
-    const metrics = `SELECT COUNT(*)::int AS count FROM tenant_${tenantId.replace(/-/g, '_')}.metrics_snapshots`;
+    // Messages are handled in order, so a handled marker proves the frame
+    // before it was handled. Wait for the marker's publication, which comes
+    // after its commit: the test socket admits only two queued frames, and
+    // sending while the marker is still queued would overflow it.
+    const subscriber = new Redis(process.env.TEST_REDIS_URL as string);
+    await subscriber.subscribe(`metrics:${tenantId}`);
     const processed = async (ws: WebSocket) => {
-      const [{ count }] = await ds.query(metrics);
+      const published = once(subscriber, 'message');
       ws.send(
         JSON.stringify({
           type: 'metrics',
           payload: { rps: 1, p50: 1, p95: 2, p99: 3, errorRate: 0 },
         }),
       );
-      await until(async () => (await ds.query(metrics))[0].count > count);
+      await Promise.race([
+        published,
+        new Promise((_, fail) =>
+          setTimeout(() => fail(new Error('Marker not handled')), 5000),
+        ),
+      ]);
+      await new Promise((done) => setTimeout(done, 20));
     };
     const source = randomUUID();
     const consumer = randomUUID();
@@ -530,6 +541,9 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
       `SELECT to_regclass('public.usage_meters') IS NOT NULL AS exists`,
     );
     const { ws } = await connect(apiKey);
+    // auth_ok is sent before authentication finishes in the queue; a lone
+    // marker waits that out without exceeding the two-frame admission.
+    await processed(ws);
     if (!exists) {
       ws.send(report(1, 1));
       await processed(ws);
@@ -606,8 +620,10 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
         `UPDATE public.tenants SET "quotaSuspendedUntil"=NULL WHERE id=$1`,
         [tenantId],
       );
+      subscriber.disconnect();
     }
-  });
+    // Nine paced round trips over three connections.
+  }, 15000);
 
   it('persists validated histogram evidence on the authenticated tenant and preserves legacy null metadata', async () => {
     const subscriber = new Redis(process.env.TEST_REDIS_URL as string);

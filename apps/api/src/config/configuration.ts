@@ -32,7 +32,20 @@ export interface ThirdPartyPluginSettings {
 import {
   MAX_TENANT_CA_BUNDLE_BYTES,
   MAX_TENANT_CA_CERTIFICATES,
+  MAX_GATEWAY_INSTANCE_NAME_LENGTH,
+  parseControlPlaneEndpoints,
+  type ControlPlaneEndpoint,
 } from '@api-gateway/shared-types';
+import { hostname } from 'node:os';
+
+export const DEFAULT_CONTROL_PLANE = { failbackMs: 300000 };
+export interface ControlPlaneSettings {
+  /** Priority order; the workspace's preferred region moves to the front. */
+  endpoints: ControlPlaneEndpoint[];
+  /** How long to stay on a fallback endpoint before retrying the first. */
+  failbackMs: number;
+  instanceName: string;
+}
 export const DEFAULT_LOAD_BALANCER = {
   maxServices: 1024,
   maxTargetsPerService: 256,
@@ -198,6 +211,7 @@ export interface GatewayConfig {
   metricReporting: MetricReportingSettings;
   tracing: TracingSettings;
   thirdPartyPlugins: ThirdPartyPluginSettings;
+  controlPlane: ControlPlaneSettings;
   tls: ListenerTlsSettings;
   rateLimit: {
     windowMs: number;
@@ -216,6 +230,22 @@ const parseProxyServices = (): ProxyServiceConfig[] => {
 };
 
 export default (): GatewayConfig => ({
+  controlPlane: {
+    // Validated by the configuration schema before this factory runs.
+    endpoints:
+      process.env.CONTROL_PLANE_URLS || process.env.CONTROL_PLANE_URL
+        ? parseControlPlaneEndpoints(
+            (process.env.CONTROL_PLANE_URLS ||
+              process.env.CONTROL_PLANE_URL) as string,
+          )
+        : [],
+    failbackMs: Number(
+      process.env.CONTROL_PLANE_FAILBACK_MS ?? DEFAULT_CONTROL_PLANE.failbackMs,
+    ),
+    instanceName: (process.env.GATEWAY_INSTANCE_NAME || hostname())
+      .replace(/[^\x20-\x7e]/g, '?')
+      .slice(0, MAX_GATEWAY_INSTANCE_NAME_LENGTH),
+  },
   thirdPartyPlugins: {
     directory: process.env.THIRD_PARTY_PLUGIN_DIR || null,
     // Validated by the configuration schema before this factory runs.

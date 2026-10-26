@@ -15,3 +15,4 @@ export * from './lib/third-party-plugins.ts';
 export * from './lib/circuit-breaker.ts';
 export * from './lib/anomalies.ts';
 export * from './lib/billing.ts';
+export * from './lib/control-plane-regions.ts';

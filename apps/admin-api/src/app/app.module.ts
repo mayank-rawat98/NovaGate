@@ -56,6 +56,8 @@ import {
 } from '../billing/billing.controller';
 import { BillingService } from '../billing/billing.service';
 import { StripeService } from '../billing/stripe.service';
+import { RegionsController } from '../regions/regions.controller';
+import { RegionsService } from '../regions/regions.service';
 
 @Module({
   imports: [
@@ -106,6 +108,7 @@ import { StripeService } from '../billing/stripe.service';
     CircuitBreakersController,
     BillingController,
     StripeWebhookController,
+    RegionsController,
   ],
   providers: [
     LogStreamService,
@@ -131,6 +134,7 @@ import { StripeService } from '../billing/stripe.service';
     CircuitBreakersService,
     BillingService,
     StripeService,
+    RegionsService,
   ],
 })
 export class AppModule {}

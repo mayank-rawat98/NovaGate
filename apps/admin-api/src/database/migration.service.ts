@@ -15,6 +15,7 @@ import {
   BILLING_PUBLIC_SCHEMA,
   billingTenantSql,
 } from '../billing/billing-schema';
+import { REGION_SCHEMA } from '../regions/region-schema';
 import {
   ANOMALY_SCHEDULE_SCHEMA,
   anomalySchemaSql,
@@ -64,6 +65,7 @@ export class MigrationService implements OnModuleInit {
       await manager.query(GATEWAY_PLUGIN_SCHEMA);
       await manager.query(ANOMALY_SCHEDULE_SCHEMA);
       await manager.query(BILLING_PUBLIC_SCHEMA);
+      await manager.query(REGION_SCHEMA);
       const tenants = await manager.query<Array<{ id: string }>>(
         `SELECT id FROM public.tenants`,
       );
