@@ -255,3 +255,11 @@ one-line summary, plain-text description). The route DTO always sends `portal`
 gives the shared portal host. Scroll containers holding tables with
 screen-reader-only text must be `relative`, and tables inside the flex main
 column must not set a minimum width; either escapes and widens mobile pages.
+
+Issue #113 adds Settings → Gateway plugins (the gateway's last third-party plugin
+report, state badges, one-line last errors, and a confirmed per-plugin
+disable/enable that keeps unreported disabled names reversible) and a
+Third-party plugins section at the end of the route editor's Plugins tab. Custom
+entries are a scoped package name plus a JSON object; invalid names, duplicates,
+invalid JSON and oversized configuration are rejected before the request. Edited
+entries keep their saved position; new ones are appended.

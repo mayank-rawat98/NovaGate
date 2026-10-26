@@ -7,7 +7,13 @@ import {
 } from '@nestjs/common';
 import Redis from 'ioredis';
 import { DataSource, EntityManager } from 'typeorm';
-import { logPrivacyPolicy, TenantConfig } from '@api-gateway/shared-types';
+import {
+  disabledPluginList,
+  logPrivacyPolicy,
+  parsePluginStatuses,
+  type GatewayPluginState,
+  TenantConfig,
+} from '@api-gateway/shared-types';
 
 @Injectable()
 export class ConfigPushService
@@ -22,13 +28,18 @@ export class ConfigPushService
   constructor(private readonly dataSource: DataSource) {}
 
   onModuleInit() {
-    this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-      commandTimeout: 3000,
-      maxRetriesPerRequest: 1,
-    });
+    // Idempotent: a shared instance can receive the hook more than once.
+    this.redis ??= new Redis(
+      process.env.REDIS_URL || 'redis://localhost:6379',
+      {
+        commandTimeout: 3000,
+        maxRetriesPerRequest: 1,
+      },
+    );
   }
 
   onApplicationBootstrap() {
+    if (this.timer) return;
     this.timer = setInterval(() => {
       if (this.retry || this.stopping) return;
       this.retry = this.retryPending()
@@ -125,7 +136,7 @@ export class ConfigPushService
       `SELECT * FROM ${schema}.consumers WHERE "revokedAt" IS NULL`,
     );
     const tenantRows = await manager.query(
-      `SELECT "caCertPem", "logPrivacy" FROM public.tenants WHERE id = $1`,
+      `SELECT "caCertPem", "logPrivacy", "disabledPlugins" FROM public.tenants WHERE id = $1`,
       [tenantId],
     );
 
@@ -161,9 +172,40 @@ export class ConfigPushService
         }: Record<string, unknown>) => consumer,
       ),
       rateLimit: { windowMs: 60000, unauthMax: 100, authMax: 500 },
+      disabledPlugins: disabledPluginList(tenantRows[0]?.disabledPlugins),
     };
     if (caCertPem) config.caCertPem = caCertPem;
     return config;
+  }
+
+  /** Last third-party plugin report from the tenant's gateway, if fresh. */
+  async pluginReport(
+    tenantId: string,
+  ): Promise<Pick<GatewayPluginState, 'reportedAt' | 'plugins'>> {
+    const none = { reportedAt: null, plugins: [] };
+    let raw: string | null;
+    try {
+      raw = await this.redis.get(`gw:plugins:${tenantId.toLowerCase()}`);
+    } catch {
+      return none;
+    }
+    if (!raw) return none;
+    try {
+      const report = JSON.parse(raw) as {
+        reportedAt?: unknown;
+        plugins?: unknown;
+      };
+      const plugins = parsePluginStatuses(report.plugins);
+      if (
+        !plugins ||
+        typeof report.reportedAt !== 'string' ||
+        Number.isNaN(Date.parse(report.reportedAt))
+      )
+        return none;
+      return { reportedAt: report.reportedAt, plugins };
+    } catch {
+      return none;
+    }
   }
 
   async isOnline(tenantId: string): Promise<boolean> {

@@ -110,6 +110,27 @@
           ],
           "parallel": false
         }
+      },
+      "plugins-e2e": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build",
+          {
+            "projects": [
+              "admin-api",
+              "control-plane"
+            ],
+            "target": "build"
+          }
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/third-party-plugins-e2e.mjs",
+            "node tools/third-party-plugins-e2e.mjs"
+          ],
+          "parallel": false
+        }
       }
     }
   },

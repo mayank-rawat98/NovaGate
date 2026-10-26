@@ -88,6 +88,13 @@ export default function RouteDocsPage() {
               with 403, ask the API provider to grant access.
             </p>
           )}
+          {route.customPolicies && (
+            <p className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
+              This route also runs policies specific to this API that are not
+              described here. Check the description above or ask the API
+              provider if calls are refused.
+            </p>
+          )}
           <h2 className="mt-8 text-lg font-semibold text-slate-900">
             Example request
           </h2>

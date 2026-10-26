@@ -29,14 +29,15 @@ database/
 
 ## Inbound message types (gateway → control-plane)
 
-| Type      | Handler                          | Notes                                    |
-| --------- | -------------------------------- | ---------------------------------------- |
-| `auth`    | `handleConnection`               | Must be first; closes on timeout/invalid |
-| `logs`    | `ingestionService.ingestLogs`    | Batched `RequestLog[]`                   |
-| `health`  | `ingestionService.ingestHealth`  | `HealthSnapshot[]`                       |
-| `errors`  | `ingestionService.ingestErrors`  | `ErrorEvent[]`; control plane sends ACK  |
-| `metrics` | `ingestionService.ingestMetrics` | `MetricsSnapshot[]`                      |
-| `pong`    | Refreshes `gw:online` Redis key  | Response to server-sent ping             |
+| Type             | Handler                                                        | Notes                                                  |
+| ---------------- | -------------------------------------------------------------- | ------------------------------------------------------ |
+| `auth`           | `handleConnection`                                             | Must be first; closes on timeout/invalid               |
+| `logs`           | `ingestionService.ingestLogs`                                  | Batched `RequestLog[]`                                 |
+| `health`         | `ingestionService.ingestHealth`                                | `HealthSnapshot[]`                                     |
+| `errors`         | `ingestionService.ingestErrors`                                | `ErrorEvent[]`; control plane sends ACK                |
+| `metrics`        | `ingestionService.ingestMetrics`                               | `MetricsSnapshot[]`                                    |
+| `pong`           | Refreshes `gw:online` Redis key                                | Response to server-sent ping                           |
+| `plugins.status` | `parsePluginStatuses` → Redis `gw:plugins:<tenant>` (TTL 180s) | Third-party plugin states; invalid reports are dropped |
 
 ## Config push rule
 

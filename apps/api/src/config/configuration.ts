@@ -15,6 +15,20 @@ export const DEFAULT_TRACING = {
   maxBufferedBytes: 131072,
 };
 export type TracingSettings = typeof DEFAULT_TRACING;
+
+export const DEFAULT_THIRD_PARTY_PLUGINS = {
+  hookTimeoutMs: 2000,
+  failureThreshold: 5,
+  quarantineMs: 30000,
+};
+export interface ThirdPartyPluginSettings {
+  /** Directory whose node_modules holds operator-installed plugin packages. */
+  directory: string | null;
+  packages: Array<{ package: string; version: string }>;
+  hookTimeoutMs: number;
+  failureThreshold: number;
+  quarantineMs: number;
+}
 import {
   MAX_TENANT_CA_BUNDLE_BYTES,
   MAX_TENANT_CA_CERTIFICATES,
@@ -183,6 +197,7 @@ export interface GatewayConfig {
   loadBalancer: LoadBalancerSettings;
   metricReporting: MetricReportingSettings;
   tracing: TracingSettings;
+  thirdPartyPlugins: ThirdPartyPluginSettings;
   tls: ListenerTlsSettings;
   rateLimit: {
     windowMs: number;
@@ -201,6 +216,23 @@ const parseProxyServices = (): ProxyServiceConfig[] => {
 };
 
 export default (): GatewayConfig => ({
+  thirdPartyPlugins: {
+    directory: process.env.THIRD_PARTY_PLUGIN_DIR || null,
+    // Validated by the configuration schema before this factory runs.
+    packages: JSON.parse(process.env.THIRD_PARTY_PLUGINS ?? '[]'),
+    hookTimeoutMs: Number(
+      process.env.THIRD_PARTY_PLUGIN_HOOK_TIMEOUT_MS ??
+        DEFAULT_THIRD_PARTY_PLUGINS.hookTimeoutMs,
+    ),
+    failureThreshold: Number(
+      process.env.THIRD_PARTY_PLUGIN_FAILURE_THRESHOLD ??
+        DEFAULT_THIRD_PARTY_PLUGINS.failureThreshold,
+    ),
+    quarantineMs: Number(
+      process.env.THIRD_PARTY_PLUGIN_QUARANTINE_MS ??
+        DEFAULT_THIRD_PARTY_PLUGINS.quarantineMs,
+    ),
+  },
   metricReporting: {
     intervalMs: Number(
       process.env.METRICS_REPORT_INTERVAL_MS ??

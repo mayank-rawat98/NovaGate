@@ -6,6 +6,9 @@ import {
   MAX_HMAC_SECRETS,
   MAX_HMAC_SECRET_BYTES,
   MAX_HMAC_CLOCK_SKEW_SECONDS,
+  MAX_ROUTE_PLUGINS,
+  MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES,
+  isThirdPartyPluginName,
 } from '@api-gateway/shared-types';
 import {
   Controller,
@@ -189,6 +192,10 @@ export function validatePlugins(plugins: unknown): void {
   if (plugins === null || plugins === undefined) return;
   if (!Array.isArray(plugins))
     throw new BadRequestException('plugins must be an array');
+  if (plugins.length > MAX_ROUTE_PLUGINS)
+    throw new BadRequestException(
+      `A route may list at most ${MAX_ROUTE_PLUGINS} plugins`,
+    );
   const seen = new Set<string>();
   for (const entry of plugins) {
     if (!entry || typeof entry !== 'object' || typeof entry.name !== 'string')
@@ -198,8 +205,11 @@ export function validatePlugins(plugins: unknown): void {
         `Duplicate plugin: ${entry.name}. Configure each policy once.`,
       );
     seen.add(entry.name);
-    if (!KNOWN_PLUGIN_NAMES.has(entry.name)) {
-      throw new BadRequestException(`Unknown plugin: "${entry.name}"`);
+    const thirdParty = isThirdPartyPluginName(entry.name);
+    if (!thirdParty && !KNOWN_PLUGIN_NAMES.has(entry.name)) {
+      throw new BadRequestException(
+        `Unknown plugin: "${String(entry.name).slice(0, 80)}". Third-party plugins use their scoped npm package name.`,
+      );
     }
     if (
       typeof entry.config !== 'object' ||
@@ -209,6 +219,18 @@ export function validatePlugins(plugins: unknown): void {
       throw new BadRequestException(
         `plugin "${entry.name}" config must be an object`,
       );
+    }
+    // The gateway operator installs and pins third-party packages; the admin
+    // API only bounds the configuration it stores and sends.
+    if (thirdParty) {
+      if (
+        Buffer.byteLength(JSON.stringify(entry.config)) >
+        MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES
+      )
+        throw new BadRequestException(
+          `plugin "${entry.name}" config exceeds ${MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES} bytes`,
+        );
+      continue;
     }
     const schema =
       entry.name === 'oidc'

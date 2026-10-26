@@ -23,6 +23,9 @@
     },
     {
       "path": "./apps/developer-portal"
+    },
+    {
+      "path": "./libs/plugin-sdk"
     }
   ]
 }

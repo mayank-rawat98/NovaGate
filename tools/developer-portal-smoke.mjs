@@ -49,6 +49,7 @@ const catalog = {
       auth: ['api-key'],
       rateLimit: { requests: 30, windowMs: 1000 },
       groupRestricted: true,
+      customPolicies: true,
     },
     {
       id: randomUUID(),
@@ -59,6 +60,7 @@ const catalog = {
       auth: ['hmac'],
       rateLimit: null,
       groupRestricted: false,
+      customPolicies: false,
     },
   ],
 };
@@ -298,6 +300,9 @@ try {
     ),
   ).toBeVisible();
   await expect(page.getByText(/Access depends on your key/)).toBeVisible();
+  await expect(
+    page.getByText(/also runs policies specific to this API/),
+  ).toBeVisible();
   await audit('route docs');
 
   // Signed-out developers are asked to sign in.

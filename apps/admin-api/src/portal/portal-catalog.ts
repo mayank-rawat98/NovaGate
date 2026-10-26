@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import {
   PORTAL_DESCRIPTION_MAX,
+  isThirdPartyPluginName,
   PORTAL_SUMMARY_MAX,
   type PortalAuthMethod,
   type PortalCatalogRoute,
@@ -115,6 +116,9 @@ export function catalogRoute(row: RouteRow): PortalCatalogRoute {
     auth: [...auth],
     rateLimit,
     groupRestricted: plugins.some((plugin) => plugin.name === 'acl'),
+    customPolicies: plugins.some((plugin) =>
+      isThirdPartyPluginName(plugin.name),
+    ),
   };
 }
 

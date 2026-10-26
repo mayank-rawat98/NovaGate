@@ -46,6 +46,8 @@ import { PortalPublicController } from '../portal/portal-public.controller';
 import { PortalDeveloperController } from '../portal/portal-developer.controller';
 import { PortalAdminController } from '../portal/portal-admin.controller';
 import { PortalDeveloperGuard } from '../portal/portal-developer.guard';
+import { GatewayPluginsController } from '../gateway-plugins/gateway-plugins.controller';
+import { GatewayPluginsService } from '../gateway-plugins/gateway-plugins.service';
 
 @Module({
   imports: [
@@ -92,6 +94,7 @@ import { PortalDeveloperGuard } from '../portal/portal-developer.guard';
     PortalPublicController,
     PortalDeveloperController,
     PortalAdminController,
+    GatewayPluginsController,
   ],
   providers: [
     LogStreamService,
@@ -113,6 +116,7 @@ import { PortalDeveloperGuard } from '../portal/portal-developer.guard';
     PortalService,
     PortalDevelopersService,
     PortalDeveloperGuard,
+    GatewayPluginsService,
   ],
 })
 export class AppModule {}

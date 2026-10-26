@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS public.tenants (
   "verifyToken" VARCHAR,
   "verifyExpires" TIMESTAMP,
   "caCertPem" TEXT,
+  "disabledPlugins" JSONB NOT NULL DEFAULT '[]'::jsonb,
   "logPrivacy" JSONB NOT NULL DEFAULT '{"clientIp":"omit","userAgent":"omit"}'::jsonb,
   "logPrivacyRevision" UUID NOT NULL DEFAULT gen_random_uuid(),
   "logPrivacyScrubCursor" UUID,

@@ -5,6 +5,8 @@ import {
   DECLARATIVE_CONFIG_MAX_BYTES,
   DECLARATIVE_CONFIG_MAX_ENTRIES,
   MAX_SERVICE_TARGET_WEIGHT,
+  MAX_ROUTE_PLUGINS,
+  MAX_THIRD_PARTY_PLUGIN_NAME_LENGTH,
   type DeclarativeConfig,
 } from '@api-gateway/shared-types';
 import {
@@ -116,10 +118,13 @@ const documentSchema = Joi.object({
           .allow(null)
           .default(null),
         plugins: Joi.array()
-          .max(13)
+          .max(MAX_ROUTE_PLUGINS)
           .items(
             Joi.object({
-              name: text.required(),
+              // Scoped third-party names exceed the general text bound.
+              name: Joi.string()
+                .max(MAX_THIRD_PARTY_PLUGIN_NAME_LENGTH)
+                .required(),
               config: Joi.object().unknown(true).required(),
             }),
           )

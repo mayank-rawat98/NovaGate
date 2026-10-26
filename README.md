@@ -293,9 +293,16 @@ TLS and routing: the VPS is shared with squadup.in, whose Caddy owns ports 80/44
 | `MTLS_MAX_CHAIN_DEPTH`                         | `8`         | Maximum parsed certificate chain/tenant anchor count, 1–16                                       |
 | `MTLS_MAX_IDENTITY_BYTES`                      | `4096`      | Verified subject-header byte limit, 128–16384 bytes                                              |
 | `PROXY_TIMEOUT_MS`                             | `10000`     | Downstream request timeout                                                                       |
-| `RATE_LIMIT_WINDOW_MS`                         | `60000`     | Sliding window duration                                                                          |
-| `RATE_LIMIT_UNAUTH_MAX`                        | `100`       | Requests/window for unauthenticated clients                                                      |
-| `RATE_LIMIT_AUTH_MAX`                          | `500`       | Requests/window for authenticated consumers                                                      |
+| `THIRD_PARTY_PLUGIN_DIR`                       | unset       | Absolute directory holding `node_modules` with third-party plugin packages                       |
+| `THIRD_PARTY_PLUGINS`                          | `[]`        | JSON list of `{ "package": "@scope/name", "version": "1.2.3" }`; exact versions, at most 16      |
+| `THIRD_PARTY_PLUGIN_HOOK_TIMEOUT_MS`           | `2000`      | Per-hook deadline for third-party plugins (10–60000)                                             |
+| `THIRD_PARTY_PLUGIN_FAILURE_THRESHOLD`         | `5`         | Consecutive failures before a plugin is paused                                                   |
+| `THIRD_PARTY_PLUGIN_QUARANTINE_MS`             | `30000`     | How long a paused plugin stays paused before it is retried                                       |
+
+Third-party plugins are trusted npm packages the gateway operator installs and pins; see the [plugin SDK guide](libs/plugin-sdk/README.md) for the trust model, authoring, testing and installation. `npm exec nx run @api-gateway/api:plugins-e2e` verifies loading, crash isolation and the workspace kill switch on real processes.
+| `RATE_LIMIT_WINDOW_MS` | `60000` | Sliding window duration |
+| `RATE_LIMIT_UNAUTH_MAX` | `100` | Requests/window for unauthenticated clients |
+| `RATE_LIMIT_AUTH_MAX` | `500` | Requests/window for authenticated consumers |
 
 For native gRPC upstreams, choose **Native gRPC health service** in the Services form. Leave the health service name empty to check overall server health, or enter the name registered by the upstream. The gateway calls the standard `grpc.health.v1.Health/Check` RPC and accepts only a successful `SERVING` response; it caps the encoded health response at 4096 bytes and applies the gateway probe deadline and failure/recovery thresholds. Your upstream must implement that RPC. See the [official health service schema](https://github.com/grpc/grpc-proto/blob/master/grpc/health/v1/health.proto). HTTP health checks continue to use the configured path, with HTTP/2 when that service setting is enabled.
 

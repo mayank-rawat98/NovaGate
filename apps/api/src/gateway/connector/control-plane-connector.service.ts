@@ -3,6 +3,7 @@ import {
   Logger,
   OnModuleInit,
   OnModuleDestroy,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { WebSocket } from 'ws';
@@ -13,8 +14,15 @@ import {
   BaseWsMessage,
   ConfigAckMessage,
   ConfigUpdateMessage,
+  PluginsStatusMessage,
 } from '@api-gateway/shared-types';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
+import { PluginLoaderService } from '../plugins/third-party/plugin-loader.service';
+
+/** Plugin reports are small snapshots; refresh so quarantine expiry is visible. */
+const PLUGIN_REPORT_DEBOUNCE_MS = 1000;
+const PLUGIN_REPORT_INTERVAL_MS = 60000;
+const PLUGIN_REPORT_MAX_BUFFERED_BYTES = 65536;
 
 @Injectable()
 export class ControlPlaneConnectorService
@@ -29,19 +37,36 @@ export class ControlPlaneConnectorService
   private stopped = false;
   private reconnectTimer?: NodeJS.Timeout;
   private authenticated = false;
+  private pluginReportTimer?: NodeJS.Timeout;
+  private pluginReportInterval?: NodeJS.Timeout;
+  private stopPluginListener?: () => void;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly gatewayConfig: GatewayConfigManagerService,
+    @Optional() private readonly plugins?: PluginLoaderService,
   ) {}
 
   async onModuleInit() {
     await this.gatewayConfig.warmStart();
+    if (this.plugins?.statuses().length) {
+      this.stopPluginListener = this.plugins.onChange(() =>
+        this.schedulePluginReport(),
+      );
+      this.pluginReportInterval = setInterval(
+        () => this.reportPlugins(),
+        PLUGIN_REPORT_INTERVAL_MS,
+      );
+      this.pluginReportInterval.unref();
+    }
     this.connect();
   }
 
   onModuleDestroy() {
     this.stopped = true;
+    this.stopPluginListener?.();
+    clearTimeout(this.pluginReportTimer);
+    clearInterval(this.pluginReportInterval);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.ws) {
       this.ws.close();
@@ -117,6 +142,7 @@ export class ControlPlaneConnectorService
             version: payload.configVersion,
           } as ConfigAckMessage);
           this.flushBuffer();
+          this.reportPlugins();
           break;
         }
         case 'config.update': {
@@ -193,6 +219,25 @@ export class ControlPlaneConnectorService
       const msg = this.messageBuffer.shift();
       if (msg) this.send(msg);
     }
+  }
+
+  private schedulePluginReport() {
+    if (this.pluginReportTimer || this.stopped) return;
+    this.pluginReportTimer = setTimeout(() => {
+      this.pluginReportTimer = undefined;
+      this.reportPlugins();
+    }, PLUGIN_REPORT_DEBOUNCE_MS);
+    this.pluginReportTimer.unref();
+  }
+
+  /** Transient snapshot: a missed report is replaced by the next one. */
+  private reportPlugins() {
+    const plugins = this.plugins?.statuses() ?? [];
+    if (!plugins.length) return;
+    this.sendTransient(
+      { type: 'plugins.status', payload: { plugins } } as PluginsStatusMessage,
+      PLUGIN_REPORT_MAX_BUFFERED_BYTES,
+    );
   }
 
   isConnected(): boolean {

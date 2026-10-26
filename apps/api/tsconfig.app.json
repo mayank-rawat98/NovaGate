@@ -22,6 +22,9 @@
   ],
   "references": [
     {
+      "path": "../../libs/plugin-sdk/tsconfig.lib.json"
+    },
+    {
       "path": "../../libs/shared-types/tsconfig.lib.json"
     }
   ]

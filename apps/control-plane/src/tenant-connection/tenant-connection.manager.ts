@@ -32,6 +32,9 @@ import {
   HealthMessage,
   ErrorsMessage,
   MetricsMessage,
+  PluginsStatusMessage,
+  disabledPluginList,
+  parsePluginStatuses,
 } from '@api-gateway/shared-types';
 
 import Redis from 'ioredis';
@@ -256,7 +259,8 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
     const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
     return this.dataSource.transaction('REPEATABLE READ', async (manager) => {
       const [tenant] = await manager.query(
-        `SELECT "gatewayConfigVersion", "caCertPem", "logPrivacy" FROM public.tenants WHERE id = $1`,
+        // to_jsonb tolerates a schema admin-api has not upgraded yet.
+        `SELECT "gatewayConfigVersion", "caCertPem", "logPrivacy", to_jsonb(t)->'disabledPlugins' AS "disabledPlugins" FROM public.tenants t WHERE id = $1`,
         [tenantId],
       );
       if (!tenant) throw new Error('Tenant not found');
@@ -270,14 +274,25 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
       const consumers = await manager.query(
         `SELECT * FROM ${schema}.consumers WHERE "revokedAt" IS NULL`,
       );
+      // Portal publication and developer ownership are administration-only,
+      // matching the admin API's published snapshots.
       return {
         config: {
-          routes,
+          routes: routes.map(
+            ({ portal: _portal, ...route }: Record<string, unknown>) => route,
+          ),
           services,
-          consumers,
+          consumers: consumers.map(
+            ({
+              portalDeveloperId: _developer,
+              portalKeyName: _key,
+              ...consumer
+            }: Record<string, unknown>) => consumer,
+          ),
           caCertPem: tenant.caCertPem ?? undefined,
           logPrivacy: logPrivacyPolicy(tenant.logPrivacy),
           rateLimit: { windowMs: 60000, unauthMax: 100, authMax: 500 },
+          disabledPlugins: disabledPluginList(tenant.disabledPlugins),
         },
         version: tenant.gatewayConfigVersion,
       };
@@ -354,6 +369,23 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
         await this.redisPub.publish(
           `metrics:${tenantId.toLowerCase()}`,
           JSON.stringify(snapshot),
+        );
+        break;
+      }
+      case 'plugins.status': {
+        const plugins = parsePluginStatuses(
+          (message as PluginsStatusMessage).payload?.plugins,
+        );
+        if (!plugins) {
+          this.logger.warn(`Rejected invalid plugin report from ${tenantId}`);
+          break;
+        }
+        // Gateways refresh every 60s; a stale report expires on its own.
+        await this.redisPub.set(
+          `gw:plugins:${tenantId.toLowerCase()}`,
+          JSON.stringify({ reportedAt: new Date().toISOString(), plugins }),
+          'EX',
+          180,
         );
         break;
       }

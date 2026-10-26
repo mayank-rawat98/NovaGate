@@ -20,7 +20,8 @@
     "customConditions": ["@api-gateway/source"],
     "baseUrl": ".",
     "paths": {
-      "@api-gateway/shared-types": ["libs/shared-types/src/index.ts"]
+      "@api-gateway/shared-types": ["libs/shared-types/src/index.ts"],
+      "@api-gateway/plugin-sdk": ["libs/plugin-sdk/src/index.ts"]
     }
   }
 }

@@ -14,10 +14,56 @@ import {
   DEFAULT_LOAD_BALANCER,
   DEFAULT_TRACING,
   DEFAULT_METRIC_REPORTING,
+  DEFAULT_THIRD_PARTY_PLUGINS,
 } from './configuration';
 import { BlockList, isIP } from 'net';
+import {
+  MAX_THIRD_PARTY_PLUGINS,
+  THIRD_PARTY_PLUGIN_NAME_PATTERN,
+  THIRD_PARTY_PLUGIN_VERSION_PATTERN,
+} from '@api-gateway/shared-types';
+const thirdPartyPackages = Joi.string().custom((value: string, helpers) => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return helpers.error('any.invalid');
+  }
+  const valid =
+    Array.isArray(parsed) &&
+    parsed.length <= MAX_THIRD_PARTY_PLUGINS &&
+    new Set(parsed.map((entry) => entry?.package)).size === parsed.length &&
+    parsed.every(
+      (entry) =>
+        entry &&
+        typeof entry === 'object' &&
+        Object.keys(entry).length === 2 &&
+        typeof entry.package === 'string' &&
+        THIRD_PARTY_PLUGIN_NAME_PATTERN.test(entry.package) &&
+        typeof entry.version === 'string' &&
+        THIRD_PARTY_PLUGIN_VERSION_PATTERN.test(entry.version),
+    );
+  return valid ? value : helpers.error('any.invalid');
+}, 'third-party plugin list');
 
 export const configSchema = Joi.object({
+  THIRD_PARTY_PLUGIN_DIR: Joi.string().pattern(/^\//).max(1024),
+  THIRD_PARTY_PLUGINS: thirdPartyPackages.default('[]'),
+  THIRD_PARTY_PLUGIN_HOOK_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(10)
+    .max(60000)
+    .default(DEFAULT_THIRD_PARTY_PLUGINS.hookTimeoutMs),
+  THIRD_PARTY_PLUGIN_FAILURE_THRESHOLD: Joi.number()
+    .integer()
+    .min(1)
+    .max(1000)
+    .default(DEFAULT_THIRD_PARTY_PLUGINS.failureThreshold),
+  THIRD_PARTY_PLUGIN_QUARANTINE_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(3600000)
+    .default(DEFAULT_THIRD_PARTY_PLUGINS.quarantineMs),
   METRICS_REPORT_INTERVAL_MS: Joi.number()
     .integer()
     .min(250)
@@ -476,6 +522,11 @@ export const configSchema = Joi.object({
   .with('GRPC_TLS_CLIENT_CA_FILE', ['GRPC_TLS_CERT_FILE', 'GRPC_TLS_KEY_FILE'])
   .with('GRPC_TLS_CRL_FILE', 'GRPC_TLS_CLIENT_CA_FILE')
   .custom((value, helpers) => {
+    if (
+      JSON.parse(value.THIRD_PARTY_PLUGINS ?? '[]').length > 0 &&
+      !value.THIRD_PARTY_PLUGIN_DIR
+    )
+      return helpers.error('any.invalid');
     if (
       value.GRPC_ENABLED === 'true' &&
       value.GRPC_ALLOW_INSECURE !== 'true' &&
