@@ -77,7 +77,12 @@ jobs:
         run: npm exec nx run-many -- -t typecheck
 
       - name: Kubernetes API server binaries for the controller
-        run: echo "KUBEBUILDER_ASSETS=$(cd integrations/k8s-controller && go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.19 use 1.31.x -p path --bin-dir ../../.local-work/envtest)" >> "$GITHUB_ENV"
+        # setup-envtest prints the path relative to --bin-dir; an absolute
+        # directory keeps it valid from every package that runs the suite.
+        run: |
+          assets="$(cd integrations/k8s-controller && go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.19 use 1.31.x -p path --bin-dir "$GITHUB_WORKSPACE/.local-work/envtest")"
+          test -x "$assets/etcd"
+          echo "KUBEBUILDER_ASSETS=$assets" >> "$GITHUB_ENV"
 
       - name: Test
         run: npm exec nx run-many -- -t test --skipNxCache
