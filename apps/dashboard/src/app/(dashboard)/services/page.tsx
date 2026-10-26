@@ -14,6 +14,13 @@ import {
   deleteService,
 } from '../../../lib/api-client';
 import { useTenantId } from '../../../lib/auth';
+import { useLiveCircuits } from '../../../lib/use-live-circuits';
+import {
+  CIRCUIT_BREAKER_LIMITS,
+  DEFAULT_CIRCUIT_BREAKER,
+  circuitBreakerConfig,
+  type CircuitState,
+} from '@api-gateway/shared-types';
 import type {
   Service,
   CreateServiceDto,
@@ -27,6 +34,31 @@ const HEALTH_STYLES: Record<string, string> = {
   degraded: 'bg-amber-100 text-amber-800',
   unknown: 'bg-gray-100 text-gray-500',
 };
+
+type CircuitBadgeState = CircuitState | 'off' | 'unreported';
+const CIRCUIT_STYLES: Record<CircuitBadgeState, string> = {
+  closed: 'bg-green-100 text-green-700',
+  'half-open': 'bg-amber-100 text-amber-800',
+  open: 'bg-red-100 text-red-700',
+  off: 'bg-gray-100 text-gray-600',
+  unreported: 'bg-gray-100 text-gray-600',
+};
+const CIRCUIT_LABELS: Record<CircuitBadgeState, string> = {
+  closed: 'Closed',
+  'half-open': 'Probing',
+  open: 'Open',
+  off: 'Off',
+  // The gateway has not reported this service recently (offline or not yet configured).
+  unreported: 'No report',
+};
+type CircuitField = keyof typeof CIRCUIT_BREAKER_LIMITS;
+const CIRCUIT_FIELDS: Array<{ key: CircuitField; label: string }> = [
+  { key: 'windowSize', label: 'Window (requests)' },
+  { key: 'failureRatePercent', label: 'Open above failure rate (%)' },
+  { key: 'minimumRequests', label: 'Minimum requests' },
+  { key: 'openMs', label: 'Open period (ms)' },
+  { key: 'halfOpenSuccesses', label: 'Successful probes to close' },
+];
 
 interface TargetRow {
   url: string;
@@ -45,7 +77,19 @@ interface FormState {
   h2: boolean;
   supportsWebSocket: boolean;
   unhealthyFallback: boolean;
+  circuitEnabled: boolean;
+  circuit: Record<CircuitField, string>;
 }
+
+const circuitStrings = (
+  config = DEFAULT_CIRCUIT_BREAKER,
+): Record<CircuitField, string> =>
+  Object.fromEntries(
+    Object.keys(CIRCUIT_BREAKER_LIMITS).map((key) => [
+      key,
+      String(config[key as CircuitField]),
+    ]),
+  ) as Record<CircuitField, string>;
 
 const EMPTY_TARGET: TargetRow = { url: '', weight: '1' };
 
@@ -61,11 +105,31 @@ const EMPTY_FORM: FormState = {
   h2: false,
   supportsWebSocket: false,
   unhealthyFallback: false,
+  // New services get the automatic circuit breaker.
+  circuitEnabled: true,
+  circuit: circuitStrings(),
 };
 
+/** The breaker settings, or an error message when a value is out of range. */
+function circuitFromForm(form: FormState) {
+  const config = circuitBreakerConfig({
+    enabled: form.circuitEnabled,
+    ...Object.fromEntries(
+      Object.entries(form.circuit).map(([key, value]) => [key, Number(value)]),
+    ),
+  });
+  return (
+    config ??
+    'Circuit breaker values are out of range. The minimum requests cannot exceed the window.'
+  );
+}
+
 function formToDto(form: FormState): CreateServiceDto {
+  const circuit = circuitFromForm(form);
   return {
     name: form.name,
+    // Saved even when off, so turning it back on keeps the settings.
+    ...(typeof circuit === 'string' ? {} : { circuitBreaker: circuit }),
     loadBalancing: form.loadBalancing,
     healthCheckIntervalMs: Number(form.healthCheckIntervalMs),
     healthCheckProtocol: form.healthCheckProtocol,
@@ -137,6 +201,9 @@ export default function ServicesPage() {
       h2: service.h2 ?? false,
       supportsWebSocket: service.supportsWebSocket ?? false,
       unhealthyFallback: service.unhealthyFallback ?? false,
+      // Services created before circuit breakers existed have none.
+      circuitEnabled: service.circuitBreaker?.enabled ?? false,
+      circuit: circuitStrings(service.circuitBreaker ?? undefined),
     });
     setFormError(null);
     setPanelOpen(true);
@@ -170,6 +237,11 @@ export default function ServicesPage() {
     setSaving(true);
     try {
       setFormError(null);
+      const circuit = circuitFromForm(form);
+      if (typeof circuit === 'string') {
+        setFormError(circuit);
+        return;
+      }
       const dto = formToDto(form);
       if (dto.targets.length === 0) {
         setFormError('Add at least one target URL before saving.');
@@ -203,6 +275,7 @@ export default function ServicesPage() {
     }
   }
 
+  const circuits = useLiveCircuits(tenantId);
   const healthMap = Object.fromEntries(
     (healthSnapshots ?? []).map((h: HealthSnapshot) => [h.serviceId, h]),
   );
@@ -231,6 +304,15 @@ export default function ServicesPage() {
         </button>
       </div>
 
+      <p role="status" className="mb-2 text-xs text-gray-500">
+        Circuit status{' '}
+        {circuits.connection === 'live'
+          ? `is live${circuits.reportedAt ? `; last gateway report ${new Date(circuits.reportedAt).toLocaleTimeString()}` : ''}`
+          : circuits.connection === 'reconnecting'
+            ? 'is reconnecting; showing the last report'
+            : 'is connecting'}
+        .
+      </p>
       <div
         tabIndex={0}
         role="region"
@@ -258,6 +340,9 @@ export default function ServicesPage() {
               <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-gray-500">
                 Latency
               </th>
+              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                Circuit
+              </th>
               <th className="px-4 py-3" />
             </tr>
           </thead>
@@ -265,7 +350,7 @@ export default function ServicesPage() {
             {!services ? (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={8}
                   className="px-4 py-8 text-center text-sm text-gray-400"
                 >
                   {loadError ? 'Data unavailable' : 'Loading…'}
@@ -274,7 +359,7 @@ export default function ServicesPage() {
             ) : services.length === 0 ? (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={8}
                   className="px-4 py-8 text-center text-sm text-gray-400"
                 >
                   No services configured
@@ -349,6 +434,12 @@ export default function ServicesPage() {
                       ) : (
                         <span className="text-gray-400">—</span>
                       )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <CircuitBadge
+                        enabled={service.circuitBreaker?.enabled === true}
+                        status={circuits.byService.get(service.id)}
+                      />
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
@@ -734,6 +825,62 @@ export default function ServicesPage() {
                 </span>
               </label>
 
+              <fieldset className="flex flex-col gap-3 rounded-md border border-gray-200 p-3">
+                <legend className="px-1 text-sm font-medium text-gray-700">
+                  Circuit breaker
+                </legend>
+                <label className="flex items-start gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={form.circuitEnabled}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        circuitEnabled: e.target.checked,
+                      }))
+                    }
+                  />
+                  <span>
+                    Stop sending traffic while this service is failing
+                    <span className="mt-1 block text-xs text-gray-500">
+                      When more than the failure rate of recent requests fail
+                      (5xx, timeouts or connection errors), the gateway answers
+                      503 CIRCUIT_OPEN for the open period, then lets one probe
+                      request through at a time until enough succeed.
+                    </span>
+                  </span>
+                </label>
+                {form.circuitEnabled && (
+                  <div className="grid grid-cols-2 gap-3">
+                    {CIRCUIT_FIELDS.map(({ key, label }) => (
+                      <div key={key} className="flex flex-col gap-1">
+                        <label
+                          htmlFor={`services-circuit-${key}`}
+                          className="text-xs font-medium text-gray-700"
+                        >
+                          {label}
+                        </label>
+                        <input
+                          id={`services-circuit-${key}`}
+                          type="number"
+                          required
+                          min={CIRCUIT_BREAKER_LIMITS[key][0]}
+                          max={CIRCUIT_BREAKER_LIMITS[key][1]}
+                          value={form.circuit[key]}
+                          onChange={(e) =>
+                            setForm((f) => ({
+                              ...f,
+                              circuit: { ...f.circuit, [key]: e.target.value },
+                            }))
+                          }
+                          className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </fieldset>
+
               {/* Timeout */}
               <div className="flex flex-col gap-1">
                 <label
@@ -780,5 +927,31 @@ export default function ServicesPage() {
         </WorkspaceDialog>
       )}
     </div>
+  );
+}
+
+function CircuitBadge({
+  enabled,
+  status,
+}: {
+  enabled: boolean;
+  status?: { state: CircuitState; failures: number; requests: number };
+}) {
+  const state: CircuitBadgeState = enabled
+    ? (status?.state ?? 'unreported')
+    : 'off';
+  return (
+    <span className="flex flex-col gap-0.5">
+      <span
+        className={`inline-block w-fit rounded px-2 py-0.5 text-xs font-medium ${CIRCUIT_STYLES[state]}`}
+      >
+        {CIRCUIT_LABELS[state]}
+      </span>
+      {enabled && status && status.requests > 0 && (
+        <span className="text-xs text-gray-500">
+          {status.failures}/{status.requests} failed
+        </span>
+      )}
+    </span>
   );
 }

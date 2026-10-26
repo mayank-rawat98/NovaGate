@@ -15,14 +15,20 @@ import {
   ConfigAckMessage,
   ConfigUpdateMessage,
   PluginsStatusMessage,
+  CircuitStateMessage,
 } from '@api-gateway/shared-types';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 import { PluginLoaderService } from '../plugins/third-party/plugin-loader.service';
+import { CircuitBreakerService } from '../circuit-breaker/circuit-breaker.service';
 
 /** Plugin reports are small snapshots; refresh so quarantine expiry is visible. */
 const PLUGIN_REPORT_DEBOUNCE_MS = 1000;
 const PLUGIN_REPORT_INTERVAL_MS = 60000;
 const PLUGIN_REPORT_MAX_BUFFERED_BYTES = 65536;
+/** Circuit transitions are reported quickly; a heartbeat keeps the snapshot fresh. */
+const CIRCUIT_REPORT_DEBOUNCE_MS = 200;
+const CIRCUIT_REPORT_INTERVAL_MS = 30000;
+const CIRCUIT_REPORT_MAX_BUFFERED_BYTES = 262144;
 
 @Injectable()
 export class ControlPlaneConnectorService
@@ -40,11 +46,15 @@ export class ControlPlaneConnectorService
   private pluginReportTimer?: NodeJS.Timeout;
   private pluginReportInterval?: NodeJS.Timeout;
   private stopPluginListener?: () => void;
+  private circuitReportTimer?: NodeJS.Timeout;
+  private circuitReportInterval?: NodeJS.Timeout;
+  private stopCircuitListener?: () => void;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly gatewayConfig: GatewayConfigManagerService,
     @Optional() private readonly plugins?: PluginLoaderService,
+    @Optional() private readonly circuits?: CircuitBreakerService,
   ) {}
 
   async onModuleInit() {
@@ -59,6 +69,16 @@ export class ControlPlaneConnectorService
       );
       this.pluginReportInterval.unref();
     }
+    if (this.circuits) {
+      this.stopCircuitListener = this.circuits.onChange(() =>
+        this.scheduleCircuitReport(),
+      );
+      this.circuitReportInterval = setInterval(
+        () => this.reportCircuits(),
+        CIRCUIT_REPORT_INTERVAL_MS,
+      );
+      this.circuitReportInterval.unref();
+    }
     this.connect();
   }
 
@@ -67,6 +87,9 @@ export class ControlPlaneConnectorService
     this.stopPluginListener?.();
     clearTimeout(this.pluginReportTimer);
     clearInterval(this.pluginReportInterval);
+    this.stopCircuitListener?.();
+    clearTimeout(this.circuitReportTimer);
+    clearInterval(this.circuitReportInterval);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.ws) {
       this.ws.close();
@@ -143,6 +166,7 @@ export class ControlPlaneConnectorService
           } as ConfigAckMessage);
           this.flushBuffer();
           this.reportPlugins();
+          this.reportCircuits();
           break;
         }
         case 'config.update': {
@@ -237,6 +261,27 @@ export class ControlPlaneConnectorService
     this.sendTransient(
       { type: 'plugins.status', payload: { plugins } } as PluginsStatusMessage,
       PLUGIN_REPORT_MAX_BUFFERED_BYTES,
+    );
+  }
+
+  private scheduleCircuitReport() {
+    if (this.circuitReportTimer || this.stopped) return;
+    this.circuitReportTimer = setTimeout(() => {
+      this.circuitReportTimer = undefined;
+      this.reportCircuits();
+    }, CIRCUIT_REPORT_DEBOUNCE_MS);
+    this.circuitReportTimer.unref();
+  }
+
+  /** Full transient snapshot; an empty list clears services that lost their breaker. */
+  private reportCircuits() {
+    if (!this.circuits) return;
+    this.sendTransient(
+      {
+        type: 'circuit.state',
+        payload: { services: this.circuits.statuses() },
+      } as CircuitStateMessage,
+      CIRCUIT_REPORT_MAX_BUFFERED_BYTES,
     );
   }
 

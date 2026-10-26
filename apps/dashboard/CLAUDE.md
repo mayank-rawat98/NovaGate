@@ -256,6 +256,14 @@ gives the shared portal host. Scroll containers holding tables with
 screen-reader-only text must be `relative`, and tables inside the flex main
 column must not set a minimum width; either escapes and widens mobile pages.
 
+Issue #115 adds circuit breakers to Services: a live Circuit column
+(`useLiveCircuits`: one REST snapshot, then the authenticated SSE stream with
+bounded reconnect; state keyed by workspace) showing Closed, Probing, Open, Off
+or No report (an enabled breaker the gateway has not reported is never shown
+as healthy), and a Circuit breaker fieldset in the service form. New services
+default to the breaker; services without one start unchecked. Settings are saved
+even when turned off, and out-of-range values are refused before saving.
+
 Issue #113 adds Settings → Gateway plugins (the gateway's last third-party plugin
 report, state badges, one-line last errors, and a confirmed per-plugin
 disable/enable that keeps unreported disabled names reversible) and a

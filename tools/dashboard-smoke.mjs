@@ -19,6 +19,10 @@ import {
   gatewayPluginsBrowserFixture,
   verifyGatewayPluginsDashboard,
 } from './gateway-plugins-dashboard-smoke.mjs';
+import {
+  circuitBreakersBrowserFixture,
+  verifyCircuitBreakersDashboard,
+} from './circuit-breakers-dashboard-smoke.mjs';
 import { createServer } from 'node:http';
 import {
   existsSync,
@@ -65,6 +69,7 @@ let configImportEvidence;
 let automationTokensEvidence;
 let developerPortalEvidence;
 let gatewayPluginsEvidence;
+let circuitBreakersEvidence;
 let coldLoads = 0;
 const startedAt = Date.now();
 let metricsConnections = 0;
@@ -125,6 +130,7 @@ const exportDestinationsFixture = exportDestinationsBrowserFixture();
 const automationTokensFixture = automationTokensBrowserFixture();
 const developerPortalFixture = developerPortalBrowserFixture();
 const gatewayPluginsFixture = gatewayPluginsBrowserFixture();
+const circuitBreakersFixture = await circuitBreakersBrowserFixture();
 const service = '23456789-1234-1234-1234-123456789abc';
 const traceId = '0123456789abcdef0123456789abcdef';
 let traceMode = 'normal';
@@ -280,6 +286,7 @@ const handleApiFixture = async (route) => {
   if (await automationTokensFixture.handle(route)) return;
   if (await developerPortalFixture.handle(route)) return;
   if (await gatewayPluginsFixture.handle(route)) return;
+  if (await circuitBreakersFixture.handle(route)) return;
   if (resource === 'log-retention') {
     const tenant =
       url.pathname.split('/')[url.pathname.split('/').indexOf('tenants') + 1];
@@ -2558,6 +2565,13 @@ try {
     audit,
     fixture: gatewayPluginsFixture,
   });
+  circuitBreakersEvidence = await verifyCircuitBreakersDashboard({
+    page,
+    context,
+    base,
+    audit,
+    fixture: circuitBreakersFixture,
+  });
   writeFileSync(
     resolve(artifacts, 'accessibility.json'),
     JSON.stringify(violations, null, 2),
@@ -2592,6 +2606,7 @@ try {
     }
   } finally {
     await context.close();
+    await circuitBreakersFixture.close();
     metricsServer.closeAllConnections();
     await new Promise((resolve) => metricsServer.close(resolve));
     rmSync(profile, { recursive: true, force: true });
@@ -2612,6 +2627,7 @@ try {
           automationTokens: automationTokensEvidence,
           developerPortal: developerPortalEvidence,
           gatewayPlugins: gatewayPluginsEvidence,
+          circuitBreakers: circuitBreakersEvidence,
           runtimeErrors,
           accessibilityViolations: violations,
         },

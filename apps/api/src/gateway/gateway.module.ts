@@ -23,6 +23,7 @@ import { UpstreamHealthService } from './health/upstream-health.service';
 import { PluginsModule } from './plugins/plugins.module';
 import { OtelService } from './telemetry/otel.service';
 import { MetricsReporterService } from './metrics/metrics-reporter.service';
+import { CircuitBreakerService } from './circuit-breaker/circuit-breaker.service';
 
 @Module({
   imports: [RedisModule, ConfigManagerModule, PluginsModule],
@@ -52,6 +53,7 @@ import { MetricsReporterService } from './metrics/metrics-reporter.service';
     },
     OtelService,
     MetricsReporterService,
+    CircuitBreakerService,
   ],
   exports: [WsProxyService, GrpcProxyService],
 })

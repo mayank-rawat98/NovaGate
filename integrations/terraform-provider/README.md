@@ -35,8 +35,11 @@ timeout can happen after a server commit, so refresh before re-applying.
 See [`examples/main.tf`](examples/main.tf).
 
 - **`novagate_service`**: `name`, `targets` (`url`, `weight` 1–100, default 100),
-  health check settings, `h2`, `supports_websocket`, `load_balancing`. Destroy
-  soft-deletes the service.
+  health check settings, `h2`, `supports_websocket`, `load_balancing` and
+  `circuit_breaker` (`enabled`, `window_size`, `failure_rate_percent`,
+  `minimum_requests`, `open_ms`, `half_open_successes`, with the API's
+  defaults). Omitting `circuit_breaker` means no breaker. Destroy soft-deletes
+  the service.
 - **`novagate_route`**: `method`, `path_pattern`, `service_id`, `auth_required`,
   `enabled`, `rate_limit_override`, `retry`, `plugins` (ordered JSON; sensitive,
   compared semantically) and `portal` (developer portal publication). Removing an

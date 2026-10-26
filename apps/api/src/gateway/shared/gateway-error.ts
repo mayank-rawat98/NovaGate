@@ -12,12 +12,19 @@ export type GatewayErrorCode =
   | 'NO_HEALTHY_TARGETS'
   | 'SERVICE_NOT_FOUND'
   | 'IP_RESTRICTED'
-  | 'REQUEST_TOO_LARGE';
+  | 'REQUEST_TOO_LARGE'
+  | 'CIRCUIT_OPEN';
 
 export class GatewayError extends HttpException {
   readonly code: GatewayErrorCode;
 
-  constructor(code: GatewayErrorCode, message: string, status: HttpStatus) {
+  constructor(
+    code: GatewayErrorCode,
+    message: string,
+    status: HttpStatus,
+    /** Extra response headers, such as Retry-After. */
+    readonly headers: Record<string, string> = {},
+  ) {
     super({ code, message }, status);
     this.code = code;
   }

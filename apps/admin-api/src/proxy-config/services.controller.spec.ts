@@ -1,3 +1,4 @@
+import { DEFAULT_CIRCUIT_BREAKER } from '@api-gateway/shared-types';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ServicesController } from './services.controller';
 import { DataSource } from 'typeorm';
@@ -60,6 +61,8 @@ describe('ServicesController', () => {
         'http',
         '',
         'weighted-round-robin',
+        // New services get the default circuit breaker.
+        JSON.stringify(DEFAULT_CIRCUIT_BREAKER),
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
@@ -92,6 +95,8 @@ describe('ServicesController', () => {
         'http',
         '',
         'weighted-round-robin',
+        // New services get the default circuit breaker.
+        JSON.stringify(DEFAULT_CIRCUIT_BREAKER),
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });

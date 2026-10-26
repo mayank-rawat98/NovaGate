@@ -53,6 +53,7 @@ export class TenantProvisioningService {
           "healthCheckService" VARCHAR NOT NULL DEFAULT '',
           "unhealthyFallback" BOOLEAN NOT NULL DEFAULT false,
           "loadBalancing" VARCHAR NOT NULL DEFAULT 'weighted-round-robin' CHECK ("loadBalancing" IN ('weighted-round-robin', 'least-connections')),
+          "circuitBreaker" JSONB,
           h2 BOOLEAN DEFAULT false,
           "supportsWebSocket" BOOLEAN DEFAULT false,
           "createdAt" TIMESTAMP DEFAULT NOW(),

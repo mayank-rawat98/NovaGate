@@ -35,6 +35,8 @@ import {
   PluginsStatusMessage,
   disabledPluginList,
   parsePluginStatuses,
+  parseCircuitStatuses,
+  CircuitStateMessage,
 } from '@api-gateway/shared-types';
 
 import Redis from 'ioredis';
@@ -387,6 +389,24 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
           'EX',
           180,
         );
+        break;
+      }
+      case 'circuit.state': {
+        const services = parseCircuitStatuses(
+          (message as CircuitStateMessage).payload?.services,
+        );
+        if (!services) {
+          this.logger.warn(`Rejected invalid circuit report from ${tenantId}`);
+          break;
+        }
+        const tenant = tenantId.toLowerCase();
+        const snapshot = JSON.stringify({
+          reportedAt: new Date().toISOString(),
+          services,
+        });
+        // The gateway refreshes every 30s; a silent gateway's state expires.
+        await this.redisPub.set(`gw:circuits:${tenant}`, snapshot, 'EX', 90);
+        await this.redisPub.publish(`circuits:${tenant}`, snapshot);
         break;
       }
       case 'pong':

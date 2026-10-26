@@ -12,6 +12,7 @@ export type WsMessageType =
   | 'metrics'
   | 'traces'
   | 'plugins.status'
+  | 'circuit.state'
   | 'ack';
 
 export interface BaseWsMessage {
@@ -104,6 +105,11 @@ export interface TracesMessage extends BaseWsMessage {
 export interface PluginsStatusMessage extends BaseWsMessage {
   type: 'plugins.status';
   payload: import('./third-party-plugins.ts').GatewayPluginReport;
+}
+
+export interface CircuitStateMessage extends BaseWsMessage {
+  type: 'circuit.state';
+  payload: import('./circuit-breaker.ts').CircuitStateReport;
 }
 
 export interface HealthMessage extends BaseWsMessage {
@@ -367,6 +373,8 @@ export interface ServiceConfig {
   supportsWebSocket?: boolean;
   loadBalancing?: 'weighted-round-robin' | 'least-connections';
   h2?: boolean;
+  /** Absent or null: no breaker (services created before roadmap 6.2). */
+  circuitBreaker?: import('./circuit-breaker.ts').CircuitBreakerConfig | null;
 }
 
 export interface ConsumerConfig {

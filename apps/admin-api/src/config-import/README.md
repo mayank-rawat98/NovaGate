@@ -46,6 +46,12 @@ Duplicate identities/keys, foreign service references, unknown fields/plugins,
 aliases, custom YAML tags, multiple documents, reserved prototype keys, excessive
 nesting and unsafe integers are refused. Parser failures do not echo source.
 
+A service's `circuitBreaker` is explicit in documents: the object
+(`enabled`, `windowSize`, `failureRatePercent`, `minimumRequests`, `openMs`,
+`halfOpenSuccesses`) or `null`. Omitting it means no breaker, so re-importing an
+export made before circuit breakers existed never changes traffic. Services
+created through the API or dashboard get the default breaker instead.
+
 Route array order is persisted as `configOrder`; plugin array order is preserved.
 Ordinary CRUD routes without an imported order sort after ordered routes, then by
 creation time and ID. Migration/provisioning own the new nullable column. The

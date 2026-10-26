@@ -437,6 +437,63 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
     ]);
   });
 
+  it('stores and publishes validated circuit snapshots for the authenticated tenant', async () => {
+    const key = `gw:circuits:${tenantId}`;
+    await redis.del(key, `gw:circuits:${secondId}`);
+    const subscriber = new Redis(process.env.TEST_REDIS_URL as string);
+    await subscriber.subscribe(`circuits:${tenantId}`, `circuits:${secondId}`);
+    const seen: Array<{ channel: string; body: string }> = [];
+    subscriber.on('message', (channel, body) => seen.push({ channel, body }));
+    const status = {
+      serviceId: randomUUID(),
+      state: 'open',
+      requests: 5,
+      failures: 3,
+      changedAt: new Date().toISOString(),
+      nextProbeAt: new Date(Date.now() + 10000).toISOString(),
+    };
+    try {
+      const { ws } = await connect(apiKey);
+      ws.send(
+        JSON.stringify({
+          type: 'circuit.state',
+          tenantId: secondId,
+          payload: { services: [status] },
+        }),
+      );
+      await until(async () => seen.length === 1);
+      expect(seen[0].channel).toBe(`circuits:${tenantId}`);
+      const published = JSON.parse(seen[0].body);
+      expect(published.services).toEqual([status]);
+      expect(JSON.parse((await redis.get(key)) as string)).toEqual(published);
+      const ttl = await redis.ttl(key);
+      expect(ttl).toBeGreaterThan(80);
+      expect(ttl).toBeLessThanOrEqual(90);
+      // An invalid report is neither stored nor published; the metrics
+      // marker after it proves the serialized handler processed it.
+      const metrics = `SELECT COUNT(*)::int AS count FROM tenant_${tenantId.replace(/-/g, '_')}.metrics_snapshots`;
+      const [{ count }] = await ds.query(metrics);
+      ws.send(
+        JSON.stringify({
+          type: 'circuit.state',
+          payload: { services: [{ ...status, state: 'tripped' }] },
+        }),
+      );
+      ws.send(
+        JSON.stringify({
+          type: 'metrics',
+          payload: { rps: 1, p50: 1, p95: 2, p99: 3, errorRate: 0 },
+        }),
+      );
+      await until(async () => (await ds.query(metrics))[0].count > count);
+      expect(seen).toHaveLength(1);
+      expect(JSON.parse((await redis.get(key)) as string)).toEqual(published);
+      expect(await redis.exists(`gw:circuits:${secondId}`)).toBe(0);
+    } finally {
+      subscriber.disconnect();
+    }
+  });
+
   it('persists validated histogram evidence on the authenticated tenant and preserves legacy null metadata', async () => {
     const subscriber = new Redis(process.env.TEST_REDIS_URL as string);
     await subscriber.subscribe(`metrics:${tenantId}`);

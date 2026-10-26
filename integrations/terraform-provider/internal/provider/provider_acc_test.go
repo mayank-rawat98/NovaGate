@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
@@ -54,6 +55,7 @@ resource "novagate_service" "users" {
     { url = "https://users-b.internal.test" },
   ]
   load_balancing = %[1]q
+  %[7]s
 }
 
 resource "novagate_route" "list_users" {
@@ -91,8 +93,8 @@ resource "novagate_alert_rule" "errors" {
 }
 `
 
-func config(balancing, retry string, max int, summary, groups, threshold string) string {
-	return fmt.Sprintf(lifecycleConfig, balancing, retry, max, summary, groups, threshold)
+func config(balancing, retry string, max int, summary, groups, threshold string, breaker ...string) string {
+	return fmt.Sprintf(lifecycleConfig, balancing, retry, max, summary, groups, threshold, strings.Join(breaker, ""))
 }
 
 func TestAccNovaGateLifecycle(t *testing.T) {
@@ -107,6 +109,8 @@ func TestAccNovaGateLifecycle(t *testing.T) {
 					resource.TestCheckResourceAttr("data.novagate_tenant.current", "id", os.Getenv("NOVAGATE_TENANT_ID")),
 					resource.TestCheckResourceAttr("novagate_service.users", "targets.1.weight", "100"),
 					resource.TestCheckResourceAttr("novagate_service.users", "health_check_path", "/health"),
+					// Omitted means no breaker, even though API-created services default to one.
+					resource.TestCheckNoResourceAttr("novagate_service.users", "circuit_breaker"),
 					resource.TestCheckResourceAttr("novagate_route.list_users", "enabled", "true"),
 					resource.TestCheckResourceAttr("novagate_route.list_users", "portal.summary", "List users"),
 					resource.TestCheckNoResourceAttr("novagate_route.list_users", "retry"),
@@ -133,9 +137,24 @@ func TestAccNovaGateLifecycle(t *testing.T) {
 			{
 				// In-place updates, including nested objects and plugin JSON.
 				Config: config("least-connections", `retry = { attempts = 2, on = [502, 503], methods = ["GET"] }
-  rate_limit_override = 250`, 60, "List all users", `["read-only", "partners"]`, "0.1"),
+  rate_limit_override = 250`, 60, "List all users", `["read-only", "partners"]`, "0.1",
+					`circuit_breaker = { open_ms = 5000, minimum_requests = 8 }`),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("novagate_service.users", "load_balancing", "least-connections"),
+					resource.TestCheckResourceAttr("novagate_service.users", "circuit_breaker.enabled", "true"),
+					resource.TestCheckResourceAttr("novagate_service.users", "circuit_breaker.window_size", "20"),
+					resource.TestCheckResourceAttr("novagate_service.users", "circuit_breaker.open_ms", "5000"),
+					resource.TestCheckResourceAttr("novagate_service.users", "circuit_breaker.minimum_requests", "8"),
+					func(s *terraform.State) error {
+						service, err := apiClient(t).Service(context.Background(), serviceID)
+						if err != nil {
+							return err
+						}
+						if service.CircuitBreaker == nil || service.CircuitBreaker.OpenMs != 5000 || service.CircuitBreaker.FailureRatePercent != 50 {
+							return fmt.Errorf("API breaker does not match the configuration: %+v", service.CircuitBreaker)
+						}
+						return nil
+					},
 					resource.TestCheckResourceAttr("novagate_route.list_users", "retry.attempts", "2"),
 					resource.TestCheckResourceAttr("novagate_route.list_users", "rate_limit_override", "250"),
 					resource.TestCheckResourceAttr("novagate_route.list_users", "portal.summary", "List all users"),
@@ -159,6 +178,7 @@ func TestAccNovaGateLifecycle(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckNoResourceAttr("novagate_route.list_users", "retry"),
 					resource.TestCheckNoResourceAttr("novagate_route.list_users", "rate_limit_override"),
+					resource.TestCheckNoResourceAttr("novagate_service.users", "circuit_breaker"),
 				),
 			},
 			{ResourceName: "novagate_service.users", ImportState: true, ImportStateVerify: true},

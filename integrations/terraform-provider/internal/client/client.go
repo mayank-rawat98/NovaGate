@@ -158,6 +158,18 @@ type Service struct {
 	H2                    bool     `json:"h2"`
 	SupportsWebSocket     bool     `json:"supportsWebSocket"`
 	LoadBalancing         string   `json:"loadBalancing"`
+	// Always sent: null means no circuit breaker.
+	CircuitBreaker *CircuitBreaker `json:"circuitBreaker"`
+}
+
+// CircuitBreaker mirrors the admin API's per-service breaker settings.
+type CircuitBreaker struct {
+	Enabled            bool  `json:"enabled"`
+	WindowSize         int64 `json:"windowSize"`
+	FailureRatePercent int64 `json:"failureRatePercent"`
+	MinimumRequests    int64 `json:"minimumRequests"`
+	OpenMs             int64 `json:"openMs"`
+	HalfOpenSuccesses  int64 `json:"halfOpenSuccesses"`
 }
 
 type Retry struct {

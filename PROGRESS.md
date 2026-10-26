@@ -8,6 +8,7 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
+- [Issue #115](https://github.com/mayank-rawat98/NovaGate/issues/115) adds the phase 6.2 automatic circuit breaker: per-service sliding-window circuits on the gateway for HTTP/1, HTTP/2, WebSocket upgrades and native gRPC, `503 CIRCUIT_OPEN` with `Retry-After`, sequential half-open probes and Prometheus state. Live state flows from the gateway through the control plane to the admin API and the dashboard. The real-process run opens a circuit at a 60% upstream failure rate and refuses traffic without upstream calls. The admin snapshot and live stream show `closed → open → half-open → closed`, and recovery closes the circuit. Verified on Node 26.11.1 with PostgreSQL 16 and Redis 7: **615/616 gateway tests** (the remaining test needs IPv6), **881 admin**, **144 control-plane**, 35 CLI, 10 dashboard, 5 portal and 4 SDK tests. Terraform acceptance passes with the new `circuit_breaker` block, and the dashboard browser smoke passes with zero WCAG/runtime findings. See the section below.
 - [Issue #113](https://github.com/mayank-rawat98/NovaGate/issues/113) adds phase 5.5: operator-pinned third-party plugins loaded from npm packages, `libs/plugin-sdk`, a workspace kill switch, gateway status reports through the control plane, and dashboard/route-editor support. A real-process run installs packed tarballs with npm. It checks that hooks fire on live traffic and that an uninstalled package fails closed. Timer and unhandled-rejection crashes quarantine the plugin while the gateway keeps serving, and the kill switch reaches the gateway. Verified on Node 26.11.1 with local PostgreSQL 16 and Redis 7: **878 admin tests** (21 RustFS-dependent skipped; no container runtime), **132 control-plane**, **598/599 gateway** (the remaining test needs IPv6, which this container lacks), 4 SDK, 10 dashboard, 5 portal and 35 CLI tests. Lint/typecheck pass, as do both production browser smokes with zero WCAG/runtime findings and the portal → gateway end-to-end run. See the section below.
 - [Issue #111](https://github.com/mayank-rawat98/NovaGate/issues/111) adds the phase 5.4 Terraform provider: `novagate_service`, `novagate_route`, `novagate_consumer` and `novagate_alert_rule`, with import support, plus `novagate_tenant` and `novagate_consumer` data sources. Acceptance runs the real Terraform 1.16.7 CLI against the real admin API on PostgreSQL. It covers create, in-place update, clearing, import of every resource, scope denial and destroy, and SQL confirms the soft deletes. See the section below.
 
@@ -1562,7 +1563,7 @@ issues #69, #90 and the remaining #101 investigation stay open.
 ### Phase 6 — beyond Kong roadmap
 
 - Anomaly detection and automatic delivered alerts.
-- Circuit breakers with measured opening/recovery behavior.
+- Circuit breakers: implemented in #115 (per-service sliding window across HTTP/1, HTTP/2, WebSocket and gRPC, live dashboard status, Terraform and declarative support); load measurements and formal acceptance remain.
 - Multi-region control-plane failover, durable configuration and observability attribution
   across multiple gateways/regions; current alert aggregation rejects ambiguous overlap.
 - Usage quotas, billing metering and threshold UX.
@@ -1912,3 +1913,54 @@ Verification (Node 26.11.1, PostgreSQL 16, Redis 7):
 Not verified here: the gateway Docker image with a mounted plugin directory (no
 container runtime). npm publication of `@api-gateway/plugin-sdk`, a sandbox for
 untrusted plugins (phase 6.6) and formal acceptance remain.
+
+## Circuit breaker — issue #115
+
+Services carry an optional `circuitBreaker`: `enabled`, `windowSize` (20),
+`failureRatePercent` (50; opens strictly above), `minimumRequests` (5), `openMs`
+(10 s) and `halfOpenSuccesses` (2). Services created through the API or dashboard
+get these defaults. Existing services migrate to `NULL` and keep their behaviour.
+Declarative documents and Terraform state the breaker explicitly; omitting it
+means none.
+
+The gateway's `CircuitBreakerService` admits each upstream attempt before a target
+is acquired. Each admission settles once, where the upstream outcome is known:
+
+- HTTP/1: response headers, proxy error, upstream timeout, or the client-socket
+  timeout of a fully received request;
+- HTTP/2: the response or failure;
+- WebSocket: the upgrade, refusal or error;
+- gRPC: the response headers (trailers-only `UNAVAILABLE`, `DEADLINE_EXCEEDED`
+  and `INTERNAL` are failures) or a connection failure.
+
+5xx, timeouts and connection failures count against the service. 4xx, caller
+cancellation and client body failures do not. While open, requests are refused
+before dispatch, and retries stop. Changing a service's settings resets its
+circuit. The work also fixed a gap: when the proxy's shared socket timeout
+closed the client first, hung HTTP/1 upstreams were not classified at all.
+
+Verification (Node 26.11.1, PostgreSQL 16, Redis 7):
+
+- `@api-gateway/api:circuit-e2e` uses the built admin API, control plane and
+  gateway with a real upstream failing 3 of 5 requests:
+  - the circuit opens at 60%;
+  - the sixth request gets `503 CIRCUIT_OPEN` with `Retry-After` and no upstream
+    call;
+  - the admin snapshot shows 5 requests and 3 failures;
+  - after recovery, two probes close the circuit;
+  - the admin SSE stream observed `closed → open → half-open → closed`.
+- Gateway: state-machine unit tests; real-network HTTP/1 and HTTP/2 tests covering
+  the 60% opening, single probe, probe timeout reopening, connection refusals and
+  timeouts against 4xx, caller disconnects, retry interruption and services
+  without a breaker; real WebSocket and native gRPC tests for refusal and
+  recovery.
+- Control plane: tenant-attributed snapshots, TTL, publication, and that invalid
+  reports are neither stored nor published.
+- Admin: defaults, validation, keep/replace/clear on update, publication,
+  declarative round trip, legacy documents, snapshot and live-stream isolation.
+- Terraform acceptance (create without a breaker, add one with defaults, clear
+  it, import) and the dashboard browser smoke (live transitions, the no-report
+  state, validation, legacy opt-in, the new-service default, mobile/axe).
+
+Not verified here: behaviour under load and across several gateway replicas.
+Circuits are per process by design.

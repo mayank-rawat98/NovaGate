@@ -8,6 +8,7 @@ import {
 import Redis from 'ioredis';
 import { DataSource, EntityManager } from 'typeorm';
 import {
+  circuitBreakerConfig,
   disabledPluginList,
   logPrivacyPolicy,
   parsePluginStatuses,
@@ -153,6 +154,7 @@ export class ConfigPushService
       loadBalancing: row.loadBalancing ?? 'weighted-round-robin',
       h2: row.h2 ?? false,
       supportsWebSocket: row.supportsWebSocket ?? false,
+      circuitBreaker: circuitBreakerConfig(row.circuitBreaker),
     }));
 
     const caCertPem: string | undefined = tenantRows[0]?.caCertPem ?? undefined;

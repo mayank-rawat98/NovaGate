@@ -17,6 +17,10 @@ import {
   MAX_SERVICE_TARGETS,
   MAX_SERVICE_TARGET_URL_BYTES,
   MAX_SERVICE_TARGET_WEIGHT,
+  DEFAULT_CIRCUIT_BREAKER,
+  CIRCUIT_BREAKER_LIMITS,
+  circuitBreakerConfig,
+  type CircuitBreakerConfig,
   type ServiceTarget,
   type ServiceConfig,
 } from '@api-gateway/shared-types';
@@ -33,7 +37,11 @@ export interface ServiceBody {
   unhealthyFallback?: boolean;
   h2?: boolean;
   supportsWebSocket?: boolean;
+  /** Omitted: keep (update) or the default breaker (create). Null: none. */
+  circuitBreaker?: CircuitBreakerConfig | null;
 }
+
+const CIRCUIT_KEYS = ['enabled', ...Object.keys(CIRCUIT_BREAKER_LIMITS)];
 
 export function validateTargets(targets: unknown): ServiceTarget[] {
   if (!Array.isArray(targets) || targets.length === 0) {
@@ -108,6 +116,17 @@ export function validateHealthSettings(body: ServiceBody) {
     throw new BadRequestException(
       'gRPC health service name must be at most 256 UTF-8 bytes without control characters',
     );
+  if (body.circuitBreaker !== undefined && body.circuitBreaker !== null) {
+    const keys = Object.keys(body.circuitBreaker ?? {});
+    if (
+      !circuitBreakerConfig(body.circuitBreaker) ||
+      keys.length !== CIRCUIT_KEYS.length ||
+      keys.some((key) => !CIRCUIT_KEYS.includes(key))
+    )
+      throw new BadRequestException(
+        'circuitBreaker needs enabled, windowSize (5-100), failureRatePercent (1-99), minimumRequests (1-windowSize), openMs (1000-300000) and halfOpenSuccesses (1-10)',
+      );
+  }
   for (const flag of ['h2', 'supportsWebSocket'] as const)
     if (body[flag] !== undefined && typeof body[flag] !== 'boolean')
       throw new BadRequestException(`${flag} must be a boolean`);
@@ -176,8 +195,8 @@ export class ServicesController {
     validateHealthSettings(body);
     const targets = validateTargets(body.targets);
     const rows = await this.dataSource.query(
-      `INSERT INTO ${schema}.services (name, targets, "healthCheckPath", "timeoutMs", h2, "supportsWebSocket", "healthCheckIntervalMs", "unhealthyFallback", "healthCheckProtocol", "healthCheckService", "loadBalancing")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+      `INSERT INTO ${schema}.services (name, targets, "healthCheckPath", "timeoutMs", h2, "supportsWebSocket", "healthCheckIntervalMs", "unhealthyFallback", "healthCheckProtocol", "healthCheckService", "loadBalancing", "circuitBreaker")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb) RETURNING *`,
       [
         body.name,
         JSON.stringify(targets),
@@ -190,6 +209,12 @@ export class ServicesController {
         body.healthCheckProtocol ?? 'http',
         body.healthCheckService ?? '',
         body.loadBalancing ?? 'weighted-round-robin',
+        // New services get the automatic breaker unless they opt out.
+        JSON.stringify(
+          body.circuitBreaker === undefined
+            ? DEFAULT_CIRCUIT_BREAKER
+            : body.circuitBreaker,
+        ),
       ],
     );
     await this.configPush.triggerUpdate(tenantId);
@@ -221,7 +246,8 @@ export class ServicesController {
             "unhealthyFallback" = COALESCE($9, "unhealthyFallback"),
             "healthCheckProtocol" = COALESCE($10, "healthCheckProtocol"),
             "healthCheckService" = COALESCE($11, "healthCheckService"),
-            "loadBalancing" = COALESCE($12, "loadBalancing")
+            "loadBalancing" = COALESCE($12, "loadBalancing"),
+            "circuitBreaker" = CASE WHEN $14 THEN $13::jsonb ELSE "circuitBreaker" END
        WHERE id = $1 AND "deletedAt" IS NULL RETURNING *) SELECT * FROM updated`,
       [
         id,
@@ -236,6 +262,10 @@ export class ServicesController {
         body.healthCheckProtocol ?? null,
         body.healthCheckService ?? null,
         body.loadBalancing ?? null,
+        body.circuitBreaker === undefined
+          ? null
+          : JSON.stringify(body.circuitBreaker),
+        body.circuitBreaker !== undefined,
       ],
     );
     if (!rows.length)

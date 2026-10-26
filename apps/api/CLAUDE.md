@@ -58,6 +58,8 @@ gateway/
     control-plane-connector.service.ts  WSS lifecycle, reconnect, message buffer, config.ack
   telemetry/
     gateway-telemetry.service.ts    batches logs/health/errors/metrics → sends upstream
+  circuit-breaker/
+    circuit-breaker.service.ts      per-service sliding-window circuits; admissions settle once per attempt
   plugins/
     plugin-runner.service.ts        executes onRequest / onResponse / onError hooks in order
     plugin-registry.service.ts      DI-based registry; resolves plugin instances by name
@@ -105,6 +107,22 @@ gateway/
 - Phase 2 plugins that need Redis: `oauth2-client-credentials` injects `REDIS_CLIENT` token
 - OIDC plugin caches JWKS keys in-memory (24h TTL); refreshes on `kid` miss then fails if still not found
 - Bounded HMAC `prepareRequest` captures original bytes before body-aware hooks without authenticating; request policies run in saved order. HMAC admission lasts until response finish/close/cancellation. Stripe and custom timestamp modes sign timestamp.body; body-only mode cannot claim replay protection.
+
+## Circuit breaker (issue #115)
+
+`circuit-breaker/circuit-breaker.service.ts` holds per-service circuits for
+services whose `ServiceConfig.circuitBreaker` is valid and enabled (it lives
+outside `proxy/` because the connector reports it). Every protocol takes an
+admission before acquiring a target and settles it exactly once at the upstream
+classification point: HTTP/1 `proxyRes`/error/upstream `timeout`/client-socket
+timeout, the HTTP/2 result, the WebSocket upgrade/response/error and the gRPC
+response headers or connection failure. Unsettled admissions settle as neutral.
+5xx, timeouts and connection failures are failures; 4xx, caller cancellation and
+client body failures are not. Open circuits refuse before dispatch (`503
+CIRCUIT_OPEN` + `Retry-After`, WebSocket 503, gRPC `UNAVAILABLE`); half-open
+admits one probe at a time, and a probe unsettled for 3× `openMs` is replaced.
+Changing a service's breaker settings resets its circuit. State changes are
+reported as `circuit.state` snapshots (debounced 200 ms, heartbeat 30 s).
 
 ## Third-party plugins (issue #113)
 

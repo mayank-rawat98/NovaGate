@@ -48,6 +48,8 @@ import { PortalAdminController } from '../portal/portal-admin.controller';
 import { PortalDeveloperGuard } from '../portal/portal-developer.guard';
 import { GatewayPluginsController } from '../gateway-plugins/gateway-plugins.controller';
 import { GatewayPluginsService } from '../gateway-plugins/gateway-plugins.service';
+import { CircuitBreakersController } from '../circuit-breakers/circuit-breakers.controller';
+import { CircuitBreakersService } from '../circuit-breakers/circuit-breakers.service';
 
 @Module({
   imports: [
@@ -95,6 +97,7 @@ import { GatewayPluginsService } from '../gateway-plugins/gateway-plugins.servic
     PortalDeveloperController,
     PortalAdminController,
     GatewayPluginsController,
+    CircuitBreakersController,
   ],
   providers: [
     LogStreamService,
@@ -117,6 +120,7 @@ import { GatewayPluginsService } from '../gateway-plugins/gateway-plugins.servic
     PortalDevelopersService,
     PortalDeveloperGuard,
     GatewayPluginsService,
+    CircuitBreakersService,
   ],
 })
 export class AppModule {}

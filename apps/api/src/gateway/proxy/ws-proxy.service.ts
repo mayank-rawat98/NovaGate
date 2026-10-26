@@ -40,6 +40,10 @@ import {
   wsSerialize,
   wsValidateResponse,
 } from './ws-wire';
+import {
+  CircuitBreakerService,
+  type CircuitAdmission,
+} from '../circuit-breaker/circuit-breaker.service';
 
 interface Connection {
   socket: net.Socket;
@@ -51,6 +55,8 @@ interface Connection {
   service: ServiceConfig;
   target?: string;
   releaseTarget?: () => void;
+  /** Circuit-breaker admission for the upstream handshake. */
+  circuit?: CircuitAdmission;
   trace?: GatewayTraceHandle;
   upstreamTrace?: GatewayTraceHandle;
   traceOutcome?: number;
@@ -86,6 +92,7 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
     private readonly registry: PluginRegistryService,
     private readonly runner: PluginRunnerService,
     @Optional() private readonly tracing?: OtelService,
+    @Optional() private readonly circuits?: CircuitBreakerService,
   ) {
     this.settings = {
       ...DEFAULT_WEBSOCKET,
@@ -472,6 +479,17 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
       const targets = service.targets.filter((target) =>
         currentService?.targets.some((current) => current.url === target.url),
       );
+      const circuit = this.circuits?.admit(service.id);
+      if (circuit && !circuit.allowed) {
+        this.metricsService.incrementCircuitRejection(service.name);
+        throw new WsFailure(
+          503,
+          'CIRCUIT_OPEN',
+          'Upstream service is temporarily unavailable',
+          { 'retry-after': String(circuit.retryAfterSeconds) },
+        );
+      }
+      active.circuit = circuit;
       try {
         const lease = this.loadBalancer.acquireTarget(
           service.id,
@@ -541,12 +559,17 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
         maxHeaderSize: this.settings.maxHeaderBytes,
       });
       active.request.once('close', () => {
+        // Closed without a classified outcome (for example cancellation).
+        active.circuit?.settle('neutral');
         if (!active.upstream) {
           active.releaseTarget?.();
           active.upstreamTrace?.end(active.traceOutcome ?? 499);
         }
       });
-      active.request.on('error', () =>
+      active.request.on('error', () => {
+        // Aborts by the gateway (caller left, shutdown) are not upstream faults.
+        if (active.abort.signal.aborted) active.circuit?.settle('neutral');
+        else active.circuit?.record(502);
         this.fail(
           active,
           new WsFailure(
@@ -554,10 +577,11 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
             'DOWNSTREAM_ERROR',
             'WebSocket upstream unavailable',
           ),
-        ),
-      );
+        );
+      });
       active.request.once('response', (response) => {
         response.destroy();
+        active.circuit?.record(response.statusCode ?? 502);
         this.fail(
           active,
           new WsFailure(
@@ -568,6 +592,7 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
         );
       });
       active.request.once('upgrade', (response, upstream, upstreamHead) => {
+        active.circuit?.record(101);
         // Async event callbacks always handle their own rejections.
         void this.accept(
           active,
@@ -591,6 +616,8 @@ export class WsProxyService implements OnModuleInit, OnModuleDestroy {
               'SERVICE_UNAVAILABLE',
               'WebSocket admission unavailable',
             );
+      // Refused before any upstream handshake was sent.
+      if (!connection?.request) connection?.circuit?.settle('neutral');
       if (connection) this.fail(connection, failure);
       else {
         traceOutcome = failure.status;

@@ -56,6 +56,8 @@ export class GatewayExceptionFilter implements ExceptionFilter {
       response.locals.errorCode = errorEvent.errorCode;
       this.telemetryService.sendError(errorEvent);
 
+      for (const [name, value] of Object.entries(exception.headers))
+        response.setHeader(name, value);
       response.status(exception.getStatus()).json({
         error: exception.code,
         message: exception.message,
