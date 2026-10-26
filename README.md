@@ -747,6 +747,19 @@ Every route is compared with its own last 7 days, without rules to write. Each m
 
 The controller uses a scoped automation token (`routes:write`, `services:write`). See the [controller guide](integrations/k8s-controller/README.md). `npm exec nx run k8s-controller:e2e` verifies it with a real kube-apiserver, admin API, control plane and gateway.
 
+### GraphQL federation
+
+One GraphQL endpoint on your gateway can serve a graph combined from several services' schemas (issue #127). This replaces a separate Apollo Router or GraphQL Mesh deployment.
+
+- **Registering subgraphs:** on the dashboard's **GraphQL federation** page, register each subgraph: a name, its NovaGate service, a path and its schema (Apollo Federation directives such as `@key`).
+- **Composition:** NovaGate composes the supergraph when you save and refuses graphs that do not compose, listing the composition errors. **Check composition** runs the same check without saving.
+- **Serving:** add the **GraphQL federation** plugin to a route, such as `ANY /graphql`. The gateway plans each query and sends sub-queries to the right subgraph services, including entity lookups (`_entities`). It then merges the results into one response.
+- **Auth, metering and limits:** route authentication, plugins and metering apply before any subgraph is called. Add the GraphQL guard to the same route for depth, complexity and introspection limits.
+- **Failures:** if a subgraph is down or slow, the response carries partial data and a coded error, such as `SUBGRAPH_UNAVAILABLE` or `SUBGRAPH_TIMEOUT`. Subgraph addresses are never exposed.
+- **Bounds:** `GRAPHQL_FEDERATION_MAX_SUBGRAPH_REQUESTS` (default 50 per operation), `GRAPHQL_FEDERATION_MAX_SUBGRAPH_RESPONSE_BYTES` (default 8 MiB) and `GRAPHQL_FEDERATION_MAX_CONCURRENT_OPERATIONS` (default 64).
+
+The [federation guide](apps/admin-api/src/graphql-federation/README.md) documents the API. `npm exec nx run @api-gateway/api:graphql-federation-e2e` verifies a query hitting two subgraphs through a real gateway.
+
 ### WebAssembly plugins and the Plugin marketplace
 
 Workspaces can run their own plugins on their gateways without operator involvement (issue #123).

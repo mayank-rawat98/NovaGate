@@ -195,6 +195,27 @@
           "parallel": false
         }
       },
+      "graphql-federation-e2e": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build",
+          {
+            "projects": [
+              "admin-api",
+              "control-plane"
+            ],
+            "target": "build"
+          }
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/graphql-federation-e2e.mjs",
+            "node tools/graphql-federation-e2e.mjs"
+          ],
+          "parallel": false
+        }
+      },
       "wasm-e2e": {
         "executor": "nx:run-commands",
         "cache": false,
@@ -220,6 +241,8 @@
   },
   "dependencies": {
     "@api-gateway/shared-types": "^0.0.1",
+    "@graphql-tools/federation": "4.6.0",
+    "@graphql-tools/utils": "12.1.0",
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.0",
@@ -241,6 +264,7 @@
   },
   "devDependencies": {
     "@nestjs/testing": "^11.0.0",
+    "@theguild/federation-composition": "0.27.0",
     "@types/jsonwebtoken": "^9.0.5",
     "@types/supertest": "^2.0.16",
     "ioredis-mock": "^8.13.1",

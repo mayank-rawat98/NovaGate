@@ -8,6 +8,8 @@ import {
   MAX_HMAC_CLOCK_SKEW_SECONDS,
   MAX_ROUTE_PLUGINS,
   MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES,
+  GRAPHQL_FEDERATION_PLUGIN,
+  graphqlFederationConfigProblem,
   isThirdPartyPluginName,
   wasmPluginOfRouteName,
 } from '@api-gateway/shared-types';
@@ -45,6 +47,7 @@ const KNOWN_PLUGIN_NAMES = new Set([
   'acl',
   'mtls',
   'graphql-guard',
+  GRAPHQL_FEDERATION_PLUGIN,
 ]);
 
 interface PluginEntry {
@@ -236,6 +239,20 @@ export function validatePlugins(plugins: unknown): void {
       )
         throw new BadRequestException(
           `plugin "${entry.name}" config exceeds ${MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES} bytes`,
+        );
+      continue;
+    }
+    if (entry.name === GRAPHQL_FEDERATION_PLUGIN) {
+      const problem = graphqlFederationConfigProblem(entry.config);
+      if (problem)
+        throw new BadRequestException(
+          `Invalid ${GRAPHQL_FEDERATION_PLUGIN} configuration: ${problem}`,
+        );
+      // The gateway answers from the supergraph instead of forwarding, so
+      // every policy plugin must run before it.
+      if (entry !== plugins[plugins.length - 1])
+        throw new BadRequestException(
+          `${GRAPHQL_FEDERATION_PLUGIN} must be the last plugin on a route`,
         );
       continue;
     }

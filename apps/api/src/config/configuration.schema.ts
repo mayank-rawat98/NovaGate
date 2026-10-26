@@ -16,6 +16,7 @@ import {
   DEFAULT_METRIC_REPORTING,
   DEFAULT_CONTROL_PLANE,
   DEFAULT_WASM_PLUGINS,
+  DEFAULT_GRAPHQL_FEDERATION,
   DEFAULT_THIRD_PARTY_PLUGINS,
 } from './configuration';
 import { BlockList, isIP } from 'net';
@@ -92,6 +93,21 @@ export const configSchema = Joi.object({
     .min(1000)
     .max(3600000)
     .default(DEFAULT_WASM_PLUGINS.quarantineMs),
+  GRAPHQL_FEDERATION_MAX_SUBGRAPH_REQUESTS: Joi.number()
+    .integer()
+    .min(1)
+    .max(1000)
+    .default(DEFAULT_GRAPHQL_FEDERATION.maxSubgraphRequests),
+  GRAPHQL_FEDERATION_MAX_SUBGRAPH_RESPONSE_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(67108864)
+    .default(DEFAULT_GRAPHQL_FEDERATION.maxSubgraphResponseBytes),
+  GRAPHQL_FEDERATION_MAX_CONCURRENT_OPERATIONS: Joi.number()
+    .integer()
+    .min(1)
+    .max(10000)
+    .default(DEFAULT_GRAPHQL_FEDERATION.maxConcurrentOperations),
   GATEWAY_INSTANCE_NAME: Joi.string()
     .pattern(/^[\x21-\x7e][\x20-\x7e]*$/)
     .max(MAX_GATEWAY_INSTANCE_NAME_LENGTH),

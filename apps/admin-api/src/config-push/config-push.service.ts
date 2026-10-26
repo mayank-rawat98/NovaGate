@@ -13,6 +13,8 @@ import {
   logPrivacyPolicy,
   parsePluginStatuses,
   parseWasmStatuses,
+  FEDERATED_GRAPH_CONFIG_COLUMNS,
+  federatedGraphConfigs,
   type WasmPluginState,
   type GatewayPluginState,
   TenantConfig,
@@ -181,6 +183,11 @@ export class ConfigPushService
       preferredRegion: tenantRows[0]?.preferredRegion ?? null,
       wasmPlugins: await manager.query(
         `SELECT name, sha256, hooks, "allowedHosts" FROM ${schema}.wasm_plugins WHERE "deletedAt" IS NULL ORDER BY name`,
+      ),
+      federatedGraphs: federatedGraphConfigs(
+        await manager.query(
+          `SELECT ${FEDERATED_GRAPH_CONFIG_COLUMNS} FROM ${schema}.federated_graphs WHERE "deletedAt" IS NULL ORDER BY name`,
+        ),
       ),
     };
     const suspendedUntil: Date | null = tenantRows[0]?.quotaSuspendedUntil;

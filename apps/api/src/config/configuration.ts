@@ -48,6 +48,13 @@ export const DEFAULT_WASM_PLUGINS = {
   quarantineMs: 30000,
 };
 export type WasmPluginSettings = typeof DEFAULT_WASM_PLUGINS;
+export const DEFAULT_GRAPHQL_FEDERATION = {
+  /** Subgraph requests one operation may make (fan-out bound). */
+  maxSubgraphRequests: 50,
+  maxSubgraphResponseBytes: 8388608,
+  maxConcurrentOperations: 64,
+};
+export type GraphqlFederationSettings = typeof DEFAULT_GRAPHQL_FEDERATION;
 export interface ControlPlaneSettings {
   /** Priority order; the workspace's preferred region moves to the front. */
   endpoints: ControlPlaneEndpoint[];
@@ -222,6 +229,7 @@ export interface GatewayConfig {
   thirdPartyPlugins: ThirdPartyPluginSettings;
   controlPlane: ControlPlaneSettings;
   wasmPlugins: WasmPluginSettings;
+  graphqlFederation: GraphqlFederationSettings;
   tls: ListenerTlsSettings;
   rateLimit: {
     windowMs: number;
@@ -258,6 +266,20 @@ export default (): GatewayConfig => ({
     quarantineMs: Number(
       process.env.WASM_PLUGIN_QUARANTINE_MS ??
         DEFAULT_WASM_PLUGINS.quarantineMs,
+    ),
+  },
+  graphqlFederation: {
+    maxSubgraphRequests: Number(
+      process.env.GRAPHQL_FEDERATION_MAX_SUBGRAPH_REQUESTS ??
+        DEFAULT_GRAPHQL_FEDERATION.maxSubgraphRequests,
+    ),
+    maxSubgraphResponseBytes: Number(
+      process.env.GRAPHQL_FEDERATION_MAX_SUBGRAPH_RESPONSE_BYTES ??
+        DEFAULT_GRAPHQL_FEDERATION.maxSubgraphResponseBytes,
+    ),
+    maxConcurrentOperations: Number(
+      process.env.GRAPHQL_FEDERATION_MAX_CONCURRENT_OPERATIONS ??
+        DEFAULT_GRAPHQL_FEDERATION.maxConcurrentOperations,
     ),
   },
   controlPlane: {

@@ -8,6 +8,7 @@ import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { AppModule } from './app/app.module';
 import { configureConfigImportParser } from './config-import/config-import.body-parser';
+import { configureFederationParser } from './graphql-federation/graphql-federation.body-parser';
 
 async function bootstrap() {
   // Stream services end their responses in lifecycle cleanup. Also close remaining
@@ -19,6 +20,7 @@ async function bootstrap() {
   });
   app.enableShutdownHooks();
   configureConfigImportParser(app);
+  configureFederationParser(app);
   // Security headers (clickjacking, MIME sniffing, etc.). API serves JSON only,
   // so deny framing outright.
   app.use(

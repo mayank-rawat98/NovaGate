@@ -39,6 +39,7 @@ import {
   type CircuitAdmission,
 } from '../circuit-breaker/circuit-breaker.service';
 import { MeteringService } from '../metering/metering.service';
+import { GraphqlFederationService } from '../plugins/graphql-federation/graphql-federation.service';
 
 /** Refuses all traffic while the workspace's monthly plan quota is exhausted. */
 export function assertNotSuspended(
@@ -119,6 +120,7 @@ export class ProxyService {
     private readonly config: ConfigService = new ConfigService(),
     @Optional() private readonly circuits?: CircuitBreakerService,
     @Optional() private readonly metering?: MeteringService,
+    @Optional() private readonly federation?: GraphqlFederationService,
   ) {
     circuits?.onChange(() => {
       const names = new Map(
@@ -148,6 +150,50 @@ export class ProxyService {
       503,
       { 'Retry-After': String(admission.retryAfterSeconds) },
     );
+  }
+
+  private async respondFederated(
+    state: PluginState,
+    route: RouteConfig,
+    response: ResponseWithLocals,
+  ): Promise<void> {
+    const trace = response.locals.trace?.child('graphql federation', {
+      'gateway.route.id': route.id,
+      'http.route': route.pathPattern,
+    });
+    let status = 499;
+    try {
+      const result = await (this.federation as GraphqlFederationService)
+        .execute(state.ctx, {
+          acquire: (service) =>
+            this.loadBalancer.acquireTarget(
+              service.id,
+              service.targets,
+              this.upstreamHealth.getHealthyUrls(service.targets, service.id),
+              service.unhealthyFallback === true,
+              service.loadBalancing,
+            ),
+          traceHeaders: () => trace?.headers() ?? {},
+        })
+        .catch((error: unknown) => {
+          // A client that went away aborts execution; nothing to answer.
+          if (state.ctx.signal?.aborted || response.destroyed) return null;
+          throw error;
+        });
+      if (!result || state.ctx.signal?.aborted || response.headersSent) return;
+      status = result.status;
+      for (const [name, value] of Object.entries(result.headers))
+        response.setHeader(name, value);
+      response.statusCode = result.status;
+      await this.pluginRunner.runOnResponse(state.plugins, {
+        ...state.ctx,
+        statusCode: result.status,
+        headers: response.getHeaders() as OutgoingHttpHeaders,
+      });
+      response.end(result.body);
+    } finally {
+      trace?.end(status);
+    }
   }
 
   /**
@@ -316,6 +362,14 @@ export class ProxyService {
     }
     // Preflights are answered by the CORS plugin and are not traffic.
     if (!isPreflight) await this.meter(config, request);
+
+    // A federated GraphQL route answers from its supergraph, calling the
+    // subgraphs itself, instead of forwarding the request.
+    const federated = (request as unknown as GwRequest).__gw_plugins;
+    if (federated && this.federation?.handles(federated.ctx)) {
+      await this.respondFederated(federated, route, response);
+      return;
+    }
 
     const start = Date.now();
 

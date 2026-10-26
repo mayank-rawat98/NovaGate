@@ -43,6 +43,8 @@ import {
   parseUsageReport,
   UsageReportMessage,
   parseWasmStatuses,
+  FEDERATED_GRAPH_CONFIG_COLUMNS,
+  federatedGraphConfigs,
   type WasmFetchMessage,
   type WasmStatusMessage,
 } from '@api-gateway/shared-types';
@@ -394,6 +396,17 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
             `SELECT name, sha256, hooks, "allowedHosts" FROM ${schema}.wasm_plugins WHERE "deletedAt" IS NULL ORDER BY name`,
           )
         : [];
+      const [{ federation }] = await manager.query(
+        `SELECT to_regclass($1) IS NOT NULL AS federation`,
+        [`${schema}.federated_graphs`],
+      );
+      const federatedGraphs = federation
+        ? federatedGraphConfigs(
+            await manager.query(
+              `SELECT ${FEDERATED_GRAPH_CONFIG_COLUMNS} FROM ${schema}.federated_graphs WHERE "deletedAt" IS NULL ORDER BY name`,
+            ),
+          )
+        : [];
       // Portal publication and developer ownership are administration-only,
       // matching the admin API's published snapshots.
       return {
@@ -422,6 +435,7 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
               : null,
           preferredRegion: tenant.preferredRegion ?? null,
           wasmPlugins,
+          federatedGraphs,
         },
         version: tenant.gatewayConfigVersion,
       };

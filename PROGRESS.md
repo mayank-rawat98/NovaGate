@@ -1,12 +1,31 @@
 # NovaGate progress and remaining work
 
-Updated: **25 October 2026** (Asia/Calcutta).
+Updated: **26 October 2026** (Asia/Calcutta).
 
 This report distinguishes merged development work, the alerting foundation checkpoint,
 and formal acceptance. The detailed roadmap is [implementation.md](implementation.md).
 No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
+
+- [Issue #127](https://github.com/mayank-rawat98/NovaGate/issues/127) adds the phase 6.7 GraphQL federation gateway:
+  - Subgraph SDL is registered per service in the admin API, and the supergraph is composed on save; graphs that do not compose are refused with their errors.
+  - The supergraph reaches gateways in `TenantConfig.federatedGraphs`.
+  - The gateway's `graphql-federation` route plugin plans and executes queries after route authentication and metering. It calls each subgraph's service through the load balancer, health state and circuit breaker, and merges the results.
+  - The dashboard adds a GraphQL federation page and a route-editor section.
+
+  In the real-process run (admin API, control plane, gateway and two subgraph servers):
+  - a query hitting the users and reviews subgraphs (four sub-requests, including `_entities` on both) returned one merged response, at **p50 15.8 ms / p95 25.8 ms**;
+  - anonymous and invalid queries reached no subgraph;
+  - a restarted gateway served the graph from the control plane's snapshot;
+  - with the reviews subgraph stopped, users still resolved and the error was `SUBGRAPH_UNAVAILABLE`.
+
+  Verified on Node 26.11.1 with PostgreSQL 16 and Redis 7:
+  - **918 admin tests** (21 RustFS-dependent skipped);
+  - 662/663 gateway (the remaining test needs IPv6);
+  - 148 control-plane tests.
+
+  The dashboard browser smoke passes with zero WCAG/runtime findings. See the section below.
 
 - [Issue #125](https://github.com/mayank-rawat98/NovaGate/issues/125) adds the phase 6.5 Kubernetes controller (`integrations/k8s-controller`, Go/controller-runtime):
   - `GatewayService` and `GatewayRoute` CRDs (`novagate.dev/v1alpha1`) are reconciled through the admin API with a scoped automation token;
@@ -1629,7 +1648,7 @@ issues #69, #90 and the remaining #101 investigation stay open.
 - Usage quotas and billing metering: implemented in #119 (gateway-side metering and consumer quotas, plan caps, opt-in workspace suspension, Stripe Checkout/webhooks, Plan & usage page); invoicing beyond Stripe subscriptions, Terraform `monthly_quota` and formal acceptance remain.
 - Kubernetes controller: implemented in #125 (`GatewayRoute`/`GatewayService` CRDs, admin API reconciliation with finalizers, conditions, events and drift repair, deploy manifests). Host-based matching, Helm packaging, image publication and formal acceptance remain.
 - WASM sandbox: implemented in #123 (worker-thread isolation, host-function-only imports, 10 MiB memory cap, 50 ms deadline with termination, allowlisted `http_get`, quarantine, digest-verified distribution, curated catalog and uploads, Plugin marketplace). Community listing/review, more SDK languages and formal acceptance remain.
-- GraphQL federation with subgraph failure and query-budget behavior.
+- GraphQL federation: implemented in #127 (composition on save, supergraph delivery, gateway query planning and merging after route auth and metering, subgraph calls through load balancing/health/circuit breakers, per-operation subgraph request and response bounds, dashboard page). Subscriptions, `@defer`, persisted queries, declarative/Terraform support for graphs and formal acceptance remain.
 
 ### Additional requirements and final acceptance
 
@@ -2338,3 +2357,83 @@ CI now prepares `KUBEBUILDER_ASSETS` with setup-envtest and runs
 Not verified here: a full cluster with the in-cluster Deployment (the E2E runs
 the binary against a bare API server), host matching (not supported), and
 publication of the image and a Helm chart.
+
+## GraphQL federation — issue #127
+
+**Composition (admin API, `apps/admin-api/src/graphql-federation`).**
+
+- A graph lists 1–16 subgraphs: a name, a service, a path and SDL of at most 256 KiB.
+- Saving composes them with `@theguild/federation-composition`. Graphs that do not
+  compose return `422 COMPOSITION_FAILED` with the errors. A dry-run endpoint
+  returns the same errors as data.
+- Graphs are soft-deleted, and deletion is refused while a route uses the graph.
+- The route validator accepts `graphql-federation` only as the last plugin, with a
+  valid graph name and forwardable headers.
+- A route-scoped JSON parser allows 8 MiB requests. It is a named wrapper: Nest
+  skips its own JSON parser when it sees a layer called `jsonParser`.
+
+**Delivery.**
+
+- `TenantConfig.federatedGraphs` carries the supergraph SDL, its SHA-256 and each
+  subgraph's service and path. The uploaded SDL stays in the admin API.
+- Both the admin publisher and the control plane snapshot use the shared
+  `federatedGraphConfigs`. The control plane tolerates a schema without the table.
+
+**Execution (gateway).**
+
+- The plugin captures and checks the request in plugin order (GraphQL over HTTP:
+  POST JSON, `application/graphql`, GET queries).
+- `ProxyService` executes after route authentication and metering, so validation
+  errors never reach unauthenticated clients and execution is never a short
+  circuit that skips them.
+- The schema is built with `@graphql-tools/federation` and cached per supergraph
+  digest.
+- Subgraph requests go to the subgraph's service: a lease from the proxy's load
+  balancer, upstream health and the circuit breaker. They use the service timeout,
+  forward only the configured headers plus `X-Request-ID` and trace context, and
+  have bounded responses.
+- Failures become coded GraphQL errors with partial data. Validation hides
+  suggestions.
+
+Verification (Node 26.11.1, PostgreSQL 16, Redis 7):
+
+- `@api-gateway/api:graphql-federation-e2e`:
+  - a non-composing pair was refused with `FIELD_TYPE_MISMATCH`;
+  - the storefront query returned the merged users/reviews response; the plan was
+    users → reviews `_entities`, and topReviews → users `_entities`;
+  - every subgraph request carried the client's request ID and the forwarded
+    header;
+  - anonymous (401) and invalid queries made no subgraph request;
+  - over 20 calls, p50 was 15.8 ms and p95 25.8 ms;
+  - after a restart with the local cache cleared, the gateway served the graph
+    from `auth_ok`;
+  - with the reviews server stopped, users resolved and the error was
+    `SUBGRAPH_UNAVAILABLE`.
+- Gateway integration, with real subgraph HTTP servers and the real proxy and
+  plugins:
+  - merged queries;
+  - GET queries, refused GET mutations, and POST mutations;
+  - validation errors in both GraphQL-over-HTTP media types;
+  - auth before validation;
+  - graphql-guard limits;
+  - down, slow and oversized subgraphs;
+  - the per-operation request bound;
+  - missing graphs failing closed;
+  - schema rebuild on a new supergraph.
+- Admin integration:
+  - publishing without SDL;
+  - composition errors;
+  - name, service, path and size validation;
+  - a >100 KB SDL through the parser;
+  - plugin placement and configuration;
+  - protected and soft-deleted graphs.
+- Dashboard browser smoke:
+  - composition errors, and save composing first;
+  - edit loading the SDL;
+  - the route plugin saved last;
+  - confirmed removal with refusal;
+  - desktop and mobile axe.
+
+Not verified here: subscriptions, `@defer`/`@stream`, and Apollo Router-specific
+extensions (progressive `@override` labels are handled by the library but not
+exercised). Graphs are not part of declarative configuration or Terraform yet.
