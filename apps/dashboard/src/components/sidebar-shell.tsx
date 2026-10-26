@@ -20,6 +20,7 @@ import {
   Bell,
   ArrowUpRight,
   CreditCard,
+  Blocks,
 } from 'lucide-react';
 import { containDialogFocus } from './workspace-dialog';
 import { GatewayStatusPill } from './gateway-status-pill';
@@ -38,6 +39,12 @@ const NAV_ITEMS = [
     href: '/services',
     label: 'Services',
     icon: Server,
+    group: 'Configuration',
+  },
+  {
+    href: '/plugins',
+    label: 'Plugin marketplace',
+    icon: Blocks,
     group: 'Configuration',
   },
   {

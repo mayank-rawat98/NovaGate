@@ -9,6 +9,7 @@ import {
   MAX_ROUTE_PLUGINS,
   MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES,
   isThirdPartyPluginName,
+  wasmPluginOfRouteName,
 } from '@api-gateway/shared-types';
 import {
   Controller,
@@ -207,10 +208,14 @@ export function validatePlugins(plugins: unknown): void {
         `Duplicate plugin: ${entry.name}. Configure each policy once.`,
       );
     seen.add(entry.name);
-    const thirdParty = isThirdPartyPluginName(entry.name);
+    // Workspace WASM plugins (wasm:<name>) are bounded like third-party
+    // ones; a route naming one that is not installed fails closed.
+    const thirdParty =
+      isThirdPartyPluginName(entry.name) ||
+      wasmPluginOfRouteName(entry.name) !== null;
     if (!thirdParty && !KNOWN_PLUGIN_NAMES.has(entry.name)) {
       throw new BadRequestException(
-        `Unknown plugin: "${String(entry.name).slice(0, 80)}". Third-party plugins use their scoped npm package name.`,
+        `Unknown plugin: "${String(entry.name).slice(0, 80)}". Third-party plugins use their scoped npm package name; WebAssembly plugins use wasm:<name>.`,
       );
     }
     if (

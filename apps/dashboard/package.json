@@ -102,7 +102,7 @@
         ],
         "options": {
           "commands": [
-            "eslint tools/dashboard-smoke.mjs tools/alerts-dashboard-smoke.mjs tools/export-destinations-dashboard-smoke.mjs tools/export-delivery-dashboard-smoke.mjs tools/config-import-dashboard-smoke.mjs tools/automation-tokens-dashboard-smoke.mjs tools/developer-portal-dashboard-smoke.mjs tools/gateway-plugins-dashboard-smoke.mjs tools/circuit-breakers-dashboard-smoke.mjs tools/anomalies-dashboard-smoke.mjs tools/billing-dashboard-smoke.mjs tools/regions-dashboard-smoke.mjs",
+            "eslint tools/dashboard-smoke.mjs tools/alerts-dashboard-smoke.mjs tools/export-destinations-dashboard-smoke.mjs tools/export-delivery-dashboard-smoke.mjs tools/config-import-dashboard-smoke.mjs tools/automation-tokens-dashboard-smoke.mjs tools/developer-portal-dashboard-smoke.mjs tools/gateway-plugins-dashboard-smoke.mjs tools/circuit-breakers-dashboard-smoke.mjs tools/anomalies-dashboard-smoke.mjs tools/billing-dashboard-smoke.mjs tools/regions-dashboard-smoke.mjs tools/wasm-plugins-dashboard-smoke.mjs",
             "node tools/dashboard-smoke.mjs"
           ],
           "parallel": false

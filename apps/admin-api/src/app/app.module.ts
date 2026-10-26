@@ -58,6 +58,8 @@ import { BillingService } from '../billing/billing.service';
 import { StripeService } from '../billing/stripe.service';
 import { RegionsController } from '../regions/regions.controller';
 import { RegionsService } from '../regions/regions.service';
+import { WasmPluginsController } from '../wasm-plugins/wasm-plugins.controller';
+import { WasmPluginsService } from '../wasm-plugins/wasm-plugins.service';
 
 @Module({
   imports: [
@@ -109,6 +111,7 @@ import { RegionsService } from '../regions/regions.service';
     BillingController,
     StripeWebhookController,
     RegionsController,
+    WasmPluginsController,
   ],
   providers: [
     LogStreamService,
@@ -135,6 +138,7 @@ import { RegionsService } from '../regions/regions.service';
     BillingService,
     StripeService,
     RegionsService,
+    WasmPluginsService,
   ],
 })
 export class AppModule {}

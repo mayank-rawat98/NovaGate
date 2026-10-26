@@ -42,6 +42,9 @@ import {
   CircuitStateMessage,
   parseUsageReport,
   UsageReportMessage,
+  parseWasmStatuses,
+  type WasmFetchMessage,
+  type WasmStatusMessage,
 } from '@api-gateway/shared-types';
 
 import Redis from 'ioredis';
@@ -381,6 +384,16 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
       const consumers = await manager.query(
         `SELECT * FROM ${schema}.consumers WHERE "revokedAt" IS NULL`,
       );
+      // Admin migrations create the table; an older schema has no plugins.
+      const [{ wasm }] = await manager.query(
+        `SELECT to_regclass($1) IS NOT NULL AS wasm`,
+        [`${schema}.wasm_plugins`],
+      );
+      const wasmPlugins = wasm
+        ? await manager.query(
+            `SELECT name, sha256, hooks, "allowedHosts" FROM ${schema}.wasm_plugins WHERE "deletedAt" IS NULL ORDER BY name`,
+          )
+        : [];
       // Portal publication and developer ownership are administration-only,
       // matching the admin API's published snapshots.
       return {
@@ -408,6 +421,7 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
                 }
               : null,
           preferredRegion: tenant.preferredRegion ?? null,
+          wasmPlugins,
         },
         version: tenant.gatewayConfigVersion,
       };
@@ -537,6 +551,45 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
           break;
         }
         await this.recordUsage(tenantId, report);
+        break;
+      }
+      case 'wasm.fetch': {
+        const sha256 = (message as unknown as WasmFetchMessage).payload?.sha256;
+        if (typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(sha256)) break;
+        const schema = `tenant_${tenantId.toLowerCase().replace(/-/g, '_')}`;
+        // Only this workspace's own installed modules are served.
+        const [row] = await this.dataSource
+          .query(
+            `SELECT encode(module, 'base64') AS module FROM ${schema}.wasm_plugins WHERE sha256=$1 AND "deletedAt" IS NULL LIMIT 1`,
+            [sha256],
+          )
+          .catch(() => []);
+        if (ws?.readyState === WebSocket.OPEN)
+          ws.send(
+            JSON.stringify({
+              type: 'wasm.module',
+              payload: {
+                sha256,
+                module: row?.module?.replace(/\s+/g, '') ?? null,
+              },
+            }),
+          );
+        break;
+      }
+      case 'wasm.status': {
+        const plugins = parseWasmStatuses(
+          (message as unknown as WasmStatusMessage).payload?.plugins,
+        );
+        if (!plugins) {
+          this.logger.warn(`Rejected invalid WASM report from ${tenantId}`);
+          break;
+        }
+        await this.redisPub.set(
+          `gw:wasm:${tenantId.toLowerCase()}`,
+          JSON.stringify({ reportedAt: new Date().toISOString(), plugins }),
+          'EX',
+          180,
+        );
         break;
       }
       case 'pong':

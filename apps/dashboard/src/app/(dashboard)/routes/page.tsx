@@ -16,6 +16,7 @@ import {
 import {
   MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES,
   isThirdPartyPluginName,
+  wasmPluginOfRouteName,
 } from '@api-gateway/shared-types';
 import { useTenantId } from '../../../lib/auth';
 import type {
@@ -510,7 +511,7 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
   const remaining = [...result];
   const ordered: PluginEntry[] = [];
   for (const original of pf.originalPlugins) {
-    if (isThirdPartyPluginName(original.name)) {
+    if (isCustomPluginName(original.name)) {
       // Edited in place; removed entries are dropped.
       const index = custom.findIndex((entry) => entry.name === original.name);
       if (index >= 0) ordered.push(custom.splice(index, 1)[0]);
@@ -537,13 +538,18 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
   return [...ordered, ...remaining, ...custom];
 }
 
+/** Scoped npm packages (operator-installed) or wasm:<name> (marketplace). */
+function isCustomPluginName(name: string): boolean {
+  return isThirdPartyPluginName(name) || wasmPluginOfRouteName(name) !== null;
+}
+
 function customPluginEntries(custom: CustomPlugin[]): PluginEntry[] {
   const seen = new Set<string>();
   return custom.map(({ name: raw, config: text }) => {
     const name = raw.trim();
-    if (!isThirdPartyPluginName(name))
+    if (!isCustomPluginName(name))
       throw new Error(
-        `Third-party plugin "${name || '(empty)'}" must be a scoped npm package name, such as @acme/saml-auth.`,
+        `Plugin "${name || '(empty)'}" must be a scoped npm package name, such as @acme/saml-auth, or wasm:<name> for a WebAssembly plugin.`,
       );
     if (seen.has(name)) throw new Error(`${name} is listed more than once.`);
     seen.add(name);
@@ -576,7 +582,7 @@ function pluginsToForm(
     ...EMPTY_PLUGINS_FORM,
     originalPlugins: plugins ?? [],
     custom: (plugins ?? [])
-      .filter((p) => isThirdPartyPluginName(p.name))
+      .filter((p) => isCustomPluginName(p.name))
       .map((p, key) => ({
         key,
         name: p.name,
@@ -1728,12 +1734,14 @@ function CustomPluginsSection({
     <section aria-label="Third-party plugins" className="flex flex-col gap-3">
       <div>
         <h3 className="text-sm font-medium text-gray-700">
-          Third-party plugins
+          Third-party and WebAssembly plugins
         </h3>
         <p className="text-xs text-gray-500">
-          Packages your gateway operator installed and pinned. They run after
-          the built-in plugins above. If the gateway has not loaded one, or it
-          is disabled in Settings, requests on this route are refused.
+          Packages your gateway operator installed and pinned, or
+          wasm:&lt;name&gt; for a WebAssembly plugin from the Plugin
+          marketplace. They run after the built-in plugins above. If the gateway
+          has not loaded one, or it is disabled or removed, requests on this
+          route are refused.
         </p>
       </div>
       {custom.map((entry, index) => (
@@ -1744,10 +1752,10 @@ function CustomPluginsSection({
           <div className="flex items-end gap-2">
             <div className="min-w-0 flex-1">
               <TextInput
-                label={`Package name ${index + 1}`}
+                label={`Plugin name ${index + 1}`}
                 value={entry.name}
                 onChange={(name) => update(entry.key, { name })}
-                placeholder="@acme/saml-auth"
+                placeholder="@acme/saml-auth or wasm:header-stamp"
               />
             </div>
             <button

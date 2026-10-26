@@ -90,6 +90,11 @@ export class ControlPlaneConnectorService
   /** Doubles after each failback that found the first endpoint still down. */
   private failbackDelay?: number;
   private failbackAttempted = false;
+  private readonly messageListeners = new Map<
+    string,
+    Set<(message: BaseWsMessage) => void>
+  >();
+  private readonly authListeners = new Set<() => void>();
 
   constructor(
     private readonly configService: ConfigService,
@@ -235,6 +240,20 @@ export class ControlPlaneConnectorService
     });
   }
 
+  /** Inbound message types handled outside the connector (WASM modules). */
+  onMessage(type: string, listener: (message: BaseWsMessage) => void) {
+    const listeners = this.messageListeners.get(type) ?? new Set();
+    listeners.add(listener);
+    this.messageListeners.set(type, listeners);
+    return () => listeners.delete(listener);
+  }
+
+  /** Called after each successful authentication. */
+  onAuthenticated(listener: () => void) {
+    this.authListeners.add(listener);
+    return () => this.authListeners.delete(listener);
+  }
+
   /** Region of the connected control plane, once authenticated. */
   connectedRegion(): string | null {
     return this.authenticated ? this.region : null;
@@ -316,6 +335,13 @@ export class ControlPlaneConnectorService
           this.reportPlugins();
           this.reportCircuits();
           void this.reportUsage();
+          for (const listener of this.authListeners) {
+            try {
+              listener();
+            } catch {
+              this.logger.warn('An authentication listener failed');
+            }
+          }
           return true;
         }
         case 'config.update': {
@@ -338,6 +364,9 @@ export class ControlPlaneConnectorService
         case 'ack':
           if (message.id) this.handleAck(message.id);
           break;
+        default:
+          for (const listener of this.messageListeners.get(message.type) ?? [])
+            listener(message);
       }
     } catch (err) {
       this.logger.error(`Failed to handle message: ${(err as Error).message}`);

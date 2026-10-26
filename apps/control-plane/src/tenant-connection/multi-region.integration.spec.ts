@@ -261,6 +261,78 @@ integration('Multi-region control planes on real PostgreSQL and Redis', () => {
     await until(async () => !managers['us-east'].isOnline(tenantId));
   });
 
+  it("serves only the workspace's own WASM modules and stores WASM reports", async () => {
+    const module = Buffer.from('0061736d01000000', 'hex');
+    const sha256 = createHash('sha256').update(module).digest('hex');
+    await ds.query(`CREATE TABLE ${schema}.wasm_plugins (
+      name VARCHAR(64), sha256 CHAR(64), hooks JSONB, "allowedHosts" JSONB,
+      module BYTEA, "deletedAt" TIMESTAMPTZ)`);
+    await ds.query(
+      `INSERT INTO ${schema}.wasm_plugins (name, sha256, hooks, "allowedHosts", module) VALUES ('stamp', $1, '["on_request"]', '[]', $2)`,
+      [sha256, module],
+    );
+    const gateway = await connect('us-east');
+    const authOk = gateway.frames.find(
+      (f) => f.type === 'auth_ok',
+    ) as unknown as AuthOkMessage;
+    expect(authOk.payload.config.wasmPlugins).toEqual([
+      { name: 'stamp', sha256, hooks: ['on_request'], allowedHosts: [] },
+    ]);
+    gateway.ws.send(
+      JSON.stringify({ type: 'wasm.fetch', payload: { sha256 } }),
+    );
+    await until(() => gateway.frames.some((f) => f.type === 'wasm.module'));
+    expect(
+      gateway.frames.find((f) => f.type === 'wasm.module')?.payload,
+    ).toEqual({
+      sha256,
+      module: module.toString('base64'),
+    });
+    const other = 'a'.repeat(64);
+    gateway.ws.send(
+      JSON.stringify({ type: 'wasm.fetch', payload: { sha256: other } }),
+    );
+    await until(
+      () => gateway.frames.filter((f) => f.type === 'wasm.module').length === 2,
+    );
+    expect(
+      gateway.frames.filter((f) => f.type === 'wasm.module')[1].payload,
+    ).toEqual({
+      sha256: other,
+      module: null,
+    });
+    const status = {
+      name: 'stamp',
+      sha256,
+      state: 'active',
+      calls: 3,
+      failures: 0,
+      lastError: null,
+      quarantinedUntil: null,
+      p50Us: 40,
+      p99Us: 90,
+      maxUs: 120,
+    };
+    gateway.ws.send(
+      JSON.stringify({
+        type: 'wasm.status',
+        payload: { plugins: [{ ...status, state: 'odd' }] },
+      }),
+    );
+    gateway.ws.send(
+      JSON.stringify({ type: 'wasm.status', payload: { plugins: [status] } }),
+    );
+    await until(
+      async () => (await redis['us-east'].get(`gw:wasm:${tenantId}`)) !== null,
+    );
+    expect(
+      JSON.parse((await redis['us-east'].get(`gw:wasm:${tenantId}`)) as string)
+        .plugins,
+    ).toEqual([status]);
+    gateway.ws.close();
+    await ds.query(`DROP TABLE ${schema}.wasm_plugins`);
+  });
+
   it('delivers configuration published in another region from the database', async () => {
     const gateway = await connect('eu-west');
     expect(

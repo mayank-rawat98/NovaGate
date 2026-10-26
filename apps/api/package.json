@@ -194,6 +194,27 @@
           ],
           "parallel": false
         }
+      },
+      "wasm-e2e": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build",
+          {
+            "projects": [
+              "admin-api",
+              "control-plane"
+            ],
+            "target": "build"
+          }
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/wasm-e2e.mjs",
+            "node tools/wasm-e2e.mjs"
+          ],
+          "parallel": false
+        }
       }
     }
   },
