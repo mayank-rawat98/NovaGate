@@ -324,3 +324,10 @@ The route editor's Plugins tab has a GraphQL federation section: a labelled
 graph select fed by `getFederatedGraphs` and forwarded headers (lowercased). The
 plugin is always serialized last, and enabling it without a graph is refused
 before the request. Mutations are session only.
+
+Issue #69: keep Next.js at 16.2 or later. The React bundled with 16.1 replayed
+a host element that suspended during hydration (on a flight lazy chunk wrapper
+that settled in a microtask) without rewinding the hydration cursor. That raised
+an intermittent #418 under CPU load on any page. `specs/hydration-replay.spec.tsx`
+reproduces the mechanism against Next.js' compiled React. Do not hide #418 from
+the browser gate.

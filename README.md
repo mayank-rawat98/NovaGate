@@ -413,6 +413,8 @@ findings. Flow assertions and asynchronous API-fixture contract failures also re
 always closes the browser/fixture server and removes its temporary profile. CI retains
 these artifacts within the existing push-to-main deployment prerequisite.
 
+The dashboard requires Next.js 16.2 or later. The React bundled with 16.1 replayed a host element that suspended during hydration without rewinding its hydration cursor, which caused the intermittent React #418 of issue #69. `apps/dashboard/specs/hydration-replay.spec.tsx` guards it.
+
 To investigate hydration, use `DASHBOARD_HYDRATION_PASSES=6` for 42 cold loads of seven
 workspace pages under sixfold CPU throttling, followed by the full functional suite
 and three Alerts reloads. The setting accepts only integers from 1 to 20; normal
