@@ -39,8 +39,8 @@ export class Client {
       const hint =
         (
           {
-            401: 'Session is invalid or expired. Run gwx login again.',
-            403: 'Workspace access was refused.',
+            401: 'Session or token is invalid, expired or revoked. Run gwx login again or replace GW_API_TOKEN.',
+            403: 'Workspace access was refused, or the token lacks the scope for this command.',
             409: 'Configuration changed or the preview expired. Review a new preview before applying.',
             413: 'Configuration exceeds the server import limit.',
             400: 'Request or configuration is invalid. Check the documented schema.',

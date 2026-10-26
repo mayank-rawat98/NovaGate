@@ -1,12 +1,14 @@
 # NovaGate progress and remaining work
 
-Updated: **12 October 2026** (Asia/Calcutta).
+Updated: **25 October 2026** (Asia/Calcutta).
 
 This report distinguishes merged development work, the alerting foundation checkpoint,
 and formal acceptance. The detailed roadmap is [implementation.md](implementation.md).
 No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
+
+- [Issue #107](https://github.com/mayank-rawat98/NovaGate/issues/107) adds scoped, expiring, revocable automation tokens for the CLI, Terraform and CI. Only SHA-256 digests are stored; secrets are shown once. Endpoints accept tokens only when they declare a scope (default deny), and token management stays session-only. Verified on Node 26.11.1 with local PostgreSQL 16: **857 admin tests** pass (28 RustFS/S3-dependent tests skipped because this environment has no container runtime), **35 built CLI tests**, 10 dashboard tests, lint/typecheck for the four touched projects, and the full production browser smoke including the new panel, with zero runtime/WCAG findings. Packaged images were not rebuilt in this environment. See the section below.
 
 - [Issue #105](https://github.com/mayank-rawat98/NovaGate/issues/105) / [PR #106](https://github.com/mayank-rawat98/NovaGate/pull/106) finishes the preserved private `gwx` CLI and authenticated live request logs. Current checks pass **862 admin tests / 48 suites**, including 15 real HTTP/PostgreSQL stream cases, and **27 built CLI tests on both Node 26 and Node 24**, with no failures or skips. Six-project static checks, five production builds, real POSIX terminal checks and four rebuilt guarded non-root images pass. The cleanup disposition covers all 85 original source paths: 19 already merged, four stale/unnecessary changes omitted and 62 useful changes reconciled through PRs #104 and #106. Scoped/revocable automation, public CLI distribution and formal phase acceptance remain open. Main remains reserved for final acceptance.
 
@@ -1545,8 +1547,8 @@ issues #69, #90 and the remaining #101 investigation stay open.
 - Declarative configuration is implemented through #103/PR #104; configuration
   history/operator rollback, broader workloads and formal acceptance remain.
 - The private `gwx` commands and authenticated live logs are implemented through
-  #105/PR #106. Scoped/revocable automation, enterprise RBAC, package distribution
-  and formal acceptance remain.
+  #105/PR #106. Scoped/revocable automation tokens are implemented in #107.
+  Enterprise RBAC, package distribution and formal acceptance remain.
 - Developer portal with route catalog, scoped self-service keys and private usage views.
 - Terraform provider, tests and resources inside this repository.
 - Plugin SDK/third-party loading with explicit trust, compatibility and resource limits.
@@ -1718,3 +1720,48 @@ records. Public npm publication, scoped/revocable automation tokens, enterprise
 RBAC, Windows credential-store acceptance and broader workload/provider/comparative
 acceptance remain open. This checkpoint does not complete phase 5.2 or a production
 release. Main remains reserved for final acceptance.
+
+## Scoped automation tokens — issue #107
+
+Workspace automation tokens replace the full-permission session JWT for
+non-interactive use. `ngat_` secrets carry 32 random bytes; the database stores
+only their SHA-256 digest and an 11-character display prefix. Tokens expire after
+1–365 days (default 90); a workspace holds at most 50 active tokens, serialized on
+the workspace row. Revocation is idempotent and immediate; token-authenticated SSE
+streams close within 60 seconds so revocation reaches open streams. Last use is
+written at most once a minute.
+
+`TenantAuthGuard` accepts a token only on endpoints that declare
+`@AutomationScope`, rejecting other endpoints before any database lookup. Fourteen
+scopes cover workspace profile, routes, services, consumers, configuration,
+logs, analytics and alert rules; write implies read. Import previews need only
+`config:read`; apply needs `config:write`. Token management, gateway keys, the mTLS
+CA bundle, privacy, retention, archives, export destinations and alert channels are
+session-only. See [the token contract](apps/admin-api/src/automation-tokens/README.md).
+
+`gwx tokens list|create|revoke` manage tokens from a signed-in session, and CLI
+errors now distinguish a missing scope. Settings → Automation tokens creates tokens
+with labelled scope choices, shows the secret once with copy, lists prefix/scopes/
+expiry/last use/status and confirms revocation.
+
+The same change rounds consumer-usage percentiles to microsecond precision. The
+consumer analytics integration test failed on x86-64 PostgreSQL 16 (39.699999999999996
+versus 39.7 ms) because interpolation rounding differs by CPU; rounding makes the
+reported value platform-independent.
+
+Verification (Node 26.11.1, local PostgreSQL 16 and Redis 7, x86-64 Linux):
+
+- **857 admin tests / 46 suites pass**; 28 tests in 4 suites skip because they need
+  RustFS/S3 fixtures and this environment has no container runtime. The new suites
+  cover actual PostgreSQL/HTTP token behaviour (18 cases) and guard decisions (5 cases).
+- **35 built CLI tests** (27 existing, 8 new) and **10 dashboard tests** pass.
+- Lint and typecheck pass for admin-api, dashboard, gwx and shared-types with only
+  the four pre-existing warnings.
+- The full production dashboard browser smoke passes, including the new
+  automation-token verifier: validation, failed create/revoke with retained input,
+  one-time secret absent from browser storage and the list, Escape/focus restoration
+  and desktop/mobile axe checks, with zero runtime or WCAG A/AA findings.
+
+Not repeated here: packaged image builds and the packaged CLI/runtime pipeline,
+because Docker is unavailable in this environment. Team RBAC, immutable audit
+history and formal phase acceptance remain open.

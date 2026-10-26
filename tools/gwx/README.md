@@ -42,10 +42,35 @@ workspace. API credentials travel in the Authorization header. HTTPS is required
 except for loopback HTTP development. URL credentials, query strings, fragments
 and redirects are refused.
 
-The current credential is the existing tenant session JWT, with the same tenant
-permissions as the dashboard. Operation-scoped automation tokens, revocation and
-enterprise RBAC remain required before declaring phase 5.2 complete. Consumer API
-keys authenticate gateway traffic and cannot authorize admin commands.
+`gwx login` saves the tenant session JWT, with the same tenant permissions as the
+dashboard. For CI and other automation, use a scoped automation token instead:
+
+```sh
+gwx tokens create --name github-deploy --scope config:write --expires-days 90
+gwx tokens list
+gwx tokens revoke TOKEN_ID
+```
+
+Token commands require a signed-in session; a token can never create, list or
+revoke tokens. The `ngat_…` secret prints once; store it in your CI secret store
+and pass it as `GW_API_TOKEN` with `GW_TENANT_ID`. Tokens expire after 1–365 days
+(default 90). A workspace can hold 50 active tokens. Revocation takes effect on the
+next request; `logs tail` reconnects through authorization at least once a minute,
+so an open stream stops within about a minute of revocation.
+
+| Command                                   | Scope needed      |
+| ----------------------------------------- | ----------------- |
+| `routes list`                             | `routes:read`     |
+| `routes export`, `routes apply --dry-run` | `config:read`     |
+| `routes apply`                            | `config:write`    |
+| `consumers create`                        | `consumers:write` |
+| `alerts list`                             | `alerts:read`     |
+| `logs tail`                               | `logs:read`       |
+
+A `:write` scope includes `:read` for the same area. See the admin API's
+[token contract](../../apps/admin-api/src/automation-tokens/README.md) for every
+scope. Team RBAC remains separate work. Consumer API keys authenticate gateway
+traffic and cannot authorize admin commands.
 
 ## Commands
 
@@ -59,6 +84,9 @@ gwx consumers create --name ci-bot --json
 gwx alerts list --json
 gwx logs tail
 gwx logs tail --once
+gwx tokens list --json
+gwx tokens create --name ci --scope routes:read --scope config:write --json
+gwx tokens revoke TOKEN_ID
 ```
 
 `routes export` writes secret-free YAML to stdout or a **new** mode-600 file;

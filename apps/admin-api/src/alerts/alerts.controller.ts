@@ -1,3 +1,4 @@
+import { AutomationScope } from '../automation-tokens/automation-scope.decorator';
 import {
   BadRequestException,
   Body,
@@ -13,18 +14,22 @@ import { AlertRulesService } from './alert-rules.service';
 @Controller('tenants/:tenantId/alerts')
 export class AlertsController {
   constructor(private readonly alerts: AlertRulesService) {}
+  @AutomationScope('alerts:read')
   @Get()
   configuration(@Param('tenantId') tenantId: string) {
     return this.alerts.configuration(tenantId);
   }
+  @AutomationScope('alerts:read')
   @Get('history')
   history(@Param('tenantId') tenantId: string) {
     return this.alerts.history(tenantId);
   }
+  @AutomationScope('alerts:write')
   @Post('rules')
   createRule(@Param('tenantId') tenantId: string, @Body() body: unknown) {
     return this.alerts.createRule(tenantId, body);
   }
+  @AutomationScope('alerts:write')
   @Put('rules/:id')
   updateRule(
     @Param('tenantId') tenantId: string,
@@ -33,6 +38,7 @@ export class AlertsController {
   ) {
     return this.alerts.updateRule(tenantId, id, body);
   }
+  @AutomationScope('alerts:write')
   @Delete('rules/:id')
   removeRule(
     @Param('tenantId') tenantId: string,

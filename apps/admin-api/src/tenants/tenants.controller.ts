@@ -1,3 +1,4 @@
+import { AutomationScope } from '../automation-tokens/automation-scope.decorator';
 import { Controller, Post, Get, Put, Param, Body } from '@nestjs/common';
 import { TenantsService } from './tenants.service';
 
@@ -5,6 +6,7 @@ import { TenantsService } from './tenants.service';
 export class TenantsController {
   constructor(private readonly tenantsService: TenantsService) {}
 
+  @AutomationScope('workspace:read')
   @Get(':id')
   async findOne(@Param('id') id: string) {
     return this.tenantsService.getTenant(id);

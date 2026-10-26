@@ -459,6 +459,118 @@ describe('Built gwx process with real HTTP, files and signals', () => {
     expect(result.stdout).toContain(key);
     expect(result.stdout).not.toContain(password);
   });
+  it('creates, lists and revokes scoped automation tokens, printing the secret once', async () => {
+    const id = randomUUID();
+    const secret = `ngat_${'Q'.repeat(43)}`;
+    const summary = {
+      id,
+      name: 'deploy',
+      scopes: ['config:write', 'routes:read'],
+      displayPrefix: secret.slice(0, 11),
+      createdAt: '2026-10-25T00:00:00.000Z',
+      expiresAt: '2027-01-23T00:00:00.000Z',
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    handler = (request, response) => {
+      if (request.method === 'POST')
+        return reply(
+          response,
+          { ...summary, token: secret, tokenHash: password },
+          201,
+        );
+      if (request.method === 'DELETE')
+        return reply(response, {
+          ...summary,
+          revokedAt: '2026-10-25T01:00:00.000Z',
+        });
+      reply(response, [{ ...summary, tokenHash: password }]);
+    };
+    const created = await run([
+      'tokens',
+      'create',
+      '--name',
+      'deploy',
+      '--scope',
+      'routes:read',
+      '--scope',
+      'config:write',
+      '--scope',
+      'routes:read',
+      '--expires-days',
+      '90',
+      '--json',
+    ]);
+    expect(created.code).toBe(0);
+    expect(requests[0].path).toBe(`/api/tenants/${tenant}/automation-tokens`);
+    expect(JSON.parse(requests[0].body)).toEqual({
+      name: 'deploy',
+      scopes: ['routes:read', 'config:write'],
+      expiresInDays: 90,
+    });
+    expect(created.stdout.split(secret)).toHaveLength(2);
+    expect(created.stdout).not.toContain(password);
+    expect(created.stderr).toContain('cannot be viewed again');
+    const listed = await run(['tokens', 'list']);
+    expect(listed.code).toBe(0);
+    expect(listed.stdout).toContain(`${id}\tdeploy\t${summary.displayPrefix}`);
+    expect(listed.stdout).toContain('\tnever\tactive');
+    expect(listed.stdout).not.toContain(secret);
+    expect(listed.stdout).not.toContain(password);
+    const revoked = await run(['tokens', 'revoke', id]);
+    expect(revoked.code).toBe(0);
+    expect(requests.at(-1)?.path).toBe(
+      `/api/tenants/${tenant}/automation-tokens/${id}`,
+    );
+    expect(revoked.stdout).toContain('Revoked deploy');
+  });
+  it.each([
+    [['tokens', 'create', '--name', 'x']],
+    [['tokens', 'create', '--name', 'x', '--scope', 'routes:admin']],
+    [
+      [
+        'tokens',
+        'create',
+        '--name',
+        'x',
+        '--scope',
+        'routes:read',
+        '--expires-days',
+        '400',
+      ],
+    ],
+    [
+      [
+        'tokens',
+        'create',
+        '--name',
+        'x',
+        '--scope',
+        'routes:read',
+        '--expires-days',
+        '1.5',
+      ],
+    ],
+    [['tokens', 'revoke', 'not-a-uuid']],
+    [['tokens', 'revoke']],
+  ])(
+    'refuses invalid token commands %j before contacting the API',
+    async (args) => {
+      const result = await run(args);
+      expect(result.code).toBe(2);
+      expect(requests).toHaveLength(0);
+    },
+  );
+  it('explains a missing token scope without echoing the server body', async () => {
+    handler = (_request, response) =>
+      reply(response, { message: password }, 403);
+    const result = await run(['routes', 'list'], {
+      GW_API_TOKEN: `ngat_${'R'.repeat(43)}`,
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('lacks the scope for this command');
+    expect(result.stderr).not.toContain(password);
+  });
   it('rejects redirects without forwarding credentials or echoing response bodies', async () => {
     handler = (_req, res) => {
       res.writeHead(302, { Location: 'https://other.example.test' });

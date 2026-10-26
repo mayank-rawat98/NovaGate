@@ -98,9 +98,18 @@ export class ConsumerAnalyticsService implements OnModuleDestroy {
       COUNT(*) FILTER (WHERE "statusCode">=500)::integer AS "serverErrors",
       COALESCE(COUNT(*) FILTER (WHERE "statusCode">=500)::double precision / NULLIF(COUNT(*),0),0) AS "errorRate",
       COUNT("responseTimeMs")::integer AS "latencySamples",
-      percentile_cont(0.5) WITHIN GROUP (ORDER BY "responseTimeMs") AS "p50Ms",
-      percentile_cont(0.95) WITHIN GROUP (ORDER BY "responseTimeMs") AS "p95Ms",
-      percentile_cont(0.99) WITHIN GROUP (ORDER BY "responseTimeMs") AS "p99Ms"`;
+      ${[
+        ['0.5', 'p50Ms'],
+        ['0.95', 'p95Ms'],
+        ['0.99', 'p99Ms'],
+      ]
+        .map(
+          ([fraction, alias]) =>
+            // Interpolation rounding differs by CPU (e.g. fused multiply-add on
+            // arm64); microsecond precision keeps results platform-independent.
+            `round((percentile_cont(${fraction}) WITHIN GROUP (ORDER BY "responseTimeMs"))::numeric, 3)::double precision AS "${alias}"`,
+        )
+        .join(',\n      ')}`;
     try {
       const result: ConsumerUsageStats = await this.db.transaction(
         'REPEATABLE READ',

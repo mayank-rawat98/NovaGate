@@ -1,3 +1,4 @@
+import { AutomationScope } from '../automation-tokens/automation-scope.decorator';
 import { RETENTION_CUTOFF_SQL } from '../log-retention/log-retention.policy';
 import { logPrivacyPolicy, redactRequestLog } from '@api-gateway/shared-types';
 import type { MetricHistorySnapshot } from '@api-gateway/shared-types';
@@ -44,6 +45,7 @@ export class AnalyticsController {
     });
   }
 
+  @AutomationScope('logs:read')
   @Get('logs')
   @Header('Cache-Control', 'no-store')
   async getLogs(
@@ -114,6 +116,7 @@ export class AnalyticsController {
     });
   }
 
+  @AutomationScope('analytics:read')
   @Get('health')
   async getHealth(@Param('tenantId') tenantId: string) {
     return this.withSchema(tenantId, (manager) =>
@@ -123,6 +126,7 @@ export class AnalyticsController {
     );
   }
 
+  @AutomationScope('analytics:read')
   @Get('errors')
   async getErrors(
     @Param('tenantId') tenantId: string,
@@ -151,6 +155,7 @@ export class AnalyticsController {
     });
   }
 
+  @AutomationScope('analytics:write')
   @Patch('errors/:errorId')
   async resolveError(
     @Param('tenantId') tenantId: string,
@@ -166,6 +171,7 @@ export class AnalyticsController {
     });
   }
 
+  @AutomationScope('analytics:read')
   @Get('metrics/stream')
   streamMetrics(
     @Param('tenantId') tenantId: string,
@@ -179,6 +185,7 @@ export class AnalyticsController {
     );
   }
 
+  @AutomationScope('analytics:read')
   @Get('consumers/:consumerId/stats')
   @Header('Cache-Control', 'no-store')
   getConsumerStats(
@@ -189,6 +196,7 @@ export class AnalyticsController {
     return this.consumerAnalytics.get(tenantId, consumerId, period);
   }
 
+  @AutomationScope('analytics:read')
   @Get('metrics')
   @Header('Cache-Control', 'no-store')
   async getMetrics(
@@ -224,6 +232,7 @@ export class AnalyticsController {
     return this.metricsStream.history(tenantId, period);
   }
 
+  @AutomationScope('analytics:read')
   @Get('gateway-status')
   async getGatewayStatus(@Param('tenantId') tenantId: string) {
     const online = await this.configPush.isOnline(tenantId);
