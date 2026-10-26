@@ -1182,6 +1182,15 @@ portal?: {
 
 ### 5.4 Terraform Provider
 
+Implemented in [issue #111](https://github.com/mayank-rawat98/NovaGate/issues/111)
+as `integrations/terraform-provider` (Plugin Framework 1.19). It authenticates
+with scoped automation tokens from #107. Resources use the `novagate_` prefix
+(repository branding) instead of `gatewayx_`. Plugin pipelines are normalized,
+sensitive JSON. Acceptance tests run the real Terraform CLI against the real
+admin API and confirm in SQL that destroy soft-deletes routes and services.
+See the [provider guide](integrations/terraform-provider/README.md). Registry
+publication remains release work.
+
 In-repository directory: `integrations/terraform-provider/` (Go, using Terraform Plugin Framework):
 
 Resources:

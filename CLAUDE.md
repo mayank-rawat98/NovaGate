@@ -87,14 +87,15 @@ CUSTOMER'S VPS                         SAAS SERVERS
 
 ### Apps
 
-| App                     | Role                                                                                                                           |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `apps/api`              | Gateway Docker image — deployed on customer VPS, no DB, talks only to control plane via outbound WebSocket                     |
-| `apps/control-plane`    | WebSocket server — accepts connections from all gateway instances, delivers config updates, ingests logs/health/errors/metrics |
-| `apps/admin-api`        | REST API consumed only by the dashboard — CRUD for routes/services/consumers/tenants, analytics                                |
-| `apps/dashboard`        | Next.js 14 tenant-facing UI — route management, observability, setup flow                                                      |
-| `apps/developer-portal` | Next.js developer portal for a workspace's API consumers — catalog, self-service keys, usage; shared host or custom domain     |
-| `libs/shared-types`     | Single source of truth for TypeScript interfaces: WS message types, DB entities, `TenantConfig`                                |
+| App                               | Role                                                                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `apps/api`                        | Gateway Docker image — deployed on customer VPS, no DB, talks only to control plane via outbound WebSocket                     |
+| `apps/control-plane`              | WebSocket server — accepts connections from all gateway instances, delivers config updates, ingests logs/health/errors/metrics |
+| `apps/admin-api`                  | REST API consumed only by the dashboard — CRUD for routes/services/consumers/tenants, analytics                                |
+| `apps/dashboard`                  | Next.js 14 tenant-facing UI — route management, observability, setup flow                                                      |
+| `apps/developer-portal`           | Next.js developer portal for a workspace's API consumers — catalog, self-service keys, usage; shared host or custom domain     |
+| `integrations/terraform-provider` | Go Terraform provider (`novagate_*`) using scoped automation tokens against the admin API                                      |
+| `libs/shared-types`               | Single source of truth for TypeScript interfaces: WS message types, DB entities, `TenantConfig`                                |
 
 **shared-types change order is non-negotiable:** update `shared-types` first, then the sender, then the receiver.
 
