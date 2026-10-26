@@ -14,6 +14,7 @@ import {
   DEFAULT_LOAD_BALANCER,
   DEFAULT_TRACING,
   DEFAULT_METRIC_REPORTING,
+  DEFAULT_CONTROL_PLANE,
   DEFAULT_THIRD_PARTY_PLUGINS,
 } from './configuration';
 import { BlockList, isIP } from 'net';
@@ -21,7 +22,17 @@ import {
   MAX_THIRD_PARTY_PLUGINS,
   THIRD_PARTY_PLUGIN_NAME_PATTERN,
   THIRD_PARTY_PLUGIN_VERSION_PATTERN,
+  MAX_GATEWAY_INSTANCE_NAME_LENGTH,
+  parseControlPlaneEndpoints,
 } from '@api-gateway/shared-types';
+const controlPlaneEndpoints = Joi.string().custom((value: string, helpers) => {
+  try {
+    parseControlPlaneEndpoints(value);
+    return value;
+  } catch {
+    return helpers.error('any.invalid');
+  }
+}, 'control plane endpoint list');
 const thirdPartyPackages = Joi.string().custom((value: string, helpers) => {
   let parsed: unknown;
   try {
@@ -47,6 +58,16 @@ const thirdPartyPackages = Joi.string().custom((value: string, helpers) => {
 }, 'third-party plugin list');
 
 export const configSchema = Joi.object({
+  CONTROL_PLANE_URL: controlPlaneEndpoints,
+  CONTROL_PLANE_URLS: controlPlaneEndpoints,
+  CONTROL_PLANE_FAILBACK_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(86400000)
+    .default(DEFAULT_CONTROL_PLANE.failbackMs),
+  GATEWAY_INSTANCE_NAME: Joi.string()
+    .pattern(/^[\x21-\x7e][\x20-\x7e]*$/)
+    .max(MAX_GATEWAY_INSTANCE_NAME_LENGTH),
   THIRD_PARTY_PLUGIN_DIR: Joi.string().pattern(/^\//).max(1024),
   THIRD_PARTY_PLUGINS: thirdPartyPackages.default('[]'),
   THIRD_PARTY_PLUGIN_HOOK_TIMEOUT_MS: Joi.number()

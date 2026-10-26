@@ -173,6 +173,27 @@
           ],
           "parallel": false
         }
+      },
+      "regions-e2e": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build",
+          {
+            "projects": [
+              "admin-api",
+              "control-plane"
+            ],
+            "target": "build"
+          }
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/multi-region-e2e.mjs",
+            "node tools/multi-region-e2e.mjs"
+          ],
+          "parallel": false
+        }
       }
     }
   },

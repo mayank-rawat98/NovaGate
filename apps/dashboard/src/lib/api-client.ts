@@ -56,6 +56,8 @@ import type {
   SaveAnomalySettings,
   BillingOverview,
   ConsumerQuotaUsage,
+  ControlPlaneRegionsState,
+  SavePreferredRegion,
 } from '@api-gateway/shared-types';
 import { parseCircuitStatuses } from '@api-gateway/shared-types';
 import { getToken, clearToken } from './auth';
@@ -1027,6 +1029,22 @@ export function saveDisabledPlugins(
   signal?: AbortSignal,
 ): Promise<GatewayPluginState> {
   return request(`/tenants/${tenantId}/gateway-plugins`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+export function getControlPlaneRegions(
+  tenantId: string,
+): Promise<ControlPlaneRegionsState> {
+  return request(`/tenants/${tenantId}/control-plane`);
+}
+export function savePreferredRegion(
+  tenantId: string,
+  input: SavePreferredRegion,
+  signal?: AbortSignal,
+): Promise<ControlPlaneRegionsState> {
+  return request(`/tenants/${tenantId}/control-plane`, {
     method: 'PUT',
     body: JSON.stringify(input),
     signal,

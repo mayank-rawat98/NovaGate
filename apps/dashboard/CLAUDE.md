@@ -291,3 +291,10 @@ column (`getConsumerQuotas`: usage against each consumer's monthly quota, a
 labelled meter, an "Almost exhausted" warning at 98%) and a bounded Monthly
 request quota input; blank means no quota. `402 PLAN_LIMIT` messages are shown
 as returned.
+
+Issue #121 adds Settings → Control plane regions (`ControlPlaneRegionsPanel`):
+every gateway instance any region recorded, with its region, Connected/Offline
+(no heartbeat for 2 minutes) and configuration version, flagged "Behind" when it
+trails the workspace version; and, when the installation lists two or more
+regions, a labelled Preferred region select saved through `savePreferredRegion`
+(session only), keeping the choice on failure.

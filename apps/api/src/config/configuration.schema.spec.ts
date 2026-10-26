@@ -324,3 +324,51 @@ describe('bounded tracing startup settings', () => {
     ).toBeDefined();
   });
 });
+
+describe('Control plane endpoint configuration', () => {
+  const env = { ...process.env };
+  afterEach(() => {
+    process.env = { ...env };
+  });
+
+  it('accepts ordered region endpoints and builds them in priority order', () => {
+    const value = {
+      ...required,
+      CONTROL_PLANE_URLS:
+        'us-east=wss://us.example.test,eu-west=wss://eu.example.test',
+      CONTROL_PLANE_FAILBACK_MS: '60000',
+      GATEWAY_INSTANCE_NAME: 'edge-1',
+    };
+    expect(configSchema.validate(value).error).toBeUndefined();
+    Object.assign(process.env, value);
+    expect(configuration().controlPlane).toEqual({
+      endpoints: [
+        { region: 'us-east', url: 'wss://us.example.test/' },
+        { region: 'eu-west', url: 'wss://eu.example.test/' },
+      ],
+      failbackMs: 60000,
+      instanceName: 'edge-1',
+    });
+  });
+
+  it('keeps the single CONTROL_PLANE_URL working', () => {
+    process.env.CONTROL_PLANE_URL = 'ws://127.0.0.1:8080';
+    delete process.env.CONTROL_PLANE_URLS;
+    expect(configuration().controlPlane.endpoints).toEqual([
+      { region: null, url: 'ws://127.0.0.1:8080/' },
+    ]);
+  });
+
+  it.each([
+    ['CONTROL_PLANE_URLS', 'https://cp.example.test'],
+    ['CONTROL_PLANE_URLS', 'Bad=wss://cp.example.test'],
+    ['CONTROL_PLANE_URL', 'not a url'],
+    ['CONTROL_PLANE_FAILBACK_MS', '10'],
+    ['GATEWAY_INSTANCE_NAME', 'x'.repeat(65)],
+    ['GATEWAY_INSTANCE_NAME', 'tab\tname'],
+  ])('refuses %s=%p at startup', (name, value) => {
+    expect(
+      configSchema.validate({ ...required, [name]: value }).error,
+    ).toBeDefined();
+  });
+});

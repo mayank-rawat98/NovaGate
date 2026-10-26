@@ -1,7 +1,9 @@
 import { logPrivacyPolicy } from '@api-gateway/shared-types';
 import { ConfigService } from '@nestjs/config';
 import {
+  DEFAULT_REGION_SETTINGS,
   DEFAULT_SOCKET_ADMISSION,
+  type RegionSettings,
   type SocketAdmissionSettings,
 } from '../config/tracing.configuration';
 import { TraceIngestionService } from '../ingestion/trace-ingestion.service';
@@ -14,6 +16,7 @@ import {
 } from '@nestjs/common';
 import { WebSocket, WebSocketServer } from 'ws';
 import * as crypto from 'crypto';
+import { MAX_GATEWAY_INSTANCE_NAME_LENGTH } from '@api-gateway/shared-types';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, IsNull, Repository } from 'typeorm';
 import {
@@ -43,11 +46,30 @@ import {
 
 import Redis from 'ioredis';
 
+/** One authenticated gateway socket. A workspace can run several gateways. */
+interface GatewaySession {
+  tenantId: string;
+  instanceId: string;
+  /** Highest version sent or acknowledged on this socket. */
+  sentVersion: number;
+  sentAt: number;
+  ackedVersion: number;
+}
+const UUID = /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i;
+/** Resend an unacknowledged version after this long. */
+const CONFIG_RESEND_MS = 30000;
+/** Presence is best effort: missing admin migrations or a slow DB never block. */
+const PRESENCE_MISSING = new Set(['42P01', '42703']);
+
 @Injectable()
 export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TenantConnectionManager.name);
   private wss!: WebSocketServer;
-  private connections = new Map<string, WebSocket>();
+  private connections = new Map<string, Set<WebSocket>>();
+  private readonly sessions = new Map<WebSocket, GatewaySession>();
+  private readonly regionSettings: RegionSettings;
+  private syncTimer?: NodeJS.Timeout;
+  private syncing?: Promise<void>;
   private redisPub!: Redis;
   private redisSub!: Redis;
   private heartbeatTimer?: NodeJS.Timeout;
@@ -70,6 +92,20 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
       ...DEFAULT_SOCKET_ADMISSION,
       ...config.get<SocketAdmissionSettings>('socketAdmission'),
     };
+    this.regionSettings = {
+      ...DEFAULT_REGION_SETTINGS,
+      ...config.get<RegionSettings>('region'),
+    };
+  }
+
+  get region(): string | null {
+    return this.regionSettings.region;
+  }
+
+  private sockets(tenantId: string): WebSocket[] {
+    return [...(this.connections.get(tenantId) ?? [])].filter(
+      (ws) => ws.readyState === WebSocket.OPEN,
+    );
   }
 
   onModuleInit() {
@@ -119,12 +155,25 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
 
     // Heartbeat: ping all connections every 30s
     this.heartbeatTimer = setInterval(() => this.heartbeat(), 30000);
+    // Regions with their own Redis never see another region's publications;
+    // the database is the shared source of configuration versions.
+    this.syncTimer = setInterval(() => {
+      if (this.stopped || this.syncing) return;
+      this.syncing = this.syncConfigVersions()
+        .catch(() => this.logger.warn('Configuration sync will retry'))
+        .finally(() => {
+          this.syncing = undefined;
+        });
+    }, this.regionSettings.configSyncIntervalMs);
+    this.syncTimer.unref();
   }
 
   async onModuleDestroy() {
     this.stopped = true;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
-    for (const ws of this.connections.values()) ws.close();
+    clearInterval(this.syncTimer);
+    await this.syncing;
+    for (const ws of this.sessions.keys()) ws.close();
     this.wss.close();
     await Promise.allSettled([this.redisPub.quit(), this.redisSub.quit()]);
   }
@@ -184,11 +233,31 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
 
             authenticated = true;
             clearTimeout(authTimeout);
-            this.connections.set(tenantId, ws);
+            const instanceId =
+              typeof authPayload.instanceId === 'string' &&
+              UUID.test(authPayload.instanceId)
+                ? authPayload.instanceId.toLowerCase()
+                : crypto.randomUUID();
+            const instanceName =
+              typeof authPayload.instanceName === 'string'
+                ? authPayload.instanceName
+                    .replace(/[^\x20-\x7e]/g, '?')
+                    .slice(0, MAX_GATEWAY_INSTANCE_NAME_LENGTH)
+                : '';
+            const sockets = this.connections.get(tenantId) ?? new Set();
+            sockets.add(ws);
+            this.connections.set(tenantId, sockets);
             await this.redisPub.set(`gw:online:${tenantId}`, '1', 'EX', 90);
 
             // Get config and pending updates
             const { config, version } = await this.getTenantConfig(tenantId);
+            this.sessions.set(ws, {
+              tenantId,
+              instanceId,
+              sentVersion: version,
+              sentAt: Date.now(),
+              ackedVersion: -1,
+            });
 
             const authOk: AuthOkMessage = {
               type: 'auth_ok',
@@ -196,9 +265,27 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
                 tenantId,
                 config,
                 configVersion: version,
+                ...(this.region ? { controlPlaneRegion: this.region } : {}),
               },
             };
             ws.send(JSON.stringify(authOk));
+            await this.recordPresence(
+              `INSERT INTO public.gateway_instances ("tenantId","instanceId",name,region,"connectedAt","lastSeenAt","disconnectedAt","configVersion")
+               VALUES ($1,$2,$3,$4,NOW(),NOW(),NULL,$5)
+               ON CONFLICT ("tenantId","instanceId") DO UPDATE SET name=EXCLUDED.name,region=EXCLUDED.region,
+                 "connectedAt"=NOW(),"lastSeenAt"=NOW(),"disconnectedAt"=NULL,
+                 "configVersion"=COALESCE(EXCLUDED."configVersion",public.gateway_instances."configVersion")`,
+              [
+                tenantId,
+                instanceId,
+                instanceName || 'gateway',
+                this.region,
+                Number.isSafeInteger(authPayload.configVersion) &&
+                (authPayload.configVersion as number) >= 0
+                  ? authPayload.configVersion
+                  : null,
+              ],
+            );
 
             await this.tenantRepo.update(tenantId, { lastSeen: new Date() });
             this.logger.log(`Tenant ${tenantId} connected`);
@@ -214,7 +301,7 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
           }
 
           // Handle other message types (logs, health, etc.)
-          if (tenantId) await this.handleInboundMessage(tenantId, message);
+          if (tenantId) await this.handleInboundMessage(tenantId, message, ws);
         } catch {
           this.logger.warn('Gateway message processing failed');
         } finally {
@@ -226,7 +313,16 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
 
     ws.on('close', () => {
       clearTimeout(authTimeout);
-      if (!this.stopped && tenantId && this.connections.get(tenantId) === ws) {
+      const session = this.sessions.get(ws);
+      this.sessions.delete(ws);
+      const sockets = tenantId ? this.connections.get(tenantId) : undefined;
+      if (!this.stopped && tenantId && sockets?.delete(ws)) {
+        if (session)
+          void this.recordPresence(
+            `UPDATE public.gateway_instances SET "disconnectedAt"=NOW(),"lastSeenAt"=NOW() WHERE "tenantId"=$1 AND "instanceId"=$2 AND region IS NOT DISTINCT FROM $3`,
+            [tenantId, session.instanceId, this.region],
+          );
+        if (sockets.size) return;
         this.connections.delete(tenantId);
         void this.tenantRepo
           .update(tenantId, { lastSeen: new Date() })
@@ -239,10 +335,16 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
     });
 
     ws.on('pong', () => {
-      if (!this.stopped && tenantId)
-        void this.redisPub
-          .set(`gw:online:${tenantId}`, '1', 'EX', 90)
-          .catch((err: Error) => this.logger.error(err.message));
+      if (this.stopped || !tenantId) return;
+      void this.redisPub
+        .set(`gw:online:${tenantId}`, '1', 'EX', 90)
+        .catch((err: Error) => this.logger.error(err.message));
+      const session = this.sessions.get(ws);
+      if (session)
+        void this.recordPresence(
+          `UPDATE public.gateway_instances SET "lastSeenAt"=NOW() WHERE "tenantId"=$1 AND "instanceId"=$2 AND "disconnectedAt" IS NULL`,
+          [tenantId, session.instanceId],
+        );
     });
   }
 
@@ -264,7 +366,7 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
     return this.dataSource.transaction('REPEATABLE READ', async (manager) => {
       const [tenant] = await manager.query(
         // to_jsonb tolerates a schema admin-api has not upgraded yet.
-        `SELECT "gatewayConfigVersion", "caCertPem", "logPrivacy", to_jsonb(t)->'disabledPlugins' AS "disabledPlugins", to_jsonb(t)->>'quotaSuspendedUntil' AS "quotaSuspendedUntil" FROM public.tenants t WHERE id = $1`,
+        `SELECT "gatewayConfigVersion", "caCertPem", "logPrivacy", to_jsonb(t)->'disabledPlugins' AS "disabledPlugins", to_jsonb(t)->>'quotaSuspendedUntil' AS "quotaSuspendedUntil", to_jsonb(t)->>'preferredRegion' AS "preferredRegion" FROM public.tenants t WHERE id = $1`,
         [tenantId],
       );
       if (!tenant) throw new Error('Tenant not found');
@@ -305,6 +407,7 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
                   until: new Date(suspendedUntil).toISOString(),
                 }
               : null,
+          preferredRegion: tenant.preferredRegion ?? null,
         },
         version: tenant.gatewayConfigVersion,
       };
@@ -323,18 +426,16 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
         version: number;
       };
       if (!envelope.config || !Number.isSafeInteger(envelope.version)) continue;
-      ws.send(
-        JSON.stringify({
-          type: 'config.update',
-          payload: envelope.config,
-          version: envelope.version,
-        }),
-      );
+      this.send(ws, envelope.config, envelope.version);
       // Retain until the gateway confirms installation with config.ack.
     }
   }
 
-  private async handleInboundMessage(tenantId: string, message: BaseWsMessage) {
+  private async handleInboundMessage(
+    tenantId: string,
+    message: BaseWsMessage,
+    ws?: WebSocket,
+  ) {
     switch (message.type) {
       case 'config.ack': {
         const version = (message as BaseWsMessage & { version: number })
@@ -344,6 +445,15 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
             `DELETE FROM public.pending_config_updates WHERE "tenantId" = $1 AND (config->>'version')::bigint <= $2`,
             [tenantId, version],
           );
+          const session = ws ? this.sessions.get(ws) : undefined;
+          if (session) {
+            session.ackedVersion = Math.max(session.ackedVersion, version);
+            session.sentVersion = Math.max(session.sentVersion, version);
+            await this.recordPresence(
+              `UPDATE public.gateway_instances SET "configVersion"=GREATEST(COALESCE("configVersion",0),$3),"lastSeenAt"=NOW() WHERE "tenantId"=$1 AND "instanceId"=$2`,
+              [tenantId, session.instanceId, version],
+            );
+          }
         }
         break;
       }
@@ -366,8 +476,7 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
       case 'errors': {
         const errorMsg = message as ErrorsMessage;
         await this.ingestionService.ingestErrors(tenantId, errorMsg.payload);
-        // Errors require ACKs
-        const ws = this.connections.get(tenantId);
+        // Errors require ACKs, on the socket that sent them.
         if (ws?.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'ack', id: errorMsg.id }));
         }
@@ -483,13 +592,70 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
   }
 
   private heartbeat() {
-    this.connections.forEach((ws, tenantId) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.ping();
-      } else {
-        this.connections.delete(tenantId);
+    for (const [tenantId, sockets] of this.connections) {
+      for (const ws of sockets) {
+        if (ws.readyState === WebSocket.OPEN) ws.ping();
+        else {
+          sockets.delete(ws);
+          this.sessions.delete(ws);
+        }
       }
-    });
+      if (!sockets.size) this.connections.delete(tenantId);
+    }
+  }
+
+  private async recordPresence(sql: string, parameters: unknown[]) {
+    try {
+      await this.dataSource.query(sql, parameters);
+    } catch (error) {
+      if (!PRESENCE_MISSING.has((error as { code?: string }).code ?? ''))
+        this.logger.warn('Gateway presence update failed');
+    }
+  }
+
+  private send(ws: WebSocket, config: TenantConfig, version: number) {
+    const session = this.sessions.get(ws);
+    if (ws.readyState !== WebSocket.OPEN || !session) return;
+    ws.send(
+      JSON.stringify({ type: 'config.update', payload: config, version }),
+    );
+    session.sentVersion = Math.max(session.sentVersion, version);
+    session.sentAt = Date.now();
+  }
+
+  /**
+   * Brings every connected gateway up to the workspace's version in the
+   * database. Publications through Redis are the fast path; this repairs
+   * missed ones, including those published in another region's Redis.
+   */
+  async syncConfigVersions() {
+    const lagging = new Map<string, WebSocket[]>();
+    const tenants = [...this.connections.keys()];
+    for (let offset = 0; offset < tenants.length; offset += 500) {
+      const rows: Array<{ id: string; version: number }> =
+        await this.dataSource.query(
+          `SELECT id, "gatewayConfigVersion" AS version FROM public.tenants WHERE id = ANY($1::uuid[])`,
+          [tenants.slice(offset, offset + 500)],
+        );
+      const now = Date.now();
+      for (const row of rows) {
+        const behind = this.sockets(row.id).filter((ws) => {
+          const session = this.sessions.get(ws);
+          return (
+            session &&
+            session.ackedVersion < row.version &&
+            (session.sentVersion < row.version ||
+              now - session.sentAt > CONFIG_RESEND_MS)
+          );
+        });
+        if (behind.length) lagging.set(row.id, behind);
+      }
+    }
+    for (const [tenantId, sockets] of lagging) {
+      if (this.stopped) return;
+      const { config, version } = await this.getTenantConfig(tenantId);
+      for (const ws of sockets) this.send(ws, config, version);
+    }
   }
 
   async pushConfigUpdate(
@@ -499,20 +665,10 @@ export class TenantConnectionManager implements OnModuleInit, OnModuleDestroy {
   ) {
     if (!Number.isSafeInteger(version) || version < 0)
       throw new Error('Invalid configuration version');
-    const ws = this.connections.get(tenantId);
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(
-        JSON.stringify({
-          type: 'config.update',
-          payload: config,
-          version,
-        }),
-      );
-    }
+    for (const ws of this.sockets(tenantId)) this.send(ws, config, version);
   }
 
   isOnline(tenantId: string): boolean {
-    const ws = this.connections.get(tenantId);
-    return ws?.readyState === WebSocket.OPEN;
+    return this.sockets(tenantId).length > 0;
   }
 }

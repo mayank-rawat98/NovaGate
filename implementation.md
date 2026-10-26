@@ -103,7 +103,7 @@ The code contains substantial work for phases 0–3, but file presence does not 
 | 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                                                                                                                         | Native gRPC/WebSocket checks exist (#41/#43), bounded AST GraphQL policies are verified (#53), and issue #55 hardens HTTP/2 lifecycle, limits and health-compatible fallback; issue #57 adds verified least-connections; formal protocol acceptance remains                                                 |
 | 4     | RustFS archives (#37), traces (#61), live metrics (#63), alerts (#65), external delivery (#95), bounded consumer rollups (#99)                                                                    | Larger workloads/provider acceptance, hydration (#69), RustFS cleanup (#90), formal acceptance and release remain                                                                                                                                                                                           |
 | 5     | REST configuration, reviewed declarative import/export (#103), private CLI/live logs (#105), automation tokens (#107), portal (#109), Terraform (#111), plugin SDK and third-party loading (#113) | CLI distribution, npm/registry publication, configuration history/rollback and formal acceptance remain                                                                                                                                                                                                     |
-| 6     | Circuit breaker (#115), anomaly detection (#117), quotas and billing metering (#119)                                                                                                              | Regional failover, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                                                                                                       |
+| 6     | Circuit breaker (#115), anomaly detection (#117), multi-region failover (#121), quotas and billing metering (#119)                                                                                | Kubernetes reconciliation, WASM and federation remain to implement; database replication/DNS for regions are operator infrastructure                                                                                                                                                                        |
 
 ### Prerequisites discovered by audit
 
@@ -1327,6 +1327,18 @@ verifies the exit criterion on real processes.
 ---
 
 ### 6.3 Multi-Region Control Plane
+
+Implemented in [issue #121](https://github.com/mayank-rawat98/NovaGate/issues/121).
+Rather than relying only on DNS, gateways hold an ordered, region-labelled endpoint
+list (`CONTROL_PLANE_URLS`) with failover, backed-off failback and the workspace's
+preferred region. Control planes are labelled by `CONTROL_PLANE_REGION`, serve several
+gateways per workspace, record presence in `public.gateway_instances`, and deliver the
+database's configuration version on a timer so a region whose Redis missed a
+publication still converges. `auth_ok` carries `controlPlaneRegion` as planned; the
+Settings page shows each gateway's region and sets the preferred region.
+PostgreSQL replication/promotion and DNS stay operator infrastructure.
+`@api-gateway/api:regions-e2e` verifies the exit criterion with two regions on
+separate Redis servers.
 
 **Differentiation target:** Integrated configuration and operation with measurable customer benefit.
 

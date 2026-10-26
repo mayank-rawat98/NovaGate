@@ -8,6 +8,22 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
+- [Issue #121](https://github.com/mayank-rawat98/NovaGate/issues/121) adds phase 6.3 multi-region control plane failover:
+  - Gateways hold ordered, region-labelled endpoints, with failover, backed-off failback and a workspace preferred region.
+  - Control planes are labelled by region and serve several gateways per workspace; previously a second gateway replaced the first socket.
+  - Gateway presence is recorded in PostgreSQL.
+  - Pending configuration is delivered from the database, so a region with its own Redis still converges.
+  - Buffered telemetry drains, paced, after reconnecting, instead of overflowing the control plane's per-socket admission.
+
+  In the real-process run, killing the primary region under traffic moved the gateway to the second region in **2.1 s**. A route created during the outage arrived 0.1 s later, and every request succeeded.
+
+  Verified on Node 26.11.1 with PostgreSQL 16 and Redis 7:
+  - **910 admin tests** (21 RustFS-dependent skipped);
+  - 640/641 gateway (the remaining test needs IPv6);
+  - 147 control-plane, 35 CLI, 10 dashboard, 5 portal and 4 SDK tests.
+
+  The dashboard browser smoke passes with zero WCAG/runtime findings. See the section below.
+
 - [Issue #119](https://github.com/mayank-rawat98/NovaGate/issues/119) adds phase 6.4 usage metering, quotas and billing:
   - The gateway meters requests in its own Redis and enforces per-consumer monthly quotas (429 `QUOTA_EXCEEDED`).
   - The control plane stores cumulative per-source totals.
@@ -1580,8 +1596,7 @@ issues #69, #90 and the remaining #101 investigation stay open.
 
 - Anomaly detection: implemented in #117 (per-route z-scores over 15-minute windows, delivered through Phase 4 alerting, overview feed); tuning on production traffic and formal acceptance remain.
 - Circuit breakers: implemented in #115 (per-service sliding window across HTTP/1, HTTP/2, WebSocket and gRPC, live dashboard status, Terraform and declarative support); load measurements and formal acceptance remain.
-- Multi-region control-plane failover, durable configuration and observability attribution
-  across multiple gateways/regions; current alert aggregation rejects ambiguous overlap.
+- Multi-region control-plane failover: implemented in #121 (gateway endpoint failover/failback and preferred region, region-labelled control planes, several gateways per workspace, durable presence, database-driven configuration delivery). Database replication/promotion and DNS stay operator infrastructure; observability attribution across gateways (alert aggregation still rejects ambiguous overlap) and formal acceptance remain.
 - Usage quotas and billing metering: implemented in #119 (gateway-side metering and consumer quotas, plan caps, opt-in workspace suspension, Stripe Checkout/webhooks, Plan & usage page); invoicing beyond Stripe subscriptions, Terraform `monthly_quota` and formal acceptance remain.
 - Kubernetes controller/CRD reconciliation inside this repository.
 - WASM sandbox, resource limits and isolation checks.
@@ -2087,3 +2102,73 @@ Verification (Node 26.11.1, PostgreSQL 16, Redis 7):
 Not verified here: real Stripe accounts (the API is faked locally) and load
 across many gateways. Usage lags by up to one report interval plus the worker
 interval, so a workspace can overshoot its plan by that much traffic.
+
+## Multi-region control planes — issue #121
+
+**Gateway:** `CONTROL_PLANE_URLS` lists up to 8 `region=wss://…` endpoints in
+priority order. `CONTROL_PLANE_URL` still works.
+
+- The workspace's `preferredRegion` moves to the front.
+- A lost session retries its endpoint, then rotates through the list, backing
+  off after a full cycle.
+- On a fallback endpoint the gateway returns to the first after
+  `CONTROL_PLANE_FAILBACK_MS`, doubling while it stays down.
+- `/health` reports `controlPlaneRegion`.
+- Telemetry buffered while disconnected drains at 4 frames per 50 ms, with
+  config ACKs and pongs first. Before, a full-buffer burst exceeded the control
+  plane's per-socket frame admission, which closed the socket (1013) and lost
+  the backlog.
+
+**Control planes:**
+
+- Labelled by `CONTROL_PLANE_REGION` (in `auth_ok`).
+- Keep a set of sockets per workspace. Before, a second gateway replaced the
+  first and error ACKs could go to the wrong gateway.
+- Write presence to `public.gateway_instances`.
+- Every `CONTROL_PLANE_CONFIG_SYNC_INTERVAL_MS`, send the database's current
+  configuration to sockets that have not acknowledged it.
+
+**Admin API:** `CONTROL_PLANE_REGIONS` lists the installation's regions.
+`/tenants/:id/control-plane` returns the instances (online = heartbeat within
+2 minutes; disconnected rows are pruned after a day) and saves the preferred
+region, which is pushed in configuration.
+
+Verification (Node 26.11.1, PostgreSQL 16, Redis 7):
+
+- `@api-gateway/api:regions-e2e` ran the built admin API, gateway and two
+  control planes (us-east, eu-west) on one database. Each region had its own
+  Redis server, so publications in us-east never reached eu-west.
+  - With traffic flowing, us-east was killed with SIGKILL. The gateway
+    reconnected to eu-west after 2.1 s.
+  - A route created during the outage (published to us-east's Redis only)
+    reached the gateway through eu-west's database sync 0.1 s later. The
+    instance list showed eu-west at the current version.
+  - After us-east restarted, the gateway failed back. Saving eu-west as the
+    preferred region moved the gateway there, where it stayed.
+  - All 16 requests sent during the run returned 200. All 17 request logs,
+    including those buffered across the moves, arrived.
+- Gateway: endpoint parsing and ordering, configuration validation, and real
+  WebSocket servers for:
+  - failover, failback and the preferred-region move;
+  - failback backoff while the first region stays down;
+  - single-endpoint retry;
+  - an ordered, paced backlog drain with the ACK first.
+- Control plane on PostgreSQL and Redis:
+  - two gateways per workspace receive publications and ACKs on their own
+    socket, with presence rows;
+  - online state survives one gateway leaving;
+  - a version present only in the database reaches a second region's gateway
+    and is not resent after its ACK.
+- Admin integration: listing across regions (online/offline/pruned), workspace
+  isolation, preferred-region validation and push, no-op saves.
+- Dashboard browser smoke: gateway states, "Behind" versions, preferred-region
+  failure and retry, desktop/mobile axe.
+
+The 6.4 control-plane usage test was intermittently failing (about 1 run in 7).
+`auth_ok` arrives before authentication finishes in the per-socket queue, so the
+test's frame plus marker exceeded the two-frame test admission (close 1013). The
+test now waits for authentication to settle and paces on the marker's
+post-commit publication. It passed 15 of 15 runs.
+
+Not verified here: PostgreSQL replication and promotion, and DNS. Those belong to
+the operator, and every region must reach the current writable database.

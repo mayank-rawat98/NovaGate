@@ -21,6 +21,13 @@ export const DEFAULT_SOCKET_ADMISSION = {
   maxConnections: 256,
 };
 export type SocketAdmissionSettings = typeof DEFAULT_SOCKET_ADMISSION;
+/** Multi-region identity and database-driven configuration delivery (#121). */
+export const DEFAULT_REGION_SETTINGS = {
+  region: null as string | null,
+  configSyncIntervalMs: 5000,
+};
+export type RegionSettings = typeof DEFAULT_REGION_SETTINGS;
+const REGION = /^[a-z][a-z0-9-]{0,31}$/;
 
 export function validateTracingConfiguration(env: Record<string, unknown>) {
   function limit(key: string, fallback: number, min: number, max: number) {
@@ -31,8 +38,26 @@ export function validateTracingConfiguration(env: Record<string, unknown>) {
       );
     return value;
   }
+  const region = env.CONTROL_PLANE_REGION;
+  if (
+    region !== undefined &&
+    region !== '' &&
+    (typeof region !== 'string' || !REGION.test(region))
+  )
+    throw new Error(
+      'Invalid CONTROL_PLANE_REGION: use lowercase letters, digits and hyphens (for example us-east)',
+    );
   return {
     ...env,
+    region: {
+      region: region ? (region as string) : null,
+      configSyncIntervalMs: limit(
+        'CONTROL_PLANE_CONFIG_SYNC_INTERVAL_MS',
+        DEFAULT_REGION_SETTINGS.configSyncIntervalMs,
+        1000,
+        60000,
+      ),
+    } satisfies RegionSettings,
     traceIngestion: {
       maxConcurrent: limit(
         'TRACE_INGESTION_MAX_CONCURRENT',

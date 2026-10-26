@@ -5,7 +5,7 @@ Communicates with control plane via outbound WebSocket only.
 
 ## Boot sequence (do not change order)
 
-1. Read `GATEWAY_API_KEY` + `CONTROL_PLANE_URL` from env (crash if missing)
+1. Read `GATEWAY_API_KEY` + `CONTROL_PLANE_URL(S)` from env (crash if invalid)
 2. Attempt WSS auth, 10s timeout
    - Success: load config from `auth_ok` → write to Redis `cfg:default` → serve
    - Failure: read Redis `cfg:default`
@@ -125,6 +125,22 @@ CIRCUIT_OPEN` + `Retry-After`, WebSocket 503, gRPC `UNAVAILABLE`); half-open
 admits one probe at a time, and a probe unsettled for 3× `openMs` is replaced.
 Changing a service's breaker settings resets its circuit. State changes are
 reported as `circuit.state` snapshots (debounced 200 ms, heartbeat 30 s).
+
+## Multi-region control planes (issue #121)
+
+`configuration.ts` parses `CONTROL_PLANE_URLS` (or the single
+`CONTROL_PLANE_URL`) into ordered `{ region, url }` endpoints with
+`parseControlPlaneEndpoints`. The connector moves the workspace's
+`TenantConfig.preferredRegion` to the front, retries a lost session's endpoint
+once, then rotates, backing off only after every endpoint failed in turn. After
+authenticating anywhere but the first endpoint it closes and returns to the first
+after `CONTROL_PLANE_FAILBACK_MS`, doubling (to 1 h) while that stays down; a
+preference change moves it after 1 s. `auth` carries a per-process `instanceId`,
+`instanceName` and current `configVersion`; `auth_ok` names the region, shown as
+`controlPlaneRegion` on `/health`. Telemetry buffered while disconnected drains 4
+frames per 50 ms behind which new messages queue in order; config ACKs and pongs
+bypass it (control planes close sockets whose queued frames exceed their limit).
+Never reconnect on 4001/4003/4004 in any region.
 
 ## Usage metering and quotas (issue #119)
 

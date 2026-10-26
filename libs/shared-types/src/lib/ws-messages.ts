@@ -26,6 +26,12 @@ export interface AuthMessage extends BaseWsMessage {
   type: 'auth';
   payload: {
     apiKey: string;
+    /** Random per gateway process; identifies it across regions. */
+    instanceId?: string;
+    /** Operator label (GATEWAY_INSTANCE_NAME or the host name). */
+    instanceName?: string;
+    /** Configuration version the gateway is serving, if any. */
+    configVersion?: number | null;
   };
 }
 
@@ -35,6 +41,8 @@ export interface AuthOkMessage extends BaseWsMessage {
     tenantId: string;
     config: TenantConfig;
     configVersion: number;
+    /** Region of the control plane that answered, when it has one. */
+    controlPlaneRegion?: string;
   };
 }
 
@@ -326,6 +334,8 @@ export interface TenantConfig {
   disabledPlugins?: string[];
   /** Set while the workspace's monthly plan quota is exhausted. */
   suspended?: import('./billing.ts').TenantSuspension | null;
+  /** Control plane region gateways should prefer, when they know its endpoint. */
+  preferredRegion?: string | null;
 }
 
 export const MAX_GRAPHQL_POLICY_DEPTH = 100;

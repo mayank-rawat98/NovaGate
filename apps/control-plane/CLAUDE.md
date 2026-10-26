@@ -41,6 +41,22 @@ database/
 | `circuit.state`  | `parseCircuitStatuses` → Redis `gw:circuits:<tenant>` (TTL 90s) + publish `circuits:<tenant>` | Per-service circuit snapshot; invalid reports are dropped |
 | `usage.report`   | `parseUsageReport` → `public.usage_meters` / `consumer_usage_meters` (GREATEST per source)    | Cumulative monthly totals; dropped before admin migration |
 
+## Regions and several gateways per workspace (issue #121)
+
+`CONTROL_PLANE_REGION` labels this control plane (returned as
+`controlPlaneRegion` in `auth_ok`). `connections` holds a set of sockets per
+workspace with a `GatewaySession` per socket (instance ID, sent/acknowledged
+version): publications go to every socket and error ACKs return on the socket
+that sent the errors. Presence is written best effort to the admin-owned
+`public.gateway_instances` (insert on auth, `lastSeenAt` on pong, version on
+`config.ack`, `disconnectedAt` on close; missing table or column is ignored).
+Every `CONTROL_PLANE_CONFIG_SYNC_INTERVAL_MS` (default 5000) the control plane
+compares each connected workspace's `tenants."gatewayConfigVersion"` with what its
+sockets acknowledged and sends the assembled configuration to sockets that are
+behind (resend after 30 s without ACK). Regions with separate Redis never see
+each other's publications; this database sync is what delivers them. Initial
+snapshots include `preferredRegion` (tolerant read).
+
 Initial `auth_ok` snapshots include `suspended` from `tenants."quotaSuspendedUntil"`
 (tolerant read; only a future time is sent), matching the admin API's published
 configuration (issue #119).

@@ -7,6 +7,8 @@ const APP_VERSION: string = process.env['npm_package_version'] ?? '0.0.0';
 interface HealthResponse {
   status: 'ok';
   controlPlaneConnected: boolean;
+  /** Region of the connected control plane, when it reports one. */
+  controlPlaneRegion: string | null;
   configSource: 'live' | 'cache' | 'none';
   configVersion: number | null;
   configCachedAt: Date | null;
@@ -30,6 +32,7 @@ export class HealthController {
     return {
       status: 'ok',
       controlPlaneConnected: this.connector.isConnected(),
+      controlPlaneRegion: this.connector.connectedRegion?.() ?? null,
       configSource: this.configManager.configSource,
       configVersion: this.configManager.configVersion,
       configCachedAt: this.configManager.configCachedAt,
