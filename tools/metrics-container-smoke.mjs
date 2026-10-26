@@ -120,7 +120,7 @@ try {
   const redis = run('redis', 'redis:7-alpine');
   const rustfs = run(
     'rustfs',
-    'rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c',
+    'rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2',
     [
       'RUSTFS_ACCESS_KEY=novagate-verification',
       'RUSTFS_SECRET_KEY=local-object-storage-verification-only',

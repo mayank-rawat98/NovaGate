@@ -495,7 +495,7 @@ The scheduler handles at most 16 windows per two-second sweep with no overlappin
 
 Admin startup upgrades legacy UTC-naive log timestamps to TIMESTAMPTZ and adds database-owned receipt metadata/indexes before the updated control plane starts. Existing rows receive migration-time receipt values, and automatic schedules start after save. These table conversions may rewrite historical log tables; include them in the database maintenance/backup plan for an existing installation. Receipt metadata is excluded from public log records and NDJSON. Explicit UTC comparisons/formatting and microsecond keysets are exercised with a non-UTC PostgreSQL session. See PostgreSQL's [timestamp comparison semantics](https://www.postgresql.org/docs/current/functions-datetime.html) and [transaction-scoped advisory locks](https://www.postgresql.org/docs/current/explicit-locking.html).
 
-OrbStack verification includes RustFS 1.0.1 pinned by digest, persistent verification volumes, a loopback S3 listener on port 19000 and no published console. Run the live integration checks with:
+OrbStack verification includes RustFS 1.0.4 pinned by digest, persistent verification volumes, a loopback S3 listener on port 19000 and no published console. Run the live integration checks with:
 
 ```sh
 docker compose -f docker/compose.verification.yml up -d --wait
@@ -504,6 +504,8 @@ TEST_REDIS_URL=redis://127.0.0.1:16379 \
 TEST_OBJECT_STORAGE_ENDPOINT=http://127.0.0.1:19000 \
 NX_DAEMON=false NX_NO_CLOUD=true npm exec nx run admin-api:test -- --skipNxCache
 ```
+
+RustFS 1.0.4 replaces 1.0.1 (issue #90). On 1.0.1, a delete that the caller cancelled mid-request, as an archive deadline or shutdown does, left files no S3 API lists. Such a bucket could then never be deleted (`409 BucketNotEmpty`). 1.0.4 reads 1.0.1 data in place, but it does not remove residue that 1.0.1 already wrote. That residue only costs disk in a bucket you keep. To delete such a bucket, its server log names the blockers (`bucket_delete_blocked`, `blocker=orphan_directory`); remove those paths with RustFS's own tooling, not by editing the data directory.
 
 Production storage is disabled until configured. Set the documented `OBJECT_STORAGE_*` variables in the deployment environment; all env files and env templates are ignored by Git. `COMPOSE_PROFILES=object-storage` enables the bundled RustFS service (Compose 2.20+ is required for its optional dependency). It has persistent data/log volumes and readiness checks, joins only the internal gateway network, and publishes neither S3 nor console ports. External S3-compatible storage can use the same API settings without enabling that profile. Startup checks the bucket policy and ACL and refuses public grants; the adapter never adds a public policy or ACL. Keep AWS S3 Block Public Access enabled as an additional operator control.
 

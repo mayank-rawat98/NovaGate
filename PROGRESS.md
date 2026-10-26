@@ -96,6 +96,22 @@ No whole phase or production release is declared complete by this report.
 
 - [Issue #107](https://github.com/mayank-rawat98/NovaGate/issues/107) adds scoped, expiring, revocable automation tokens for the CLI, Terraform and CI. Only SHA-256 digests are stored; secrets are shown once. Endpoints accept tokens only when they declare a scope (default deny), and token management stays session-only. Verified on Node 26.11.1 with local PostgreSQL 16: **857 admin tests** pass (28 RustFS/S3-dependent tests skipped because this environment has no container runtime), **35 built CLI tests**, 10 dashboard tests, lint/typecheck for the four touched projects, and the full production browser smoke including the new panel, with zero runtime/WCAG findings. Packaged images were not rebuilt in this environment. See the section below.
 
+- [Issue #90](https://github.com/mayank-rawat98/NovaGate/issues/90) finds and fixes the cause of the RustFS fixture bucket that could not be deleted.
+  - **Reproduction on the pinned RustFS 1.0.1** (disposable buckets):
+    - 40 `DeleteObject` requests cancelled by the caller while the server was processing them;
+    - an owned cleanup then left `ListObjectsV2`, `ListObjectVersions` and `ListMultipartUploads` empty;
+    - `DeleteBucket` still returned `409 BucketNotEmpty`.
+  - **The residue** matched the issue's: `xl.meta.bkp`, `reserve-delete-data.<UUID>` and `part.1` under keys absent from listings, plus the server's `bucket_delete_blocked blocker=orphan_directory`.
+  - **Isolation:** cancelled deletes alone produce it. Cancelled multipart uploads, overwrite/delete races and the uncancelled control do not.
+  - **Why the fixture hit it:** archive removals carry deadlines and shutdown cancellation, so a delete cut short during teardown is exactly this case.
+  - **RustFS 1.0.4:** 320 cancelled deletes over five runs, plus three regression runs, left no residue, and every bucket deleted. It reads 1.0.1 data in place: an 11 MiB multipart archive's SHA-256 matched.
+  - **Residue already written by 1.0.1 remains:** 1.0.4 still refuses those two buckets. That matches the upstream scope quoted in the issue, so existing buckets keep it until removed with RustFS tooling.
+  - **The fix:**
+    - pin 1.0.4 by digest in Compose, verification Compose, CI and the container smoke;
+    - add `object-storage-cancellation.integration.spec.ts`, which fails on 1.0.1 (`BucketNotEmpty`) and passes on 1.0.4;
+    - add teardown diagnostics that name each cleanup stage with a sanitized provider code and still fail.
+  - On 1.0.4, all 22 storage integration tests pass: private archives, expiry and revocation, multipart, and transport.
+
 - [Issue #105](https://github.com/mayank-rawat98/NovaGate/issues/105) / [PR #106](https://github.com/mayank-rawat98/NovaGate/pull/106) finishes the preserved private `gwx` CLI and authenticated live request logs. Current checks pass **862 admin tests / 48 suites**, including 15 real HTTP/PostgreSQL stream cases, and **27 built CLI tests on both Node 26 and Node 24**, with no failures or skips. Six-project static checks, five production builds, real POSIX terminal checks and four rebuilt guarded non-root images pass. The cleanup disposition covers all 85 original source paths: 19 already merged, four stale/unnecessary changes omitted and 62 useful changes reconciled through PRs #104 and #106. Scoped/revocable automation, public CLI distribution and formal phase acceptance remain open. Main remains reserved for final acceptance.
 
 - [Issue #103](https://github.com/mayank-rawat98/NovaGate/issues/103) / [PR #104](https://github.com/mayank-rawat98/NovaGate/pull/104) adds reviewed complete YAML/JSON import/export and Settings controls with atomic durable reconciliation. Current Node 26.11.1 validation passes **1,558 tests with no failures or skips**, five-project static checks, four app builds, four fresh guarded non-root images and **42 production browser cold loads at sixfold CPU throttling** with zero runtime/accessibility findings. The packaged pipeline proves actual gateway ACK, key routing, restart and idempotent export roundtrip while preserving telemetry/archives/alerts/privacy/rollups; all three services exit 0. The original pending files are preserved; issue #105 / PR #106 records the CLI/log-stream reconciliation and final cleanup disposition. Main remains reserved for final acceptance.
