@@ -8,6 +8,18 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
+- **Release to main (26 October 2026).** Every open issue PR is merged into `dev`, and
+  `dev` is merged into `main`:
+  - phase 5: automation tokens #107 ([PR #108](https://github.com/mayank-rawat98/NovaGate/pull/108)), developer portal #109 ([PR #110](https://github.com/mayank-rawat98/NovaGate/pull/110)), Terraform provider #111 ([PR #112](https://github.com/mayank-rawat98/NovaGate/pull/112)), third-party plugins and SDK #113 ([PR #114](https://github.com/mayank-rawat98/NovaGate/pull/114));
+  - phase 6: circuit breaker #115 ([PR #116](https://github.com/mayank-rawat98/NovaGate/pull/116)), anomaly detection #117 ([PR #118](https://github.com/mayank-rawat98/NovaGate/pull/118)), quotas and billing #119 ([PR #120](https://github.com/mayank-rawat98/NovaGate/pull/120)), multi-region control planes #121 ([PR #122](https://github.com/mayank-rawat98/NovaGate/pull/122)), WASM sandbox #123 ([PR #124](https://github.com/mayank-rawat98/NovaGate/pull/124)), Kubernetes controller #125 ([PR #126](https://github.com/mayank-rawat98/NovaGate/pull/126)), GraphQL federation #127 ([PR #128](https://github.com/mayank-rawat98/NovaGate/pull/128));
+  - fixes: RustFS cancelled deletes #90 ([PR #129](https://github.com/mayank-rawat98/NovaGate/pull/129)) and hydration replay #69 ([PR #130](https://github.com/mayank-rawat98/NovaGate/pull/130)); the developer portal moves to Next.js ~16.2.12 with the dashboard.
+
+  The combined tree passed `npm run check` (lint, typecheck, test and build for all ten
+  projects) locally on Node 26.11.1 with PostgreSQL 16, Redis 7 and RustFS 1.0.4 before
+  the merge. The push to `main` runs the deployment workflow: reusable CI, five image
+  builds, then the SSH deploy. Implementation of phases 0–6 is merged; formal phase
+  acceptance, the items under [Remaining work](#remaining-work) and issue #101 stay open.
+
 - [Issue #127](https://github.com/mayank-rawat98/NovaGate/issues/127) adds the phase 6.7 GraphQL federation gateway:
   - Subgraph SDL is registered per service in the admin API, and the supergraph is composed on save; graphs that do not compose are refused with their errors.
   - The supergraph reaches gateways in `TenantConfig.federatedGraphs`.
@@ -162,7 +174,7 @@ No whole phase or production release is declared complete by this report.
 - [Issue #69](https://github.com/mayank-rawat98/NovaGate/issues/69) tracked one intermittent dashboard hydration recovery; its root cause (React hydration replay of suspended host elements in Next.js 16.1) and fix (Next.js 16.2) are recorded in the current checkpoint above.
 - Work and verification use OrbStack. Nothing here authorizes or represents a main deployment.
 
-## Implemented and merged into dev
+## Implemented and merged into dev and main
 
 ### Baseline, isolation and configuration
 
@@ -242,7 +254,7 @@ No whole phase or production release is declared complete by this report.
   reusable verification and read-only staged-formatting safeguards (#31).
 - CI now has only `workflow_call`; deployment triggers only on **push to main**.
   Every image build requires verification, and deployment requires verification plus
-  all four image builds. PR/dev/tag/manual events do not trigger CI or deployment.
+  all five image builds (gateway, control plane, admin API, dashboard, developer portal). PR/dev/tag/manual events do not trigger CI or deployment.
 - Personal GitHub SSH identity: `github-personal` / `mayank-rawat98`.
 - Reviewed Mailtr dev/reference safeguards and cached Medhank code in `examinator`;
   adapted relevant workflow/cache/runtime principles without copying credentials.
@@ -1626,20 +1638,19 @@ issues #69, #90 and the remaining #101 investigation stay open.
 
 ## Remaining work
 
-### Next: build follow-up and developer tooling; retain follow-ups #69 and #90
+### Next: formal acceptance and the remaining product requirements
 
-- Reproduce the intermittent server/session hydration recovery, identify the DOM/state
-  mismatch and fix its source. Keep strict browser error gates and record a regression
-  that demonstrates the failure before the fix. Successful reruns alone do not close it.
-- Resolve RustFS empty-bucket cleanup/orphan metadata in #90 with a real regression
-  and verified fix; preserve strict lifecycle cleanup gates.
+- Issues #69 (hydration replay, fixed by Next.js 16.2) and #90 (RustFS cancelled
+  deletes, fixed by RustFS 1.0.4) are closed with real regressions; keep their strict
+  browser error and lifecycle cleanup gates.
 - The npm extraction rejection gate and real regression are implemented in
   [PR #102](https://github.com/mayank-rawat98/NovaGate/pull/102). Investigate the
   original filesystem EFAULT in [issue #101](https://github.com/mayank-rawat98/NovaGate/issues/101);
   a clean retry or injected callback error does not establish its kernel cause.
 - Retain #92’s actual Jest/PostgreSQL timeout ownership regression and strict budgets;
   any remaining resource-pressure deadline failures must remain visible.
-- Continue later work through the issue → dev branch → tested PR → merge convention.
+- Continue later work through the issue → dev branch → tested PR → merge convention;
+  `main` now tracks released `dev` and every push to it deploys.
 - Provider/inbox acceptance and at-least-once receiver/provider deduplication remain
   explicit formal acceptance requirements, not locally proven provider guarantees.
 

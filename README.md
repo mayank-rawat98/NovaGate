@@ -113,7 +113,7 @@ ESLint tags prevent circular imports between `proxy`, `rate-limit`, `logging`, a
 apps/
   api/                    Gateway binary — Docker image deployed on customer VPS
     src/gateway/
-      plugins/            Plugin system — registry, runner, and 12 built-in plugins
+      plugins/            Plugin system — registry, runner, built-in, WASM and third-party plugins
         cors/             Per-route CORS headers and preflight handling
         ip-restriction/   CIDR allow/deny per route
         rate-limit/       Per-route Redis sliding-window rate limiter
@@ -126,11 +126,24 @@ apps/
         hmac-auth/        HMAC-SHA256/512 signature validation; multi-secret rotation; clock skew
         acl/              Consumer group allow/deny — reads groups from TenantConfig.consumers
         mtls/             Client cert validation via ssl_client_cert header; uses tenant CA PEM
+        graphql-guard/    AST depth/complexity/introspection policy for GraphQL routes
+        graphql-federation/  Supergraph query planning and subgraph execution
+        wasm/             WebAssembly plugin sandbox (worker threads, host functions only)
+        third-party/      Operator-pinned npm plugins behind deadlines and quarantine
+      circuit-breaker/    Per-service circuits across HTTP/1, HTTP/2, WebSocket and gRPC
+      metering/           Monthly usage meters and consumer quotas
   control-plane/          WebSocket server — config push & telemetry ingestion
   admin-api/              REST API for dashboard — CRUD, analytics, auth
-  dashboard/              Next.js 16 tenant UI — route management, observability
+  dashboard/              Next.js 16.2 tenant UI — route management, observability
+  developer-portal/       Next.js 16.2 portal for a workspace's API consumers
+integrations/
+  terraform-provider/     Go Terraform provider (novagate_*)
+  k8s-controller/         Go Kubernetes controller (GatewayService/GatewayRoute CRDs)
+tools/
+  gwx/                    Administration CLI (declarative config, live logs)
 libs/
   shared-types/           Single source of truth for WS message types, DB entities, TenantConfig, GatewayPlugin interface
+  plugin-sdk/             @api-gateway/plugin-sdk — definePlugin, test helpers, WASM C SDK
 docker/
   Dockerfile.api
   Dockerfile.dashboard
@@ -219,7 +232,7 @@ Full setup guide: [novagate.dev/docker](https://novagate.dev/docker)
 GitHub Actions pipeline on push to `main`:
 
 1. Run reusable CI: lint, typecheck, test, build and dashboard browser checks.
-2. After CI succeeds, build and push Docker images for `api`, `control-plane`, `admin-api` and `dashboard` to GitHub Container Registry.
+2. After CI succeeds, build and push Docker images for `api`, `control-plane`, `admin-api`, `dashboard` and `developer-portal` to GitHub Container Registry.
 3. After every image build succeeds, SSH into the VPS and deploy the tested SHA, waiting for container health.
 
 CI runs only within this deployment workflow on pushes to `main`. Pull requests and pushes to `dev`, tags and manual dispatch do not trigger CI or deployment. A failed verification job prevents all image publishing and the deployment script. Continue running feature and regression checks locally while implementation stays on `dev`.

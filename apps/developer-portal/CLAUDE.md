@@ -21,6 +21,8 @@ public `/api/portal/*` admin endpoints described in
   proxy a `localhost` URL that differs from the bound `HOSTNAME` (`0.0.0.0` in
   containers), and every rewrite becomes an HTTP self-proxy that drops the
   original `Host`.
+- Keep Next.js at 16.2 or later, matching the dashboard: the React bundled with
+  16.1 could fail hydration intermittently (issue #69).
 - Only `/api/portal/:path*` is rewritten to `ADMIN_API_URL`. Rewrites are fixed
   at build time; the domain proxy reads `ADMIN_API_URL` at runtime.
 

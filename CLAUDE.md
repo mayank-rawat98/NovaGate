@@ -95,6 +95,7 @@ CUSTOMER'S VPS                         SAAS SERVERS
 | `apps/dashboard`                  | Next.js 14 tenant-facing UI — route management, observability, setup flow                                                      |
 | `apps/developer-portal`           | Next.js developer portal for a workspace's API consumers — catalog, self-service keys, usage; shared host or custom domain     |
 | `integrations/terraform-provider` | Go Terraform provider (`novagate_*`) using scoped automation tokens against the admin API                                      |
+| `integrations/k8s-controller`     | Go Kubernetes controller: `GatewayService`/`GatewayRoute` CRDs reconciled through the admin API with a scoped token (#125)     |
 | `libs/shared-types`               | Single source of truth for TypeScript interfaces: WS message types, DB entities, `TenantConfig`                                |
 | `libs/plugin-sdk`                 | `@api-gateway/plugin-sdk`: `definePlugin` and test helpers for operator-pinned third-party gateway plugins                     |
 
@@ -137,19 +138,22 @@ health/         HealthController (/health) + UpstreamHealthService (polls target
 config-manager/ GatewayConfigManagerService — in-memory config + Redis warm-start
 connector/      ControlPlaneConnectorService — WS lifecycle, reconnect, message buffer
 circuit-breaker/ CircuitBreakerService — per-service circuits for every protocol (#115)
+metering/       MeteringService — monthly usage meters and consumer quotas in local Redis (#119)
 telemetry/      GatewayTelemetryService — batches telemetry to send upstream
 services/       ServicesModule — TypeORM entity + repository for service config
-plugins/        PluginRegistryService + PluginRunnerService + 12 built-in plugins
+plugins/        PluginRegistryService + PluginRunnerService + built-in, WASM and third-party plugins
 shared/         GatewayExceptionFilter, GatewayError, redis.tokens, request-context, route-matcher
 ```
 
 **Middleware pipeline (order is load-bearing — do not reorder):**
 `JwtMiddleware` → `RateLimitGuard` → `LoggingInterceptor` → `ProxyMiddleware` → `PluginRunner.onRequest` → downstream → `PluginRunner.onResponse`
 
-**Plugin system:** Auth, CORS, IP restriction, rate limiting, body size limits, and header transforms are all handled as **plugins** registered on `route.plugins[]`. The 12 built-in plugins are:
+**Plugin system:** Auth, CORS, IP restriction, rate limiting, body size limits, and header transforms are all handled as **plugins** registered on `route.plugins[]`. The built-in plugins are:
 
 - Phase 1: `cors`, `ip-restriction`, `rate-limit`, `request-size-limit`, `request-transform`, `response-transform`, `basic-auth`
 - Phase 2: `oidc` (JWKS-based JWT validation), `oauth2-client-credentials` (introspection or grant injection), `hmac-auth` (Stripe-style HMAC signatures), `acl` (consumer group allow/deny), `mtls` (client cert validation)
+- Phase 3: `graphql-guard` (AST depth/complexity/introspection policy)
+- Phase 6: `graphql-federation` (supergraph execution, registered by `GraphqlFederationService`; must be the route's last plugin, #127) and `wasm:<name>` (sandboxed WebAssembly plugins installed per workspace, #123)
 
 Plugins run in listed order; returning a `PluginShortCircuit` stops the chain.
 

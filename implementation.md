@@ -2,7 +2,9 @@
 
 Each phase builds on the previous. Track implementation, regression verification, and production acceptance separately. A phase is complete only after its acceptance criteria have evidence. Run feature and regression checks after each issue; perform the formal end-to-end acceptance campaign after all phases are implemented. Production deployment is a separate release gate.
 
-## Current checkpoint — 12 October 2026
+## Current checkpoint — 26 October 2026
+
+- Phases 5 and 6 are implemented and, with the fixes for issues #69 and #90, merged into `dev` and released to `main`. The phase table below lists the issues. Formal acceptance of every phase, the additional requirements in [PROGRESS.md](PROGRESS.md#remaining-work) and issue #101 remain open.
 
 See [PROGRESS.md](PROGRESS.md) for the consolidated record of completed work,
 verification evidence and the remaining work at the bottom of that report.
