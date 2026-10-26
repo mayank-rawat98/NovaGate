@@ -17,3 +17,4 @@ export * from './lib/anomalies.ts';
 export * from './lib/billing.ts';
 export * from './lib/control-plane-regions.ts';
 export * from './lib/wasm-plugins.ts';
+export * from './lib/graphql-federation.ts';

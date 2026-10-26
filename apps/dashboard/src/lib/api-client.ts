@@ -59,6 +59,9 @@ import type {
   ControlPlaneRegionsState,
   SavePreferredRegion,
   WasmPluginState,
+  FederatedGraphSummary,
+  FederatedSubgraphConfig,
+  FederationCompositionResult,
   UploadWasmPlugin,
 } from '@api-gateway/shared-types';
 import { parseCircuitStatuses } from '@api-gateway/shared-types';
@@ -1068,6 +1071,65 @@ export function removeWasmPlugin(
 ): Promise<WasmPluginState> {
   return request(
     `/tenants/${tenantId}/wasm-plugins/${encodeURIComponent(name)}`,
+    { method: 'DELETE', signal },
+  );
+}
+export type FederatedSubgraphInput = Omit<FederatedSubgraphConfig, 'path'> & {
+  path?: string;
+  sdl: string;
+};
+export type FederatedGraphDetail = {
+  name: string;
+  subgraphs: Array<FederatedSubgraphConfig & { sdl: string }>;
+  publicSdl: string;
+  supergraphSha256: string;
+  updatedAt: string;
+};
+export function getFederatedGraphs(
+  tenantId: string,
+): Promise<{ graphs: FederatedGraphSummary[] }> {
+  return request(`/tenants/${tenantId}/graphql-federation/graphs`);
+}
+export function getFederatedGraph(
+  tenantId: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<FederatedGraphDetail> {
+  return request(
+    `/tenants/${tenantId}/graphql-federation/graphs/${encodeURIComponent(name)}`,
+    { signal },
+  );
+}
+/** Dry run: composition errors come back as data, not as a failed request. */
+export function composeFederatedGraph(
+  tenantId: string,
+  subgraphs: FederatedSubgraphInput[],
+  signal?: AbortSignal,
+): Promise<FederationCompositionResult> {
+  return request(`/tenants/${tenantId}/graphql-federation/compose`, {
+    method: 'POST',
+    body: JSON.stringify({ subgraphs }),
+    signal,
+  });
+}
+export function saveFederatedGraph(
+  tenantId: string,
+  name: string,
+  subgraphs: FederatedSubgraphInput[],
+  signal?: AbortSignal,
+): Promise<FederatedGraphDetail> {
+  return request(
+    `/tenants/${tenantId}/graphql-federation/graphs/${encodeURIComponent(name)}`,
+    { method: 'PUT', body: JSON.stringify({ subgraphs }), signal },
+  );
+}
+export function deleteFederatedGraph(
+  tenantId: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<{ success: boolean }> {
+  return request(
+    `/tenants/${tenantId}/graphql-federation/graphs/${encodeURIComponent(name)}`,
     { method: 'DELETE', signal },
   );
 }

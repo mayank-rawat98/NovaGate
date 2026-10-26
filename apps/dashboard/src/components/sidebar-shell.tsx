@@ -21,6 +21,7 @@ import {
   ArrowUpRight,
   CreditCard,
   Blocks,
+  Network,
 } from 'lucide-react';
 import { containDialogFocus } from './workspace-dialog';
 import { GatewayStatusPill } from './gateway-status-pill';
@@ -39,6 +40,12 @@ const NAV_ITEMS = [
     href: '/services',
     label: 'Services',
     icon: Server,
+    group: 'Configuration',
+  },
+  {
+    href: '/graphql',
+    label: 'GraphQL federation',
+    icon: Network,
     group: 'Configuration',
   },
   {

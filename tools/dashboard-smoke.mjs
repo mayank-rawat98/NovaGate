@@ -39,6 +39,10 @@ import {
   wasmPluginsBrowserFixture,
   verifyWasmPluginsDashboard,
 } from './wasm-plugins-dashboard-smoke.mjs';
+import {
+  graphqlFederationBrowserFixture,
+  verifyGraphqlFederationDashboard,
+} from './graphql-federation-dashboard-smoke.mjs';
 import { createServer } from 'node:http';
 import {
   existsSync,
@@ -90,6 +94,7 @@ let anomaliesEvidence;
 let billingEvidence;
 let regionsEvidence;
 let wasmPluginsEvidence;
+let graphqlFederationEvidence;
 let coldLoads = 0;
 const startedAt = Date.now();
 let metricsConnections = 0;
@@ -156,6 +161,7 @@ const billingFixture = billingBrowserFixture(base);
 const regionsFixture = regionsBrowserFixture();
 const wasmPluginsFixture = wasmPluginsBrowserFixture();
 const service = '23456789-1234-1234-1234-123456789abc';
+const graphqlFederationFixture = graphqlFederationBrowserFixture(service);
 const traceId = '0123456789abcdef0123456789abcdef';
 let traceMode = 'normal';
 const traceRequests = [];
@@ -315,6 +321,7 @@ const handleApiFixture = async (route) => {
   if (await billingFixture.handle(route)) return;
   if (await regionsFixture.handle(route)) return;
   if (await wasmPluginsFixture.handle(route)) return;
+  if (await graphqlFederationFixture.handle(route)) return;
   if (resource === 'log-retention') {
     const tenant =
       url.pathname.split('/')[url.pathname.split('/').indexOf('tenants') + 1];
@@ -2625,6 +2632,14 @@ try {
     audit,
     fixture: wasmPluginsFixture,
   });
+  graphqlFederationEvidence = await verifyGraphqlFederationDashboard({
+    page,
+    context,
+    base,
+    audit,
+    fixture: graphqlFederationFixture,
+    serviceId: service,
+  });
   writeFileSync(
     resolve(artifacts, 'accessibility.json'),
     JSON.stringify(violations, null, 2),
@@ -2685,6 +2700,7 @@ try {
           billing: billingEvidence,
           regions: regionsEvidence,
           wasmPlugins: wasmPluginsEvidence,
+          graphqlFederation: graphqlFederationEvidence,
           runtimeErrors,
           accessibilityViolations: violations,
         },

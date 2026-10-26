@@ -56,7 +56,9 @@ export class RequestBodyService {
     const hmac = !!ctx.route.plugins?.some((p) => p.name === 'hmac-auth');
     const graphql =
       ctx.route.graphql != null ||
-      !!ctx.route.plugins?.some((p) => p.name === 'graphql-guard');
+      !!ctx.route.plugins?.some(
+        (p) => p.name === 'graphql-guard' || p.name === 'graphql-federation',
+      );
     const requested = ctx.route.plugins?.find(
       (p) => p.name === 'request-size-limit',
     )?.config.maxBodyBytes;

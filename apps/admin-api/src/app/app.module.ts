@@ -60,6 +60,8 @@ import { RegionsController } from '../regions/regions.controller';
 import { RegionsService } from '../regions/regions.service';
 import { WasmPluginsController } from '../wasm-plugins/wasm-plugins.controller';
 import { WasmPluginsService } from '../wasm-plugins/wasm-plugins.service';
+import { GraphqlFederationController } from '../graphql-federation/graphql-federation.controller';
+import { GraphqlFederationService } from '../graphql-federation/graphql-federation.service';
 
 @Module({
   imports: [
@@ -112,6 +114,7 @@ import { WasmPluginsService } from '../wasm-plugins/wasm-plugins.service';
     StripeWebhookController,
     RegionsController,
     WasmPluginsController,
+    GraphqlFederationController,
   ],
   providers: [
     LogStreamService,
@@ -139,6 +142,7 @@ import { WasmPluginsService } from '../wasm-plugins/wasm-plugins.service';
     StripeService,
     RegionsService,
     WasmPluginsService,
+    GraphqlFederationService,
   ],
 })
 export class AppModule {}

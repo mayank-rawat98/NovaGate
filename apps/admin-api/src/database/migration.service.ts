@@ -17,6 +17,7 @@ import {
 } from '../billing/billing-schema';
 import { REGION_SCHEMA } from '../regions/region-schema';
 import { wasmPluginSchemaSql } from '../wasm-plugins/wasm-plugin-schema';
+import { federationSchemaSql } from '../graphql-federation/federation-schema';
 import {
   ANOMALY_SCHEDULE_SCHEMA,
   anomalySchemaSql,
@@ -77,6 +78,7 @@ export class MigrationService implements OnModuleInit {
         await manager.query(anomalySchemaSql(tenant.id));
         await manager.query(billingTenantSql(tenant.id));
         await manager.query(wasmPluginSchemaSql(tenant.id));
+        await manager.query(federationSchemaSql(tenant.id));
         await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.metrics_snapshots ALTER COLUMN rps TYPE DOUBLE PRECISION USING rps::double precision`,
         );

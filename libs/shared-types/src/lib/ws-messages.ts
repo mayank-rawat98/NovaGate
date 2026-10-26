@@ -341,6 +341,8 @@ export interface TenantConfig {
   preferredRegion?: string | null;
   /** Installed WebAssembly plugins; modules are fetched by digest. */
   wasmPlugins?: import('./wasm-plugins.ts').WasmPluginConfig[];
+  /** Composed GraphQL supergraphs for the graphql-federation plugin. */
+  federatedGraphs?: import('./graphql-federation.ts').FederatedGraphConfig[];
 }
 
 export const MAX_GRAPHQL_POLICY_DEPTH = 100;

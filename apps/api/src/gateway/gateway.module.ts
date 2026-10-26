@@ -26,6 +26,7 @@ import { MetricsReporterService } from './metrics/metrics-reporter.service';
 import { CircuitBreakerService } from './circuit-breaker/circuit-breaker.service';
 import { MeteringService } from './metering/metering.service';
 import { WasmPluginService } from './plugins/wasm/wasm-plugin.service';
+import { GraphqlFederationService } from './plugins/graphql-federation/graphql-federation.service';
 
 @Module({
   imports: [RedisModule, ConfigManagerModule, PluginsModule],
@@ -58,6 +59,7 @@ import { WasmPluginService } from './plugins/wasm/wasm-plugin.service';
     CircuitBreakerService,
     MeteringService,
     WasmPluginService,
+    GraphqlFederationService,
   ],
   exports: [WsProxyService, GrpcProxyService],
 })

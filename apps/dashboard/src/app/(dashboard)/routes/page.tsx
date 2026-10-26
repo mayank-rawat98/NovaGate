@@ -9,12 +9,15 @@ import { Pencil, Trash2, Plus, X, Puzzle } from 'lucide-react';
 import {
   getRoutes,
   getServices,
+  getFederatedGraphs,
   createRoute,
   updateRoute,
   deleteRoute,
 } from '../../../lib/api-client';
 import {
+  GRAPHQL_FEDERATION_PLUGIN,
   MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES,
+  graphqlFederationConfigProblem,
   isThirdPartyPluginName,
   wasmPluginOfRouteName,
 } from '@api-gateway/shared-types';
@@ -128,6 +131,8 @@ interface CustomPlugin {
 
 interface PluginsFormState {
   custom: CustomPlugin[];
+  federation: boolean;
+  federationConfig: { graph: string; forwardHeaders: string };
   graphql: boolean;
   graphqlConfig: GraphqlConfig;
   cors: boolean;
@@ -168,6 +173,8 @@ interface PluginsFormState {
 
 const EMPTY_PLUGINS_FORM: PluginsFormState = {
   custom: [],
+  federation: false,
+  federationConfig: { graph: '', forwardHeaders: '' },
   cors: false,
   corsConfig: {
     origins: '',
@@ -470,6 +477,21 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
     result.push({ name: 'mtls', config: { required: pf.mtlsConfig.required } });
   }
 
+  if (pf.federation) {
+    const forwardHeaders = pf.federationConfig.forwardHeaders
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    const config = {
+      graph: pf.federationConfig.graph,
+      ...(forwardHeaders.length ? { forwardHeaders } : {}),
+    };
+    if (!config.graph) throw new Error('Choose the federated graph to serve.');
+    const problem = graphqlFederationConfigProblem(config);
+    if (problem) throw new Error(`GraphQL federation: ${problem}.`);
+    result.push({ name: GRAPHQL_FEDERATION_PLUGIN, config });
+  }
+
   const modeled: Record<string, string[]> = {
     cors: ['origins', 'methods', 'headers', 'credentials', 'maxAge'],
     'ip-restriction': ['allow', 'deny'],
@@ -506,6 +528,7 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
     'graphql-guard': ['maxDepth', 'maxComplexity', 'introspectionAllowed'],
     acl: ['allow', 'deny'],
     mtls: ['required'],
+    [GRAPHQL_FEDERATION_PLUGIN]: ['graph', 'forwardHeaders'],
   };
   const custom = customPluginEntries(pf.custom);
   const remaining = [...result];
@@ -535,7 +558,15 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
         },
       });
   }
-  return [...ordered, ...remaining, ...custom];
+  // The gateway answers federated routes itself: every other plugin first.
+  const all = [...ordered, ...remaining, ...custom];
+  const federation = all.filter(
+    (entry) => entry.name === GRAPHQL_FEDERATION_PLUGIN,
+  );
+  return [
+    ...all.filter((entry) => entry.name !== GRAPHQL_FEDERATION_PLUGIN),
+    ...federation,
+  ];
 }
 
 /** Scoped npm packages (operator-installed) or wasm:<name> (marketplace). */
@@ -717,6 +748,14 @@ function pluginsToForm(
       state.mtls = true;
       state.mtlsConfig = {
         required: (cfg.required as boolean | undefined) ?? true,
+      };
+    } else if (p.name === GRAPHQL_FEDERATION_PLUGIN) {
+      state.federation = true;
+      state.federationConfig = {
+        graph: typeof cfg.graph === 'string' ? cfg.graph : '',
+        forwardHeaders: Array.isArray(cfg.forwardHeaders)
+          ? cfg.forwardHeaders.join(', ')
+          : '',
       };
     }
   }
@@ -1006,11 +1045,14 @@ function TextInput({
 function PluginsTab({
   pf,
   setPf,
+  graphs,
 }: {
   pf: PluginsFormState;
   setPf: (patch: Partial<PluginsFormState>) => void;
+  graphs: string[] | undefined;
 }) {
   const oauthModeId = useId();
+  const graphSelectId = useId();
   const activeCount =
     [
       pf.cors,
@@ -1026,6 +1068,7 @@ function PluginsTab({
       pf.graphql,
       pf.acl,
       pf.mtls,
+      pf.federation,
     ].filter(Boolean).length + pf.custom.length;
 
   return (
@@ -1709,6 +1752,67 @@ function PluginsTab({
 
       <hr className="border-gray-100" />
 
+      <PluginSection
+        title="GraphQL federation"
+        description="Answer GraphQL requests from a federated graph, calling its subgraph services"
+        enabled={pf.federation}
+        onToggle={(v) => setPf({ federation: v })}
+      >
+        <div className="flex flex-col gap-1">
+          <label
+            htmlFor={graphSelectId}
+            className="text-xs font-medium text-gray-600"
+          >
+            Federated graph
+          </label>
+          <select
+            id={graphSelectId}
+            value={pf.federationConfig.graph}
+            onChange={(e) =>
+              setPf({
+                federationConfig: {
+                  ...pf.federationConfig,
+                  graph: e.target.value,
+                },
+              })
+            }
+            className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+          >
+            <option value="">Choose a graph</option>
+            {[
+              ...new Set([
+                ...(graphs ?? []),
+                ...(pf.federationConfig.graph
+                  ? [pf.federationConfig.graph]
+                  : []),
+              ]),
+            ].map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <TextInput
+          label="Headers to forward to subgraphs (comma-sep, optional)"
+          value={pf.federationConfig.forwardHeaders}
+          onChange={(v) =>
+            setPf({
+              federationConfig: { ...pf.federationConfig, forwardHeaders: v },
+            })
+          }
+          placeholder="authorization, x-tenant"
+        />
+        <p className="text-xs text-gray-600">
+          Register subgraph schemas on the GraphQL federation page. The gateway
+          runs this plugin after every other one, then answers from the graph;
+          requests are not forwarded to the route&apos;s service. Add the
+          GraphQL guard above to limit depth, complexity and introspection.
+        </p>
+      </PluginSection>
+
+      <hr className="border-gray-100" />
+
       <CustomPluginsSection
         custom={pf.custom}
         onChange={(custom) => setPf({ custom })}
@@ -1817,6 +1921,10 @@ export default function RoutesPage() {
     tenantId ? `services-${tenantId}` : null,
     () => getServices(tenantId),
   );
+  const { data: federation } = useSWR(
+    tenantId ? `federated-graphs-${tenantId}` : null,
+    () => getFederatedGraphs(tenantId),
+  );
 
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelTab, setPanelTab] = useState<PanelTab>('basic');
@@ -1918,6 +2026,7 @@ export default function RoutesPage() {
       pluginsForm.graphql,
       pluginsForm.acl,
       pluginsForm.mtls,
+      pluginsForm.federation,
     ].filter(Boolean).length + pluginsForm.custom.length;
 
   return (
@@ -2356,7 +2465,11 @@ export default function RoutesPage() {
                 )}
 
                 {panelTab === 'plugins' && (
-                  <PluginsTab pf={pluginsForm} setPf={setPf} />
+                  <PluginsTab
+                    pf={pluginsForm}
+                    setPf={setPf}
+                    graphs={federation?.graphs.map((graph) => graph.name)}
+                  />
                 )}
               </div>
 
