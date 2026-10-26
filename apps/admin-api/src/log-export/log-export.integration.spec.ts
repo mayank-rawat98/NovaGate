@@ -191,28 +191,52 @@ integration('Private log archives on real PostgreSQL and RustFS', () => {
   }, 30000);
   afterAll(async () => {
     const failures: unknown[] = [];
-    const release = async (action: () => Promise<unknown> | void) => {
+    // Each failure names its cleanup stage and a sanitized provider code
+    // (issue #90), so a teardown failure says what was left behind.
+    const release = async (
+      stage: string,
+      action: () => Promise<unknown> | void,
+    ) => {
       try {
         await action();
       } catch (error) {
-        failures.push(error);
+        const failure = error as {
+          name?: unknown;
+          $metadata?: { httpStatusCode?: unknown };
+        };
+        const code = [
+          typeof failure?.name === 'string' ? failure.name : 'Error',
+          typeof failure?.$metadata?.httpStatusCode === 'number'
+            ? failure.$metadata.httpStatusCode
+            : undefined,
+        ]
+          .filter((part) => part !== undefined)
+          .join(' ');
+        failures.push(
+          new Error(`${stage} failed (${code.slice(0, 80)})`, {
+            cause: error,
+          }),
+        );
       }
     };
-    await release(async () => {
-      if (storage?.enabled) {
-        await storage.cleanup('tenants/');
-        await client.send(new DeleteBucketCommand({ Bucket: bucket }));
-      }
-    });
+    if (storage?.enabled) {
+      await release('archive object cleanup', () =>
+        storage.cleanup('tenants/'),
+      );
+      await release('fixture bucket deletion', () =>
+        client.send(new DeleteBucketCommand({ Bucket: bucket })),
+      );
+    }
     // Storage failure must not skip application/client/database cleanup.
-    await release(() => app?.close());
-    await release(() => client.destroy());
-    if (db?.isInitialized) await release(() => db.destroy());
+    await release('application shutdown', () => app?.close());
+    await release('S3 client shutdown', () => client.destroy());
+    if (db?.isInitialized)
+      await release('database connection', () => db.destroy());
     if (root?.isInitialized) {
-      await release(() =>
+      await release('fixture database drop', () =>
         root.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`),
       );
-      await release(() => root.destroy());
+      await release('root connection', () => root.destroy());
     }
     if (oldSecret === undefined) delete process.env.PLATFORM_JWT_SECRET;
     else process.env.PLATFORM_JWT_SECRET = oldSecret;

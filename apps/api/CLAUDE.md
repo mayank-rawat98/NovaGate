@@ -60,6 +60,8 @@ gateway/
     gateway-telemetry.service.ts    batches logs/health/errors/metrics → sends upstream
   circuit-breaker/
     circuit-breaker.service.ts      per-service sliding-window circuits; admissions settle once per attempt
+  metering/
+    metering.service.ts             monthly usage meters and consumer quotas in local Redis (#119)
   plugins/
     plugin-runner.service.ts        executes onRequest / onResponse / onError hooks in order
     plugin-registry.service.ts      DI-based registry; resolves plugin instances by name
@@ -79,6 +81,8 @@ gateway/
     mtls/                           client cert validation via ssl_client_cert header; uses tenant caCertPem from config
     graphql-guard/                  AST depth/complexity/introspection policy + shared GraphQL-over-HTTP parsing
     graphql-federation/             supergraph execution; ProxyService runs it after auth and metering (#127)
+    wasm/                           WebAssembly sandbox: worker pool, host functions, digest-verified modules (#123)
+    third-party/                    operator-pinned npm plugins behind GuardedPlugin (#113)
   services/
     service.entity.ts               TypeORM entity for service config
   shared/
@@ -106,7 +110,7 @@ gateway/
 - `PluginContext` carries: `req`, `res`, `route`, `service`, `tenantId`, `requestId`, `logger`
 - `onRequest` returning a `PluginShortCircuit` stops the chain and sends that response immediately
 - Plugins are resolved by name from `PluginRegistryService`; unknown names are silently skipped
-- All 12 built-in plugins are registered via `GATEWAY_PLUGIN` multi-provider token in `plugins.module.ts`
+- The 13 built-in plugins (Phase 1–3) are registered via the `GATEWAY_PLUGIN` multi-provider token in `plugins.module.ts`; `graphql-federation`, `wasm:<name>` and third-party plugins register themselves in `PluginRegistryService`
 - `requestId` is always present on `PluginContext` — generate UUID in `ProxyService` if absent on `req`
 - Phase 2 plugins that need config manager: `acl` and `mtls` inject `GatewayConfigManagerService` directly
 - Phase 2 plugins that need Redis: `oauth2-client-credentials` injects `REDIS_CLIENT` token

@@ -2,7 +2,9 @@
 
 Each phase builds on the previous. Track implementation, regression verification, and production acceptance separately. A phase is complete only after its acceptance criteria have evidence. Run feature and regression checks after each issue; perform the formal end-to-end acceptance campaign after all phases are implemented. Production deployment is a separate release gate.
 
-## Current checkpoint — 12 October 2026
+## Current checkpoint — 26 October 2026
+
+- Phases 5 and 6 are implemented and, with the fixes for issues #69 and #90, merged into `dev` and released to `main`. The phase table below lists the issues. Formal acceptance of every phase, the additional requirements in [PROGRESS.md](PROGRESS.md#remaining-work) and issue #101 remain open.
 
 See [PROGRESS.md](PROGRESS.md) for the consolidated record of completed work,
 verification evidence and the remaining work at the bottom of that report.
@@ -57,7 +59,7 @@ The workspace now has responsive grouped navigation, an ivory/mint/indigo palett
 
 ## RustFS archive foundation — issue #37
 
-RustFS 1.0.1 is pinned by digest in verification/production Compose. Production storage is opt-in with private networking and separate credentials. Tenant session routes create/list durable jobs and stream authorized NDJSON downloads. Workers coordinate replicas with row/tenant locks, fenced leases, bounded keyset reads under a repeatable snapshot, size/record/deadline limits, three attempts and expiry cleanup of objects/multipart uploads. Settings includes accessible archive filters, states and download recovery. Real PostgreSQL/RustFS checks cover tenancy, anonymous denial, streaming/multipart operations, snapshot pagination, failed work and lease recovery; a packaged OrbStack admin container verifies automatic processing. CI runs storage integration and browser checks.
+RustFS 1.0.4 is pinned by digest in verification/production Compose (1.0.1 left unreachable residue after caller-cancelled deletes; issue #90). Production storage is opt-in with private networking and separate credentials. Tenant session routes create/list durable jobs and stream authorized NDJSON downloads. Workers coordinate replicas with row/tenant locks, fenced leases, bounded keyset reads under a repeatable snapshot, size/record/deadline limits, three attempts and expiry cleanup of objects/multipart uploads. Settings includes accessible archive filters, states and download recovery. Real PostgreSQL/RustFS checks cover tenancy, anonymous denial, streaming/multipart operations, snapshot pagination, failed work and lease recovery; a packaged OrbStack admin container verifies automatic processing. CI runs storage integration and browser checks.
 
 This implements manual private archives, not all phase 4 criteria. Per-tenant external destination configuration, webhook/Datadog exporters, destination-specific payload policies, distributed storage and documented restore drills still require implementation and acceptance evidence. Issue #80 implements age-based raw-log retention. Issue #78 implements IP/user-agent privacy controls and historical erasure; issue #84 extends the shared policy to six stored metadata fields. Issue #72 implements scheduling for private RustFS archives; formal phase acceptance remains pending.
 
