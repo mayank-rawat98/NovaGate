@@ -196,14 +196,15 @@ Third-party plugins (#113) are npm packages the gateway operator installs and pi
 
 ## Environment Variables (Gateway)
 
-| Variable                | Default  | Notes               |
-| ----------------------- | -------- | ------------------- |
-| `PORT`                  | `3000`   |                     |
-| `REDIS_URL`             | required |                     |
-| `JWT_SECRET`            | required | min 32 chars        |
-| `CONTROL_PLANE_URL`     | required | `wss://…`           |
-| `GATEWAY_API_KEY`       | required | API key for WS auth |
-| `PROXY_TIMEOUT_MS`      | `10000`  |                     |
-| `RATE_LIMIT_WINDOW_MS`  | `60000`  |                     |
-| `RATE_LIMIT_UNAUTH_MAX` | `100`    |                     |
-| `RATE_LIMIT_AUTH_MAX`   | `500`    |                     |
+| Variable                | Default  | Notes                                         |
+| ----------------------- | -------- | --------------------------------------------- |
+| `PORT`                  | `3000`   |                                               |
+| `REDIS_URL`             | required |                                               |
+| `JWT_SECRET`            | required | min 32 chars                                  |
+| `CONTROL_PLANE_URL`     | required | `wss://…`                                     |
+| `CONTROL_PLANE_URLS`    | optional | ordered `region=wss://…` failover list (#121) |
+| `GATEWAY_API_KEY`       | required | API key for WS auth                           |
+| `PROXY_TIMEOUT_MS`      | `10000`  |                                               |
+| `RATE_LIMIT_WINDOW_MS`  | `60000`  |                                               |
+| `RATE_LIMIT_UNAUTH_MAX` | `100`    |                                               |
+| `RATE_LIMIT_AUTH_MAX`   | `500`    |                                               |

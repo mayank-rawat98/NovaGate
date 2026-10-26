@@ -235,7 +235,10 @@ TLS and routing: the VPS is shared with squadup.in, whose Caddy owns ports 80/44
 | Variable                                       | Default     | Notes                                                                                            |
 | ---------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------ |
 | `GATEWAY_API_KEY`                              | required    | Authenticates gateway with control plane                                                         |
-| `CONTROL_PLANE_URL`                            | required    | `wss://ws.novagate.dev/gateway-ws`                                                               |
+| `CONTROL_PLANE_URL`                            | required    | `wss://ws.novagate.dev/gateway-ws` (or use `CONTROL_PLANE_URLS`)                                 |
+| `CONTROL_PLANE_URLS`                           | —           | Ordered failover list, e.g. `us-east=wss://us.example/ws,eu-west=wss://eu.example/ws` (up to 8)  |
+| `CONTROL_PLANE_FAILBACK_MS`                    | `300000`    | Time on a fallback region before retrying the first one; doubles while it stays down             |
+| `GATEWAY_INSTANCE_NAME`                        | host name   | Label shown in Settings → Control plane regions                                                  |
 | `REDIS_URL`                                    | required    | Local Redis for config cache and rate limiting                                                   |
 | `JWT_SECRET`                                   | required    | Min 32 chars — validates consumer tokens                                                         |
 | `TRUSTED_PROXY_CIDRS`                          | empty       | Comma-separated trusted reverse-proxy IPs/CIDRs; forwarding headers are ignored by default       |
@@ -731,6 +734,19 @@ acceptance remains separate from local development checks.
 ### Anomaly detection
 
 Every route is compared with its own last 7 days, without rules to write. Each minute, the latest 5 minutes of 5xx rate, p95 latency and traffic are scored as a z-score against the route's 15-minute windows (issue #117). The dashboard overview lists anomalies such as "Unusual 800% rise in p95 latency on GET /api/orders: baseline 42 ms, current 380 ms", with links to that route's logs and traces. **Alerts → Anomaly detection** sets the sensitivity (z-score, default 3), the minimum request count (default 20) and up to five notification channels. Anomalies use the same alert history, delivery retries and signed webhooks as alert rules; webhook payloads carry an `anomaly` description. Operators can change the evaluation interval with `ANOMALY_EVALUATION_INTERVAL_MS` on the admin API (default 60000). See [the anomaly guide](apps/admin-api/src/anomalies/README.md). `npm exec nx run admin-api:anomaly-e2e` verifies that an injected latency spike delivers a webhook alert.
+
+### Multi-region control planes
+
+Gateways can list several control plane endpoints in priority order (issue #121), for example `CONTROL_PLANE_URLS=us-east=wss://us.example/ws,eu-west=wss://eu.example/ws`.
+
+- **Failover:** if the connected region becomes unreachable, the gateway moves to the next endpoint. Traffic keeps flowing throughout from in-memory configuration, and buffered telemetry drains, paced, after reconnecting.
+- **Failback:** after `CONTROL_PLANE_FAILBACK_MS` the gateway returns to the first endpoint, backing off while it stays down.
+- **Region label:** each control plane sets `CONTROL_PLANE_REGION`.
+- **Configuration delivery:** every region delivers the configuration version stored in the shared database every `CONTROL_PLANE_CONFIG_SYNC_INTERVAL_MS` (default 5000). An update published in one region's Redis therefore still reaches gateways connected to another.
+- **Settings → Control plane regions:** with `CONTROL_PLANE_REGIONS` set on the admin API, this page lists every gateway with its region, status and configuration version, and sets the workspace's preferred region. Gateways that know that region's endpoint move there.
+- **Operator responsibilities:** database replication and failover, and DNS, remain the operator's. Every region's control plane must reach the current writable database.
+
+`npm exec nx run @api-gateway/api:regions-e2e` kills the primary region under traffic and verifies failover, delivery of a change made during the outage, failback, the preferred-region move and complete request logs.
 
 ### Quotas, plans and billing
 
