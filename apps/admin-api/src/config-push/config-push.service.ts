@@ -12,6 +12,8 @@ import {
   disabledPluginList,
   logPrivacyPolicy,
   parsePluginStatuses,
+  parseWasmStatuses,
+  type WasmPluginState,
   type GatewayPluginState,
   TenantConfig,
 } from '@api-gateway/shared-types';
@@ -177,6 +179,9 @@ export class ConfigPushService
       disabledPlugins: disabledPluginList(tenantRows[0]?.disabledPlugins),
       suspended: null,
       preferredRegion: tenantRows[0]?.preferredRegion ?? null,
+      wasmPlugins: await manager.query(
+        `SELECT name, sha256, hooks, "allowedHosts" FROM ${schema}.wasm_plugins WHERE "deletedAt" IS NULL ORDER BY name`,
+      ),
     };
     const suspendedUntil: Date | null = tenantRows[0]?.quotaSuspendedUntil;
     if (suspendedUntil && suspendedUntil.getTime() > Date.now())
@@ -213,6 +218,31 @@ export class ConfigPushService
       )
         return none;
       return { reportedAt: report.reportedAt, plugins };
+    } catch {
+      return none;
+    }
+  }
+
+  /** Last WebAssembly plugin report from the tenant's gateway, if fresh. */
+  async wasmReport(
+    tenantId: string,
+  ): Promise<Pick<WasmPluginState, 'reportedAt' | 'statuses'>> {
+    const none = { reportedAt: null, statuses: [] };
+    try {
+      const raw = await this.redis.get(`gw:wasm:${tenantId.toLowerCase()}`);
+      if (!raw) return none;
+      const report = JSON.parse(raw) as {
+        reportedAt?: unknown;
+        plugins?: unknown;
+      };
+      const statuses = parseWasmStatuses(report.plugins);
+      if (
+        !statuses ||
+        typeof report.reportedAt !== 'string' ||
+        Number.isNaN(Date.parse(report.reportedAt))
+      )
+        return none;
+      return { reportedAt: report.reportedAt, statuses };
     } catch {
       return none;
     }

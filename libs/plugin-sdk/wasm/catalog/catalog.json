@@ -1,0 +1,45 @@
+[
+  {
+    "id": "header-stamp",
+    "name": "header-stamp",
+    "version": "1.0.0",
+    "description": "Adds a fixed header to requests, responses or both.",
+    "configKeys": [
+      {
+        "key": "header",
+        "description": "Header name (default x-novagate-wasm)"
+      },
+      { "key": "value", "description": "Header value (default 1)" },
+      {
+        "key": "target",
+        "description": "request, response or both (default both)"
+      }
+    ],
+    "allowedHosts": []
+  },
+  {
+    "id": "require-header",
+    "name": "require-header",
+    "version": "1.0.0",
+    "description": "Refuses requests that do not carry a header.",
+    "configKeys": [
+      { "key": "header", "description": "Required header (default x-api-key)" },
+      {
+        "key": "status",
+        "description": "Refusal status, 400–499 (default 401)"
+      }
+    ],
+    "allowedHosts": []
+  },
+  {
+    "id": "header-blocklist",
+    "name": "header-blocklist",
+    "version": "1.0.0",
+    "description": "Blocks requests whose header matches a listed value, for example a country code set by your CDN.",
+    "configKeys": [
+      { "key": "header", "description": "Header to check (default x-country)" },
+      { "key": "values", "description": "Comma-separated values to block" }
+    ],
+    "allowedHosts": []
+  }
+]

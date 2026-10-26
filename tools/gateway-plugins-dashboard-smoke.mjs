@@ -167,7 +167,7 @@ export async function verifyGatewayPluginsDashboard({
     const section = editor.getByRole('region', {
       name: 'Third-party plugins',
     });
-    await expect(section.getByLabel('Package name 1')).toHaveValue(
+    await expect(section.getByLabel('Plugin name 1')).toHaveValue(
       '@acme/legacy-sso',
     );
     await section
@@ -176,7 +176,7 @@ export async function verifyGatewayPluginsDashboard({
     await section
       .getByRole('button', { name: 'Add third-party plugin' })
       .click();
-    await section.getByLabel('Package name 2').fill('stamp');
+    await section.getByLabel('Plugin name 2').fill('stamp');
     await section.getByLabel('Configuration (JSON object) 2').fill('{"v":');
     await audit('route third-party plugins');
     await editor.getByRole('button', { name: 'Save Changes' }).click();
@@ -184,7 +184,7 @@ export async function verifyGatewayPluginsDashboard({
       page.getByText(/must be a scoped npm package name/),
     ).toBeVisible();
     assert.equal(saved, undefined, 'Invalid names are not sent');
-    await section.getByLabel('Package name 2').fill('@acme/stamp');
+    await section.getByLabel('Plugin name 2').fill('@acme/stamp');
     await editor.getByRole('button', { name: 'Save Changes' }).click();
     await expect(page.getByText(/is not valid JSON/)).toBeVisible();
     await section

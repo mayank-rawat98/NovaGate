@@ -8,6 +8,23 @@ No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
 
+- [Issue #123](https://github.com/mayank-rawat98/NovaGate/issues/123) adds the phase 6.6 WebAssembly plugin sandbox and Plugin marketplace:
+  - Modules run in gateway worker threads with only NovaGate host functions, a 10 MiB memory cap and a 50 ms deadline.
+  - There is no WASI or filesystem; `http_get` reaches only allowlisted HTTPS hosts.
+  - They are installed per workspace from a curated catalog or uploaded, inspected at upload and on the gateway, and delivered by SHA-256 through the control plane.
+
+  In the real-process run:
+  - a catalog plugin changed live traffic at **p50 83 µs / p99 0.8 ms** per call;
+  - a WASI filesystem import was refused;
+  - a runaway module was stopped at its deadline (about 70 ms per request) and quarantined, while other routes kept serving.
+
+  Verified on Node 26.11.1 with PostgreSQL 16 and Redis 7:
+  - **914 admin tests** (21 RustFS-dependent skipped);
+  - 653/654 gateway (the remaining test needs IPv6);
+  - 148 control-plane, 35 CLI, 10 dashboard, 5 portal and 4 SDK tests.
+
+  The dashboard browser smoke passes with zero WCAG/runtime findings. See the section below.
+
 - [Issue #121](https://github.com/mayank-rawat98/NovaGate/issues/121) adds phase 6.3 multi-region control plane failover:
   - Gateways hold ordered, region-labelled endpoints, with failover, backed-off failback and a workspace preferred region.
   - Control planes are labelled by region and serve several gateways per workspace; previously a second gateway replaced the first socket.
@@ -1599,7 +1616,7 @@ issues #69, #90 and the remaining #101 investigation stay open.
 - Multi-region control-plane failover: implemented in #121 (gateway endpoint failover/failback and preferred region, region-labelled control planes, several gateways per workspace, durable presence, database-driven configuration delivery). Database replication/promotion and DNS stay operator infrastructure; observability attribution across gateways (alert aggregation still rejects ambiguous overlap) and formal acceptance remain.
 - Usage quotas and billing metering: implemented in #119 (gateway-side metering and consumer quotas, plan caps, opt-in workspace suspension, Stripe Checkout/webhooks, Plan & usage page); invoicing beyond Stripe subscriptions, Terraform `monthly_quota` and formal acceptance remain.
 - Kubernetes controller/CRD reconciliation inside this repository.
-- WASM sandbox, resource limits and isolation checks.
+- WASM sandbox: implemented in #123 (worker-thread isolation, host-function-only imports, 10 MiB memory cap, 50 ms deadline with termination, allowlisted `http_get`, quarantine, digest-verified distribution, curated catalog and uploads, Plugin marketplace). Community listing/review, more SDK languages and formal acceptance remain.
 - GraphQL federation with subgraph failure and query-budget behavior.
 
 ### Additional requirements and final acceptance
@@ -2172,3 +2189,79 @@ post-commit publication. It passed 15 of 15 runs.
 
 Not verified here: PostgreSQL replication and promotion, and DNS. Those belong to
 the operator, and every region must reach the current writable database.
+
+## WebAssembly plugin sandbox — issue #123
+
+**What gets refused.** `inspectWasmModule` in shared-types parses the module
+binary. Modules must import their memory as `env.memory` and may import only the
+`novagate` host functions; they must export `on_request` and/or `on_response`.
+Refused: WASI and every other import, a memory of their own, shared or 64-bit
+memory, and modules over 1 MiB. The admin API applies the check at upload and
+catalog install; the gateway applies it again before compiling.
+
+**How a module runs.** In a pool of `worker_threads`, evaluated from bundled
+plain JS, with a host-created memory capped at 160 pages.
+
+- Host functions read the method, path, headers, consumer and route config, and
+  edit headers or respond. Restricted headers and operation counts are bounded.
+- `http_get` blocks on a SharedArrayBuffer while the parent fetches an
+  allowlisted HTTPS host inside the same deadline.
+- Each call has 50 ms. When it runs out, the thread is terminated and replaced,
+  and the request fails closed (502). Repeated failures quarantine the plugin
+  (503).
+
+**Distribution.**
+
+- Configuration carries name, digest, hooks and allowed hosts.
+- The gateway asks the control plane for bytes by digest (`wasm.fetch`). The
+  control plane answers only from the workspace's own table.
+- Modules are verified and cached in local Redis (`wasm:<sha256>`).
+- Routes naming a missing module fail closed.
+
+**Visibility.** Runtime state and p50/p99/max times flow back as `wasm.status`
+to the Plugin marketplace page.
+
+**Catalog.** C sources for header-stamp, require-header and header-blocklist,
+with `novagate.h` and committed builds (`tools/build-wasm-plugins.mjs`).
+
+Verification (Node 26.11.1, PostgreSQL 16, Redis 7):
+
+- `@api-gateway/api:wasm-e2e` (built admin API, control plane and gateway):
+  - **Install and effect:** header-stamp and require-header were installed from
+    the catalog and attached to routes. The gateway fetched them by digest after
+    authentication. The upstream received `x-stamp: from-wasm`, and the client
+    saw it on the response. require-header returned 401 without `x-token` and
+    200 with it.
+  - **Timing:** over 50 calls the gateway measured p50 83 µs, p99 800 µs and a
+    maximum of 1.0 ms. The median request took 4.2 ms without the plugin and
+    5.1 ms with it.
+  - **Filesystem:** uploading a module that imports
+    `wasi_snapshot_preview1.path_open` returned 400 with that reason.
+  - **Runaway module:** an uploaded infinite loop returned 502 `PLUGIN_FAILED`
+    in about 70 ms per request, three times, while another route kept answering
+    200 between them. The fourth request got 503 `PLUGIN_UNAVAILABLE`
+    (quarantined), and the report showed "Plugin exceeded 50 ms".
+- Gateway sandbox specs against the compiled fixtures:
+  - warm calls under 50 ms, with host-function results;
+  - a restricted host header refused;
+  - deadline termination with recovery;
+  - the memory cap (`memory.grow` of 200 pages returns -1);
+  - traps and queue bounds;
+  - `http_get` allowlist, HTTPS-only mode and deadline.
+- Service spec on Redis: fetch by digest, tampered bytes refused, warm start
+  from cache without the control plane, removal and unknown names failing
+  closed.
+- Admin integration:
+  - catalog digests match the committed builds;
+  - installs publish metadata without bytes;
+  - upload validation (WASI, own memory, name, version, hosts, base64), and
+    session-only uploads;
+  - removal is refused while a route uses the plugin.
+- Control plane: modules are served only from the workspace's table, reports
+  are stored, and `wasmPlugins` is sent in `auth_ok`.
+- Dashboard browser smoke: catalog install with runtime status, a refused and a
+  successful upload (bytes verified), confirmed removal with refusal, desktop
+  and mobile axe.
+
+Not verified here: a community review process for uploaded modules, and
+toolchains other than C (the ABI is language-neutral).

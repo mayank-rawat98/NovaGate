@@ -103,7 +103,7 @@ The code contains substantial work for phases 0–3, but file presence does not 
 | 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                                                                                                                         | Native gRPC/WebSocket checks exist (#41/#43), bounded AST GraphQL policies are verified (#53), and issue #55 hardens HTTP/2 lifecycle, limits and health-compatible fallback; issue #57 adds verified least-connections; formal protocol acceptance remains                                                 |
 | 4     | RustFS archives (#37), traces (#61), live metrics (#63), alerts (#65), external delivery (#95), bounded consumer rollups (#99)                                                                    | Larger workloads/provider acceptance, hydration (#69), RustFS cleanup (#90), formal acceptance and release remain                                                                                                                                                                                           |
 | 5     | REST configuration, reviewed declarative import/export (#103), private CLI/live logs (#105), automation tokens (#107), portal (#109), Terraform (#111), plugin SDK and third-party loading (#113) | CLI distribution, npm/registry publication, configuration history/rollback and formal acceptance remain                                                                                                                                                                                                     |
-| 6     | Circuit breaker (#115), anomaly detection (#117), multi-region failover (#121), quotas and billing metering (#119)                                                                                | Kubernetes reconciliation, WASM and federation remain to implement; database replication/DNS for regions are operator infrastructure                                                                                                                                                                        |
+| 6     | Circuit breaker (#115), anomaly detection (#117), multi-region failover (#121), quotas and billing metering (#119), WASM sandbox and marketplace (#123)                                           | Kubernetes reconciliation and federation remain to implement; database replication/DNS for regions are operator infrastructure                                                                                                                                                                              |
 
 ### Prerequisites discovered by audit
 
@@ -1419,6 +1419,21 @@ Controller reconciliation loop:
 ---
 
 ### 6.6 WebAssembly Plugin Sandbox
+
+Implemented in [issue #123](https://github.com/mayank-rawat98/NovaGate/issues/123).
+Instead of Wasmer or Wasmtime bindings, modules run on Node's built-in WebAssembly
+in `worker_threads`, so a runaway module can be terminated at its 50 ms deadline.
+Each module gets an import object that holds only the `novagate` host functions
+and a host-created memory capped at 10 MiB. The "no filesystem" rule is structural:
+modules importing WASI or anything else are refused by `inspectWasmModule` in the
+admin API and again on the gateway.
+
+Plugins are per workspace. The admin API stores them, configuration carries their
+digests, and gateways fetch the bytes through the control plane. The marketplace is
+a curated catalog built from C sources in `libs/plugin-sdk/wasm/`, plus uploads.
+Uploads are checked; "community" listing and review remain. The gateway itself
+measures execution time (p50 83 µs, p99 0.8 ms in `@api-gateway/api:wasm-e2e`).
+See the [guide](libs/plugin-sdk/wasm/README.md).
 
 Extend Phase 5 plugin loading to run untrusted plugins in a WASM sandbox.
 

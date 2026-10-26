@@ -5,6 +5,10 @@ import { GATEWAY_PLUGIN } from './gateway-plugin.token';
 @Injectable()
 export class PluginRegistryService {
   private readonly pluginMap = new Map<string, GatewayPlugin>();
+  /** Dynamic sources (workspace WASM plugins) consulted after fixed names. */
+  private readonly resolvers: Array<
+    (name: string) => GatewayPlugin | undefined
+  > = [];
 
   constructor(
     @Optional()
@@ -26,7 +30,7 @@ export class PluginRegistryService {
       if (seen.has(entry.name))
         throw new Error(`Duplicate configured plugin: ${entry.name}`);
       seen.add(entry.name);
-      const plugin = this.pluginMap.get(entry.name);
+      const plugin = this.lookup(entry.name);
       if (!plugin) throw new Error(`Unknown configured plugin: ${entry.name}`);
       return plugin;
     });
@@ -39,8 +43,22 @@ export class PluginRegistryService {
     this.pluginMap.set(plugin.name, plugin);
   }
 
+  addResolver(resolver: (name: string) => GatewayPlugin | undefined): void {
+    this.resolvers.push(resolver);
+  }
+
+  private lookup(name: string): GatewayPlugin | undefined {
+    const fixed = this.pluginMap.get(name);
+    if (fixed) return fixed;
+    for (const resolver of this.resolvers) {
+      const plugin = resolver(name);
+      if (plugin) return plugin;
+    }
+    return undefined;
+  }
+
   isKnown(name: string): boolean {
-    return this.pluginMap.has(name);
+    return this.lookup(name) !== undefined;
   }
 
   getRegisteredNames(): string[] {

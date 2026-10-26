@@ -298,3 +298,11 @@ every gateway instance any region recorded, with its region, Connected/Offline
 trails the workspace version; and, when the installation lists two or more
 regions, a labelled Preferred region select saved through `savePreferredRegion`
 (session only), keeping the choice on failure.
+
+Issue #123 adds the Plugin marketplace page (`/plugins`): catalog cards with
+Install, the installed table (`wasm:<name>`, source, allowed hosts, the gateway's
+reported state and p99 time per call, confirmed removal that shows the API's
+"used by routes" refusal) and an upload form (name, exact version, description,
+allowed hosts, `.wasm` file ≤ 1 MiB sent as base64; refusals show the sandbox
+reason). Mutations are session only. The route editor's custom plugin section
+accepts `wasm:<name>` as well as scoped package names.

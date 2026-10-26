@@ -39,6 +39,15 @@ import {
 import { hostname } from 'node:os';
 
 export const DEFAULT_CONTROL_PLANE = { failbackMs: 300000 };
+export const DEFAULT_WASM_PLUGINS = {
+  timeoutMs: 50,
+  workers: 2,
+  maxQueue: 64,
+  allowHttp: false,
+  failureThreshold: 5,
+  quarantineMs: 30000,
+};
+export type WasmPluginSettings = typeof DEFAULT_WASM_PLUGINS;
 export interface ControlPlaneSettings {
   /** Priority order; the workspace's preferred region moves to the front. */
   endpoints: ControlPlaneEndpoint[];
@@ -212,6 +221,7 @@ export interface GatewayConfig {
   tracing: TracingSettings;
   thirdPartyPlugins: ThirdPartyPluginSettings;
   controlPlane: ControlPlaneSettings;
+  wasmPlugins: WasmPluginSettings;
   tls: ListenerTlsSettings;
   rateLimit: {
     windowMs: number;
@@ -230,6 +240,26 @@ const parseProxyServices = (): ProxyServiceConfig[] => {
 };
 
 export default (): GatewayConfig => ({
+  wasmPlugins: {
+    timeoutMs: Number(
+      process.env.WASM_PLUGIN_TIMEOUT_MS ?? DEFAULT_WASM_PLUGINS.timeoutMs,
+    ),
+    workers: Number(
+      process.env.WASM_PLUGIN_WORKERS ?? DEFAULT_WASM_PLUGINS.workers,
+    ),
+    maxQueue: Number(
+      process.env.WASM_PLUGIN_MAX_QUEUE ?? DEFAULT_WASM_PLUGINS.maxQueue,
+    ),
+    allowHttp: process.env.WASM_PLUGIN_ALLOW_HTTP === 'true',
+    failureThreshold: Number(
+      process.env.WASM_PLUGIN_FAILURE_THRESHOLD ??
+        DEFAULT_WASM_PLUGINS.failureThreshold,
+    ),
+    quarantineMs: Number(
+      process.env.WASM_PLUGIN_QUARANTINE_MS ??
+        DEFAULT_WASM_PLUGINS.quarantineMs,
+    ),
+  },
   controlPlane: {
     // Validated by the configuration schema before this factory runs.
     endpoints:

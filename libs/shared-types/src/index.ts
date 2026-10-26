@@ -16,3 +16,4 @@ export * from './lib/circuit-breaker.ts';
 export * from './lib/anomalies.ts';
 export * from './lib/billing.ts';
 export * from './lib/control-plane-regions.ts';
+export * from './lib/wasm-plugins.ts';

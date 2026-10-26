@@ -30,6 +30,9 @@ describe('data-plane application without PostgreSQL', () => {
       .useValue({
         isConnected: () => false,
         send: jest.fn(),
+        sendTransient: () => false,
+        onMessage: () => () => undefined,
+        onAuthenticated: () => () => undefined,
       })
       .overrideProvider(GatewayTelemetryService)
       .useValue({

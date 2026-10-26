@@ -33,3 +33,15 @@ quota and increments all three keys atomically, refusing at the quota without
 counting. The 40-day TTL lets the next month still report the previous
 month's final totals. Gateways sharing a Redis share `meter:source`, so the
 admin API never double counts them.
+
+## WebAssembly plugin modules (gateway Redis)
+
+Issue #123.
+
+| Purpose                        | Key Pattern     | TTL     |
+| ------------------------------ | --------------- | ------- |
+| Verified module bytes (base64) | `wasm:<sha256>` | 30 days |
+
+The gateway checks the bytes against the digest from configuration and against the sandbox rules before storing them. A gateway that restarts while the control plane is unreachable runs its plugins from this cache.
+
+The control plane keeps the gateway's last runtime report in its own Redis under `gw:wasm:<tenantId>`, with a TTL of 180 s.

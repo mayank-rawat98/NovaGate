@@ -14,6 +14,9 @@ export type WsMessageType =
   | 'plugins.status'
   | 'circuit.state'
   | 'usage.report'
+  | 'wasm.fetch'
+  | 'wasm.module'
+  | 'wasm.status'
   | 'ack';
 
 export interface BaseWsMessage {
@@ -336,6 +339,8 @@ export interface TenantConfig {
   suspended?: import('./billing.ts').TenantSuspension | null;
   /** Control plane region gateways should prefer, when they know its endpoint. */
   preferredRegion?: string | null;
+  /** Installed WebAssembly plugins; modules are fetched by digest. */
+  wasmPlugins?: import('./wasm-plugins.ts').WasmPluginConfig[];
 }
 
 export const MAX_GRAPHQL_POLICY_DEPTH = 100;

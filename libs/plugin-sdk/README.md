@@ -7,8 +7,9 @@ attaches to routes, like the built-in `cors` or `oidc` plugins.
 ## Trust model
 
 Third-party plugins run inside the gateway process with full access. They are
-**trusted code**, not a sandbox (a WebAssembly sandbox for untrusted plugins is
-planned for phase 6.6). The safeguards are:
+**trusted code**, not a sandbox. For untrusted code, workspaces install
+[WebAssembly plugins](wasm/README.md), which run in a sandbox. The safeguards
+for npm plugins are:
 
 - **Operator opt-in.** The gateway loads only the packages its operator lists in
   `THIRD_PARTY_PLUGINS`, each pinned to an exact version. The installed

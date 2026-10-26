@@ -15,6 +15,7 @@ import {
   DEFAULT_TRACING,
   DEFAULT_METRIC_REPORTING,
   DEFAULT_CONTROL_PLANE,
+  DEFAULT_WASM_PLUGINS,
   DEFAULT_THIRD_PARTY_PLUGINS,
 } from './configuration';
 import { BlockList, isIP } from 'net';
@@ -65,6 +66,32 @@ export const configSchema = Joi.object({
     .min(1000)
     .max(86400000)
     .default(DEFAULT_CONTROL_PLANE.failbackMs),
+  WASM_PLUGIN_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(5)
+    .max(1000)
+    .default(DEFAULT_WASM_PLUGINS.timeoutMs),
+  WASM_PLUGIN_WORKERS: Joi.number()
+    .integer()
+    .min(1)
+    .max(8)
+    .default(DEFAULT_WASM_PLUGINS.workers),
+  WASM_PLUGIN_MAX_QUEUE: Joi.number()
+    .integer()
+    .min(1)
+    .max(1024)
+    .default(DEFAULT_WASM_PLUGINS.maxQueue),
+  WASM_PLUGIN_ALLOW_HTTP: Joi.string().valid('true', 'false').default('false'),
+  WASM_PLUGIN_FAILURE_THRESHOLD: Joi.number()
+    .integer()
+    .min(1)
+    .max(1000)
+    .default(DEFAULT_WASM_PLUGINS.failureThreshold),
+  WASM_PLUGIN_QUARANTINE_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(3600000)
+    .default(DEFAULT_WASM_PLUGINS.quarantineMs),
   GATEWAY_INSTANCE_NAME: Joi.string()
     .pattern(/^[\x21-\x7e][\x20-\x7e]*$/)
     .max(MAX_GATEWAY_INSTANCE_NAME_LENGTH),

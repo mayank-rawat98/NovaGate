@@ -58,6 +58,8 @@ import type {
   ConsumerQuotaUsage,
   ControlPlaneRegionsState,
   SavePreferredRegion,
+  WasmPluginState,
+  UploadWasmPlugin,
 } from '@api-gateway/shared-types';
 import { parseCircuitStatuses } from '@api-gateway/shared-types';
 import { getToken, clearToken } from './auth';
@@ -1033,6 +1035,41 @@ export function saveDisabledPlugins(
     body: JSON.stringify(input),
     signal,
   });
+}
+export function getWasmPlugins(tenantId: string): Promise<WasmPluginState> {
+  return request(`/tenants/${tenantId}/wasm-plugins`);
+}
+export function installWasmPlugin(
+  tenantId: string,
+  catalogId: string,
+  signal?: AbortSignal,
+): Promise<WasmPluginState> {
+  return request(`/tenants/${tenantId}/wasm-plugins/install`, {
+    method: 'POST',
+    body: JSON.stringify({ catalogId }),
+    signal,
+  });
+}
+export function uploadWasmPlugin(
+  tenantId: string,
+  input: UploadWasmPlugin,
+  signal?: AbortSignal,
+): Promise<WasmPluginState> {
+  return request(`/tenants/${tenantId}/wasm-plugins/upload`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+export function removeWasmPlugin(
+  tenantId: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<WasmPluginState> {
+  return request(
+    `/tenants/${tenantId}/wasm-plugins/${encodeURIComponent(name)}`,
+    { method: 'DELETE', signal },
+  );
 }
 export function getControlPlaneRegions(
   tenantId: string,
