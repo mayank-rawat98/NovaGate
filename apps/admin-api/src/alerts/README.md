@@ -1,5 +1,9 @@
 # Tenant alerting — issue #65
 
+Anomaly detection (issue #117, [guide](../anomalies/README.md)) writes events with
+`ruleId` NULL, `"anomalyId"` and an `anomaly` description into these tables and
+reuses the delivery worker unchanged.
+
 AppModule registers AlertsModule. Startup migrations finish before the evaluator
 and delivery worker bootstrap. Channel creation and external delivery require
 dedicated operator encryption keys; rules without channels retain dashboard history.

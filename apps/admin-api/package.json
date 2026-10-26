@@ -163,6 +163,27 @@
           ],
           "parallel": false
         }
+      },
+      "anomaly-e2e": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build",
+          {
+            "projects": [
+              "control-plane",
+              "@api-gateway/api"
+            ],
+            "target": "build"
+          }
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/anomaly-e2e.mjs",
+            "node tools/anomaly-e2e.mjs"
+          ],
+          "parallel": false
+        }
       }
     }
   },

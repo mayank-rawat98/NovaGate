@@ -256,6 +256,13 @@ gives the shared portal host. Scroll containers holding tables with
 screen-reader-only text must be `relative`, and tables inside the flex main
 column must not set a minimum width; either escapes and widens mobile pages.
 
+Issue #117 adds the overview anomaly feed (`AnomalyFeed`: the latest five
+anomalies with Active/Resolved state, summary, z-score and links to Logs and
+Traces prefilled through `?path=&from=&to=` and `?route=`, which those pages read
+after mount) and Alerts → Anomaly detection (`AnomalySettingsPanel`: enabled,
+z-score sensitivity, minimum requests and up to five channels, revision-checked
+with reload that keeps edits). Alert history shows an anomaly event's summary.
+
 Issue #115 adds circuit breakers to Services: a live Circuit column
 (`useLiveCircuits`: one REST snapshot, then the authenticated SSE stream with
 bounded reconnect; state keyed by workspace) showing Closed, Probing, Open, Off

@@ -105,6 +105,8 @@ export interface AlertEvent {
   state: 'firing' | 'resolved';
   value: number;
   createdAt: string;
+  /** Present on events raised by anomaly detection (ruleId is then null). */
+  anomaly?: import('./anomalies.ts').AlertAnomalyDetail | null;
   deliveries: AlertDelivery[];
 }
 export interface AlertConfiguration {

@@ -187,11 +187,25 @@ export default function TracesPage() {
   const [selected, setSelected] = useState<string>();
   const [validation, setValidation] = useState('');
   useEffect(() => {
-    const id = new URLSearchParams(window.location.search).get('traceId');
+    const query = new URLSearchParams(window.location.search);
+    const id = query.get('traceId');
     if (id && TRACE_ID.test(id)) {
       setTraceId(id);
       setParams({ traceId: id });
       setSelected(id);
+      return;
+    }
+    // ?route=/orders searches the last hour of that route.
+    const linked = query.get('route');
+    if (linked && linked.length <= 512 && !/[?#]/.test(linked)) {
+      const to = new Date();
+      setRoute(linked);
+      setPeriod('1');
+      setParams({
+        from: new Date(to.getTime() - 3600000).toISOString(),
+        to: to.toISOString(),
+        route: linked,
+      });
     }
   }, []);
   const cursor = cursors.at(-1);

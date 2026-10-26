@@ -60,9 +60,31 @@ function validatePayload(payload: AlertWebhookPayload): void {
     event.windowMinutes < 1 ||
     event.windowMinutes > 60 ||
     typeof event.createdAt !== 'string' ||
-    !Number.isFinite(Date.parse(event.createdAt))
+    !Number.isFinite(Date.parse(event.createdAt)) ||
+    !validAnomaly(event.anomaly)
   )
     throw new AlertTransportError('invalid_payload');
+}
+function validAnomaly(anomaly: AlertWebhookPayload['event']['anomaly']) {
+  if (anomaly === undefined || anomaly === null) return true;
+  const uuid = /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i;
+  return (
+    typeof anomaly === 'object' &&
+    uuid.test(anomaly.id) &&
+    typeof anomaly.method === 'string' &&
+    anomaly.method.length <= 16 &&
+    !hasControl(anomaly.method) &&
+    typeof anomaly.path === 'string' &&
+    anomaly.path.length <= 512 &&
+    !hasControl(anomaly.path) &&
+    ['up', 'down'].includes(anomaly.direction) &&
+    Number.isFinite(anomaly.baseline) &&
+    anomaly.baseline >= 0 &&
+    Number.isFinite(anomaly.zScore) &&
+    typeof anomaly.summary === 'string' &&
+    anomaly.summary.length <= 700 &&
+    !hasControl(anomaly.summary)
+  );
 }
 
 @Injectable()
@@ -168,9 +190,24 @@ export class AlertTransportService implements OnModuleDestroy {
           state: event.state,
           value: event.value,
           createdAt: event.createdAt,
+          ...(event.anomaly
+            ? {
+                anomaly: {
+                  id: event.anomaly.id,
+                  method: event.anomaly.method,
+                  path: event.anomaly.path,
+                  direction: event.anomaly.direction,
+                  baseline: event.anomaly.baseline,
+                  zScore: event.anomaly.zScore,
+                  summary: event.anomaly.summary,
+                },
+              }
+            : {}),
         },
       };
-      const text = `NovaGate alert ${event.state}: ${event.ruleName}\n${event.metric}: ${event.value} (${event.operator} ${event.threshold}), window ${event.windowMinutes} minute(s).\nEvent: ${event.id}`;
+      const text = event.anomaly
+        ? `NovaGate anomaly ${event.state}: ${event.anomaly.summary}\nz-score ${event.anomaly.zScore.toFixed(1)} against the 7-day baseline, window ${event.windowMinutes} minute(s).\nEvent: ${event.id}`
+        : `NovaGate alert ${event.state}: ${event.ruleName}\n${event.metric}: ${event.value} (${event.operator} ${event.threshold}), window ${event.windowMinutes} minute(s).\nEvent: ${event.id}`;
       let url: URL;
       let body: Buffer;
       const headers: Record<string, string> = {

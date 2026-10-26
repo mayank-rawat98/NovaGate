@@ -529,6 +529,67 @@ describe('bounded alert transport (actual local receivers)', () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+  it('carries anomaly details in webhooks and describes them in Slack text', async () => {
+    const anomaly = {
+      id: '00000000-0000-4000-8000-000000000005',
+      method: 'GET',
+      path: '/api/orders',
+      direction: 'up' as const,
+      baseline: 42,
+      zScore: 12.34,
+      summary:
+        'Unusual 805% rise in p95 latency on GET /api/orders: baseline 42 ms, current 380 ms',
+    };
+    const event = {
+      ...payload.event,
+      ruleId: null,
+      ruleName: 'Anomaly: p95_latency_ms GET /api/orders',
+      metric: 'p95_latency_ms' as const,
+      threshold: 42,
+      value: 380,
+      windowMinutes: 5,
+      anomaly,
+    };
+    const bodies: string[] = [];
+    const origin = await receiver((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk) => chunks.push(chunk));
+      req.on('end', () => {
+        bodies.push(Buffer.concat(chunks).toString());
+        res.end('ok');
+      });
+    });
+    const transport = service([origin]);
+    await transport.deliver(
+      credentials(origin),
+      { ...payload, event },
+      signal(),
+    );
+    expect(JSON.parse(bodies[0]).event).toEqual(event);
+    await transport.deliver(
+      { type: 'slack', webhookUrl: `${origin}/fixture-only-slack` },
+      { ...payload, event },
+      signal(),
+    );
+    expect(JSON.parse(bodies[1]).text).toContain(
+      `NovaGate anomaly firing: ${anomaly.summary}\nz-score 12.3 against the 7-day baseline, window 5 minute(s).`,
+    );
+    for (const invalid of [
+      { ...anomaly, id: 'anomaly' },
+      { ...anomaly, direction: 'sideways' },
+      { ...anomaly, summary: 'line\nbreak' },
+      { ...anomaly, baseline: -1 },
+      { ...anomaly, zScore: Number.POSITIVE_INFINITY },
+    ])
+      await expect(
+        transport.deliver(
+          credentials(origin),
+          { ...payload, event: { ...event, anomaly: invalid as never } },
+          signal(),
+        ),
+      ).rejects.toMatchObject({ code: 'invalid_payload' });
+    expect(bodies).toHaveLength(2);
+  });
   it('rejects invalid event data before any transport work', async () => {
     await expect(
       service().deliver(

@@ -103,7 +103,7 @@ The code contains substantial work for phases 0–3, but file presence does not 
 | 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                                                                                                                         | Native gRPC/WebSocket checks exist (#41/#43), bounded AST GraphQL policies are verified (#53), and issue #55 hardens HTTP/2 lifecycle, limits and health-compatible fallback; issue #57 adds verified least-connections; formal protocol acceptance remains                                                 |
 | 4     | RustFS archives (#37), traces (#61), live metrics (#63), alerts (#65), external delivery (#95), bounded consumer rollups (#99)                                                                    | Larger workloads/provider acceptance, hydration (#69), RustFS cleanup (#90), formal acceptance and release remain                                                                                                                                                                                           |
 | 5     | REST configuration, reviewed declarative import/export (#103), private CLI/live logs (#105), automation tokens (#107), portal (#109), Terraform (#111), plugin SDK and third-party loading (#113) | CLI distribution, npm/registry publication, configuration history/rollback and formal acceptance remain                                                                                                                                                                                                     |
-| 6     | Circuit breaker (#115)                                                                                                                                                                            | Anomalies, regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                                                                                    |
+| 6     | Circuit breaker (#115), anomaly detection (#117)                                                                                                                                                  | Regional failover, quotas, Kubernetes reconciliation, WASM and federation remain to implement                                                                                                                                                                                                               |
 
 ### Prerequisites discovered by audit
 
@@ -1264,6 +1264,18 @@ This phase targets an integrated operating experience. Compare each capability a
 ---
 
 ### 6.1 AI-Powered Anomaly Detection
+
+Implemented in [issue #117](https://github.com/mayank-rawat98/NovaGate/issues/117).
+It runs in admin-api (`apps/admin-api/src/anomalies/`) next to the Phase 4 alert
+evaluator and delivery worker, because they own the alert tables and channel
+credentials. The roadmap placed it in the control plane. The baseline uses
+retained 15-minute windows (7 days, not the roadmap's 30-day phrasing). The
+current window is the rolling last 5 minutes, scored every minute, which meets
+the 5-minute exit criterion. Anomalies open and resolve Phase 4 alert events with
+an `anomaly` description, delivered to channels chosen in Alerts → Anomaly
+detection. The overview feed links to prefilled logs and traces.
+`admin-api:anomaly-e2e` verifies a delivered alert after an injected latency
+spike. See the [anomaly guide](apps/admin-api/src/anomalies/README.md).
 
 **Differentiation target:** Integrated configuration and operation with measurable customer benefit.
 
