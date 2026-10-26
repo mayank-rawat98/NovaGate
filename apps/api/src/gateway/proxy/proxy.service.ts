@@ -12,6 +12,7 @@ import type {
   PluginContext,
   RouteConfig,
   ServiceConfig,
+  TenantConfig,
 } from '@api-gateway/shared-types';
 import { GatewayError } from '../shared/gateway-error';
 import type {
@@ -37,6 +38,23 @@ import {
   CircuitBreakerService,
   type CircuitAdmission,
 } from '../circuit-breaker/circuit-breaker.service';
+import { MeteringService } from '../metering/metering.service';
+
+/** Refuses all traffic while the workspace's monthly plan quota is exhausted. */
+export function assertNotSuspended(
+  config: TenantConfig,
+  onRefused?: () => void,
+): void {
+  const until = config.suspended ? Date.parse(config.suspended.until) : NaN;
+  if (!(until > Date.now())) return;
+  onRefused?.();
+  throw new GatewayError(
+    'QUOTA_EXCEEDED',
+    'The monthly request quota for this workspace is exhausted',
+    429,
+    { 'Retry-After': String(Math.ceil((until - Date.now()) / 1000)) },
+  );
+}
 
 // Per-request context attached to the request object so cached handlers can
 // read retry state without holding per-request closures.
@@ -100,6 +118,7 @@ export class ProxyService {
     ),
     private readonly config: ConfigService = new ConfigService(),
     @Optional() private readonly circuits?: CircuitBreakerService,
+    @Optional() private readonly metering?: MeteringService,
   ) {
     circuits?.onChange(() => {
       const names = new Map(
@@ -131,6 +150,40 @@ export class ProxyService {
     );
   }
 
+  /**
+   * Counts the request against the workspace and its consumer, refusing a
+   * consumer at its monthly quota. Redis failures admit the request.
+   */
+  private async meter(config: TenantConfig, request: Request) {
+    if (!this.metering) return;
+    const consumerId = (request as RequestWithUser).user?.consumerId;
+    const consumer = consumerId
+      ? config.consumers.find((item) => item.id === consumerId)
+      : undefined;
+    const result = await this.metering.admit(
+      consumer?.id,
+      consumer?.monthlyQuota,
+    );
+    if (result.allowed) {
+      if (result.degraded) this.metricsService.incrementMeteringError();
+      return;
+    }
+    this.metricsService.incrementQuotaRejection('consumer');
+    throw new GatewayError(
+      'QUOTA_EXCEEDED',
+      'The monthly request quota for this consumer is exhausted',
+      429,
+      {
+        'Retry-After': String(
+          Math.ceil((result.resetAt.getTime() - Date.now()) / 1000),
+        ),
+        'X-Quota-Limit': String(result.quota),
+        'X-Quota-Remaining': '0',
+        'X-Quota-Reset': result.resetAt.toISOString(),
+      },
+    );
+  }
+
   async forward(request: Request, response: ResponseWithLocals): Promise<void> {
     const originalUrl = request.originalUrl ?? request.url ?? '';
     const [pathWithoutQuery] = originalUrl.split('?');
@@ -148,6 +201,9 @@ export class ProxyService {
         404,
       );
     }
+    assertNotSuspended(config, () =>
+      this.metricsService.incrementQuotaRejection('workspace'),
+    );
 
     const preflightMethod =
       request.method === 'OPTIONS' && request.headers.origin
@@ -258,6 +314,8 @@ export class ProxyService {
     ) {
       throw new GatewayError('TOKEN_INVALID', 'Authentication required', 401);
     }
+    // Preflights are answered by the CORS plugin and are not traffic.
+    if (!isPreflight) await this.meter(config, request);
 
     const start = Date.now();
 

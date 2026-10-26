@@ -13,6 +13,7 @@ export type WsMessageType =
   | 'traces'
   | 'plugins.status'
   | 'circuit.state'
+  | 'usage.report'
   | 'ack';
 
 export interface BaseWsMessage {
@@ -110,6 +111,11 @@ export interface PluginsStatusMessage extends BaseWsMessage {
 export interface CircuitStateMessage extends BaseWsMessage {
   type: 'circuit.state';
   payload: import('./circuit-breaker.ts').CircuitStateReport;
+}
+
+export interface UsageReportMessage extends BaseWsMessage {
+  type: 'usage.report';
+  payload: import('./billing.ts').UsageReport;
 }
 
 export interface HealthMessage extends BaseWsMessage {
@@ -318,6 +324,8 @@ export interface TenantConfig {
   caCertPem?: string;
   /** Third-party plugins the workspace disabled; routes using them fail closed. */
   disabledPlugins?: string[];
+  /** Set while the workspace's monthly plan quota is exhausted. */
+  suspended?: import('./billing.ts').TenantSuspension | null;
 }
 
 export const MAX_GRAPHQL_POLICY_DEPTH = 100;
@@ -383,6 +391,8 @@ export interface ConsumerConfig {
   keyHash: string;
   rateLimitTier: 'unauthenticated' | 'authenticated' | string;
   groups?: string[];
+  /** Requests per UTC calendar month; null or absent is unlimited. */
+  monthlyQuota?: number | null;
 }
 
 /** Registered consumer attribution is UUID-only; unrelated principals have no consumer ID. */

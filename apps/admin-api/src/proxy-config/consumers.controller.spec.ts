@@ -143,9 +143,41 @@ describe('ConsumersController', () => {
         'c-1',
         JSON.stringify(['admin', 'read-only']),
         true,
+        null,
+        false,
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
+
+    it('sets or clears a monthly quota and leaves it alone when omitted', async () => {
+      const ds = mockDataSource();
+      ds.query.mockResolvedValue([{ id: 'c-1', monthlyQuota: 500 }]);
+      const { controller } = await build(ds);
+      await controller.update(TENANT, 'c-1', { monthlyQuota: 500 });
+      expect(ds.query.mock.calls[0][1].slice(3)).toEqual([500, true]);
+      await controller.update(TENANT, 'c-1', { monthlyQuota: null });
+      expect(ds.query.mock.calls[1][1].slice(3)).toEqual([null, true]);
+    });
+
+    it.each([0, -1, 1.5, 2_000_000_001, '100'])(
+      'refuses monthly quota %p before writing',
+      async (monthlyQuota) => {
+        const ds = mockDataSource();
+        const { controller } = await build(ds);
+        await expect(
+          controller.update(TENANT, 'c-1', {
+            monthlyQuota: monthlyQuota as number,
+          }),
+        ).rejects.toThrow('monthlyQuota');
+        await expect(
+          controller.create(TENANT, {
+            name: 'app',
+            monthlyQuota: monthlyQuota as number,
+          }),
+        ).rejects.toThrow('monthlyQuota');
+        expect(ds.query).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('DELETE remove', () => {

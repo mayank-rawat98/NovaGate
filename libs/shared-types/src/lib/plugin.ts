@@ -14,7 +14,10 @@ export interface PluginLogger {
 export interface PluginContext {
   /** Protocol handlers abort admission work on disconnect or deadline. */
   signal?: AbortSignal;
-  req: IncomingMessage & { user?: { id: string }; requestId: string };
+  req: IncomingMessage & {
+    user?: { id: string; consumerId?: string };
+    requestId: string;
+  };
   res: ServerResponse;
   route: RouteConfig;
   service: ServiceConfig | undefined;

@@ -24,6 +24,7 @@ import { PluginsModule } from './plugins/plugins.module';
 import { OtelService } from './telemetry/otel.service';
 import { MetricsReporterService } from './metrics/metrics-reporter.service';
 import { CircuitBreakerService } from './circuit-breaker/circuit-breaker.service';
+import { MeteringService } from './metering/metering.service';
 
 @Module({
   imports: [RedisModule, ConfigManagerModule, PluginsModule],
@@ -54,6 +55,7 @@ import { CircuitBreakerService } from './circuit-breaker/circuit-breaker.service
     OtelService,
     MetricsReporterService,
     CircuitBreakerService,
+    MeteringService,
   ],
   exports: [WsProxyService, GrpcProxyService],
 })

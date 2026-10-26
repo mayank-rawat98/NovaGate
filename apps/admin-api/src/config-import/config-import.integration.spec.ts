@@ -340,6 +340,68 @@ integration(
         });
         expect(missing.status).toBe(400);
       }));
+    it('round trips consumer monthly quotas; null and absent both mean none', () =>
+      cases.run(async () => {
+        const tenant = await workspace(),
+          config = document();
+        config.consumers = [
+          { name: 'mobile-app', groups: [], monthlyQuota: 5000 },
+          { name: 'partner', groups: [] },
+        ];
+        await seed(tenant, config);
+        const [mobile] = await db.query(
+          `SELECT "monthlyQuota" FROM ${tenantSchema(tenant)}.consumers WHERE name='mobile-app'`,
+        );
+        expect(mobile.monthlyQuota).toBe(5000);
+        const exported = parse(
+          await (await request(tenant, 'export')).text(),
+        ) as DeclarativeConfig;
+        expect(exported.consumers).toEqual([
+          {
+            name: 'mobile-app',
+            rateLimitTier: 'authenticated',
+            groups: [],
+            monthlyQuota: 5000,
+          },
+          { name: 'partner', rateLimitTier: 'authenticated', groups: [] },
+        ]);
+        const explicitNull = structuredClone(exported) as unknown as {
+          consumers: Array<Record<string, unknown>>;
+        };
+        explicitNull.consumers[1].monthlyQuota = null;
+        expect(
+          (await preview(tenant, explicitNull as unknown as DeclarativeConfig))
+            .changes,
+        ).toEqual([]);
+        // Removing the quota is a change that reaches the database.
+        delete exported.consumers[0].monthlyQuota;
+        const removal = await preview(tenant, exported);
+        expect(removal.changes).toEqual([
+          expect.objectContaining({
+            resource: 'consumer',
+            key: 'mobile-app',
+            fields: ['monthlyQuota'],
+          }),
+        ]);
+        expect((await apply(tenant, exported, removal.revision)).status).toBe(
+          200,
+        );
+        const [cleared] = await db.query(
+          `SELECT "monthlyQuota" FROM ${tenantSchema(tenant)}.consumers WHERE name='mobile-app'`,
+        );
+        expect(cleared.monthlyQuota).toBeNull();
+        for (const monthlyQuota of [0, 1.5, 2_000_000_001]) {
+          const invalid = await request(tenant, 'import?dryRun=true', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...exported,
+              consumers: [{ name: 'mobile-app', monthlyQuota }],
+            }),
+          });
+          expect(invalid.status).toBe(400);
+        }
+      }));
     it('preserves identities and existing keys, soft deletes removals and never resurrects revoked consumers', () =>
       cases.run(async () => {
         const tenant = await workspace(),

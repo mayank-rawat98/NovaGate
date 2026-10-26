@@ -6,6 +6,7 @@ import {
   Logger,
   NotFoundException,
   OnModuleDestroy,
+  Optional,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -28,6 +29,7 @@ import { platformJwtSecret } from '../auth/platform-jwt-secret';
 import { ConfigPushService } from '../config-push/config-push.service';
 import { ConsumerAnalyticsService } from '../proxy-config/consumer-analytics.service';
 import { EmailService } from '../email/email.service';
+import { BillingService, PlanLimitException } from '../billing/billing.service';
 import { canonicalTenant, PortalService } from './portal.service';
 
 export const PORTAL_SESSION_AUDIENCE = 'novagate-portal';
@@ -80,6 +82,7 @@ export class PortalDevelopersService implements OnModuleDestroy {
     private readonly push: ConfigPushService,
     private readonly analytics: ConsumerAnalyticsService,
     private readonly email: EmailService,
+    @Optional() private readonly billing?: BillingService,
   ) {}
 
   async onModuleDestroy() {
@@ -469,6 +472,9 @@ export class PortalDevelopersService implements OnModuleDestroy {
           throw new ConflictException(
             `You can hold ${settings.maxKeysPerDeveloper} active keys. Revoke an unused key first.`,
           );
+        const capacity = await this.billing?.capacityCheck(manager, tenant, [
+          'consumers',
+        ]);
         const apiKey = `gw_${tenant}_${randomBytes(32).toString('hex')}`;
         const [row] = await manager.query(
           `INSERT INTO ${schema}.consumers (name,"keyHash","rateLimitTier",groups,"portalDeveloperId","portalKeyName")
@@ -481,6 +487,14 @@ export class PortalDevelopersService implements OnModuleDestroy {
             name,
           ],
         );
+        // The provider's plan details are not the developer's business.
+        await capacity?.().catch((error) => {
+          throw error instanceof PlanLimitException
+            ? new ConflictException(
+                'This API is not issuing new keys right now. Contact its provider.',
+              )
+            : error;
+        });
         const payload = await this.push.persistUpdate(tenant, manager);
         return { key: { ...this.key(row), apiKey }, payload };
       });

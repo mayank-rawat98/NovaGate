@@ -17,6 +17,8 @@ export interface DeclarativeConfig {
     name: string;
     rateLimitTier?: string;
     groups?: string[];
+    /** Omitted when the consumer has no monthly quota. */
+    monthlyQuota?: number;
   }>;
 }
 export interface ConfigChange {

@@ -6,8 +6,10 @@ import {
   NotFoundException,
   OnApplicationBootstrap,
   OnModuleDestroy,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { BillingService } from '../billing/billing.service';
 import { DataSource, EntityManager } from 'typeorm';
 import {
   MAX_LOG_RETENTION_DAYS,
@@ -32,7 +34,10 @@ export class LogRetentionService
   private sweep?: Promise<void>;
   private stopping = false;
   private readonly operations = new Set<Promise<unknown>>();
-  constructor(private readonly db: DataSource) {}
+  constructor(
+    private readonly db: DataSource,
+    @Optional() private readonly billing?: BillingService,
+  ) {}
   onApplicationBootstrap() {
     this.timer = setInterval(() => {
       if (this.stopping || this.sweep) return;
@@ -131,6 +136,7 @@ export class LogRetentionService
             'Log retention changed. Reload current settings before saving.',
           );
         if (row.logRetentionDays === body.days) return this.state(manager, id);
+        await this.billing?.assertRetention(manager, id, body.days as number);
         await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
           'log-export:' + id,
         ]);

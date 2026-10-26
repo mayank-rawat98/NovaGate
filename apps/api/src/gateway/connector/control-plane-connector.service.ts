@@ -16,10 +16,12 @@ import {
   ConfigUpdateMessage,
   PluginsStatusMessage,
   CircuitStateMessage,
+  UsageReportMessage,
 } from '@api-gateway/shared-types';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 import { PluginLoaderService } from '../plugins/third-party/plugin-loader.service';
 import { CircuitBreakerService } from '../circuit-breaker/circuit-breaker.service';
+import { MeteringService } from '../metering/metering.service';
 
 /** Plugin reports are small snapshots; refresh so quarantine expiry is visible. */
 const PLUGIN_REPORT_DEBOUNCE_MS = 1000;
@@ -29,6 +31,9 @@ const PLUGIN_REPORT_MAX_BUFFERED_BYTES = 65536;
 const CIRCUIT_REPORT_DEBOUNCE_MS = 200;
 const CIRCUIT_REPORT_INTERVAL_MS = 30000;
 const CIRCUIT_REPORT_MAX_BUFFERED_BYTES = 262144;
+/** Usage totals are cumulative, so a dropped report is repaired by the next. */
+const USAGE_REPORT_INTERVAL_MS = 30000;
+const USAGE_REPORT_MAX_BUFFERED_BYTES = 262144;
 
 @Injectable()
 export class ControlPlaneConnectorService
@@ -49,12 +54,14 @@ export class ControlPlaneConnectorService
   private circuitReportTimer?: NodeJS.Timeout;
   private circuitReportInterval?: NodeJS.Timeout;
   private stopCircuitListener?: () => void;
+  private usageReportInterval?: NodeJS.Timeout;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly gatewayConfig: GatewayConfigManagerService,
     @Optional() private readonly plugins?: PluginLoaderService,
     @Optional() private readonly circuits?: CircuitBreakerService,
+    @Optional() private readonly metering?: MeteringService,
   ) {}
 
   async onModuleInit() {
@@ -79,6 +86,13 @@ export class ControlPlaneConnectorService
       );
       this.circuitReportInterval.unref();
     }
+    if (this.metering) {
+      this.usageReportInterval = setInterval(
+        () => void this.reportUsage(),
+        USAGE_REPORT_INTERVAL_MS,
+      );
+      this.usageReportInterval.unref();
+    }
     this.connect();
   }
 
@@ -90,6 +104,7 @@ export class ControlPlaneConnectorService
     this.stopCircuitListener?.();
     clearTimeout(this.circuitReportTimer);
     clearInterval(this.circuitReportInterval);
+    clearInterval(this.usageReportInterval);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.ws) {
       this.ws.close();
@@ -167,6 +182,7 @@ export class ControlPlaneConnectorService
           this.flushBuffer();
           this.reportPlugins();
           this.reportCircuits();
+          void this.reportUsage();
           break;
         }
         case 'config.update': {
@@ -283,6 +299,21 @@ export class ControlPlaneConnectorService
       } as CircuitStateMessage,
       CIRCUIT_REPORT_MAX_BUFFERED_BYTES,
     );
+  }
+
+  /** Cumulative monthly counters for billing metering and consumer quotas. */
+  async reportUsage() {
+    const report = await this.metering?.report();
+    if (!report) return;
+    // One month per frame keeps a full consumer list under the frame limit.
+    for (const month of report.months)
+      this.sendTransient(
+        {
+          type: 'usage.report',
+          payload: { source: report.source, months: [month] },
+        } as UsageReportMessage,
+        USAGE_REPORT_MAX_BUFFERED_BYTES,
+      );
   }
 
   isConnected(): boolean {

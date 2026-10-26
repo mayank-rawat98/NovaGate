@@ -15,10 +15,15 @@ import {
 } from 'lucide-react';
 import {
   getConsumers,
+  getConsumerQuotas,
   createConsumer,
   updateConsumer,
   deleteConsumer,
 } from '../../../lib/api-client';
+import {
+  MAX_CONSUMER_MONTHLY_QUOTA,
+  type ConsumerQuotaUsage,
+} from '@api-gateway/shared-types';
 import { ConsumerUsagePanel } from '../../../components/consumer-usage-panel';
 import { useTenantId } from '../../../lib/auth';
 import type { Consumer } from '../../../lib/api-client';
@@ -47,6 +52,48 @@ function GroupBadges({ groups }: { groups?: string[] }) {
   );
 }
 
+/** Counted requests this UTC month against the consumer's own quota. */
+function QuotaCell({ usage }: { usage?: ConsumerQuotaUsage }) {
+  if (!usage) return <span className="text-xs text-gray-500">—</span>;
+  const used = usage.requests.toLocaleString();
+  if (usage.monthlyQuota === null)
+    return <span className="text-xs text-gray-600">{used} · no quota</span>;
+  const percent = usage.percent ?? 0;
+  const tone =
+    percent >= 98
+      ? 'bg-red-600'
+      : percent >= 80
+        ? 'bg-amber-500'
+        : 'bg-indigo-600';
+  return (
+    <div className="min-w-[9rem]">
+      <p className="text-xs text-gray-700">
+        {used} / {usage.monthlyQuota.toLocaleString()}
+      </p>
+      <div
+        role="meter"
+        aria-label={`${usage.name} monthly quota used`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.min(percent, 100)}
+        className="mt-1 h-1.5 w-full rounded-full bg-gray-100"
+      >
+        <div
+          className={`h-1.5 rounded-full ${tone}`}
+          style={{ width: `${Math.min(percent, 100)}%` }}
+        />
+      </div>
+      {percent >= 98 && (
+        <p className="mt-1 text-xs font-medium text-red-700">
+          {percent >= 100
+            ? 'Quota reached: requests get 429 until the 1st'
+            : 'Almost exhausted'}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function ConsumersPage() {
   const tenantId = useTenantId() ?? '';
   return <ConsumersWorkspace key={tenantId} tenantId={tenantId} />;
@@ -63,12 +110,21 @@ function ConsumersWorkspace({ tenantId }: { tenantId: string }) {
     { refreshInterval: 30000 },
   );
 
+  const { data: quotas } = useSWR(
+    tenantId ? `consumer-quotas-${tenantId}` : null,
+    () => getConsumerQuotas(tenantId),
+    { refreshInterval: 30000 },
+  );
+  const quotaById = new Map(
+    (quotas ?? []).map((usage) => [usage.consumerId, usage]),
+  );
   const [usageId, setUsageId] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelMode, setPanelMode] = useState<'create' | 'edit'>('create');
   const [editId, setEditId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [groupsInput, setGroupsInput] = useState('');
+  const [quotaInput, setQuotaInput] = useState('');
   const [saving, setSaving] = useState(false);
 
   const [newKey, setNewKey] = useState<string | null>(null);
@@ -82,6 +138,7 @@ function ConsumersWorkspace({ tenantId }: { tenantId: string }) {
     setEditId(null);
     setName('');
     setGroupsInput('');
+    setQuotaInput('');
     setPanelOpen(true);
   }
 
@@ -90,7 +147,13 @@ function ConsumersWorkspace({ tenantId }: { tenantId: string }) {
     setEditId(consumer.id);
     setName(consumer.name);
     setGroupsInput((consumer.groups ?? []).join(', '));
+    setQuotaInput(consumer.monthlyQuota ? String(consumer.monthlyQuota) : '');
     setPanelOpen(true);
+  }
+
+  /** Blank means no quota; the input's own bounds refuse anything else. */
+  function parseQuota(input: string): number | null {
+    return input.trim() ? Number(input) : null;
   }
 
   function parseGroups(input: string): string[] {
@@ -108,14 +171,21 @@ function ConsumersWorkspace({ tenantId }: { tenantId: string }) {
       const result = await createConsumer(tenantId, {
         name: name.trim(),
         groups: parseGroups(groupsInput),
+        monthlyQuota: parseQuota(quotaInput),
       });
       setNewKey(result.apiKey);
       setPanelOpen(false);
       setName('');
       setGroupsInput('');
+      setQuotaInput('');
       await mutate();
-    } catch {
-      toast.error('Consumer could not be saved. Please try again.');
+    } catch (error) {
+      // Plan limits explain themselves; other failures stay generic.
+      toast.error(
+        error instanceof Error && /plan/i.test(error.message)
+          ? error.message
+          : 'Consumer could not be saved. Please try again.',
+      );
     } finally {
       setSaving(false);
     }
@@ -128,6 +198,7 @@ function ConsumersWorkspace({ tenantId }: { tenantId: string }) {
     try {
       await updateConsumer(tenantId, editId, {
         groups: parseGroups(groupsInput),
+        monthlyQuota: parseQuota(quotaInput),
       });
       setPanelOpen(false);
       await mutate();
@@ -197,6 +268,9 @@ function ConsumersWorkspace({ tenantId }: { tenantId: string }) {
                 Groups
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                This month
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
                 Created
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
@@ -209,7 +283,7 @@ function ConsumersWorkspace({ tenantId }: { tenantId: string }) {
             {!consumers ? (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   className="px-4 py-8 text-center text-sm text-gray-400"
                 >
                   {loadError ? 'Data unavailable' : 'Loading…'}
@@ -218,7 +292,7 @@ function ConsumersWorkspace({ tenantId }: { tenantId: string }) {
             ) : consumers.length === 0 ? (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   className="px-4 py-8 text-center text-sm text-gray-400"
                 >
                   No consumers configured
@@ -237,6 +311,9 @@ function ConsumersWorkspace({ tenantId }: { tenantId: string }) {
                     </td>
                     <td className="px-4 py-3">
                       <GroupBadges groups={consumer.groups} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <QuotaCell usage={quotaById.get(consumer.id)} />
                     </td>
                     <td className="px-4 py-3 text-gray-500">
                       {formatDate(consumer.createdAt)}
@@ -267,7 +344,8 @@ function ConsumersWorkspace({ tenantId }: { tenantId: string }) {
                           <button
                             onClick={() => openEdit(consumer)}
                             className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
-                            title="Edit groups"
+                            title="Edit groups and quota"
+                            aria-label={`Edit ${consumer.name}`}
                           >
                             <Pencil className="h-4 w-4" />
                           </button>
@@ -379,6 +457,34 @@ function ConsumersWorkspace({ tenantId }: { tenantId: string }) {
                 />
                 <p className="text-xs text-gray-400">
                   Comma-separated group names — used by ACL plugin
+                </p>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label
+                  htmlFor="consumers-field-quota"
+                  className="text-sm font-medium text-gray-700"
+                >
+                  Monthly request quota{' '}
+                  <span className="font-normal text-gray-500">(optional)</span>
+                </label>
+                <input
+                  id="consumers-field-quota"
+                  type="number"
+                  min={1}
+                  max={MAX_CONSUMER_MONTHLY_QUOTA}
+                  step={1}
+                  placeholder="No quota"
+                  value={quotaInput}
+                  onChange={(e) => setQuotaInput(e.target.value)}
+                  aria-describedby="consumers-field-quota-help"
+                  className="rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                />
+                <p
+                  id="consumers-field-quota-help"
+                  className="text-xs text-gray-500"
+                >
+                  Requests per UTC calendar month. When it is used up, this key
+                  gets 429 until the 1st. Leave blank for no quota.
                 </p>
               </div>
               <div className="mt-auto flex justify-end gap-2 pt-4">

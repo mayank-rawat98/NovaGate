@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import Joi from 'joi';
 import { isAlias, parseDocument, visit } from 'yaml';
 import {
+  MAX_CONSUMER_MONTHLY_QUOTA,
   DECLARATIVE_CONFIG_MAX_BYTES,
   DECLARATIVE_CONFIG_MAX_ENTRIES,
   MAX_SERVICE_TARGET_WEIGHT,
@@ -154,6 +155,12 @@ const documentSchema = Joi.object({
         name: text.required(),
         rateLimitTier: text.default('authenticated'),
         groups: names.default([]),
+        // Absent and null both mean no monthly quota.
+        monthlyQuota: Joi.number()
+          .integer()
+          .min(1)
+          .max(MAX_CONSUMER_MONTHLY_QUOTA)
+          .empty(null),
       }),
     )
     .required(),

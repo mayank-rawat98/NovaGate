@@ -14,6 +14,8 @@ async function bootstrap() {
   // transport sockets when disposing the adapter, including idle preconnections.
   const app = await NestFactory.create(AppModule, {
     forceCloseConnections: true,
+    // Stripe webhook signatures cover the exact request bytes.
+    rawBody: true,
   });
   app.enableShutdownHooks();
   configureConfigImportParser(app);
