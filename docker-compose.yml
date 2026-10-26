@@ -204,6 +204,8 @@ services:
       - gateway-net
       - edge
 
+networks:
+  gateway-net:
     driver: bridge
 
   # TLS and routing for novagate.dev are handled by the Caddy in the squadup
