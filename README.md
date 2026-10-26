@@ -735,6 +735,18 @@ acceptance remains separate from local development checks.
 
 Every route is compared with its own last 7 days, without rules to write. Each minute, the latest 5 minutes of 5xx rate, p95 latency and traffic are scored as a z-score against the route's 15-minute windows (issue #117). The dashboard overview lists anomalies such as "Unusual 800% rise in p95 latency on GET /api/orders: baseline 42 ms, current 380 ms", with links to that route's logs and traces. **Alerts → Anomaly detection** sets the sensitivity (z-score, default 3), the minimum request count (default 20) and up to five notification channels. Anomalies use the same alert history, delivery retries and signed webhooks as alert rules; webhook payloads carry an `anomaly` description. Operators can change the evaluation interval with `ANOMALY_EVALUATION_INTERVAL_MS` on the admin API (default 60000). See [the anomaly guide](apps/admin-api/src/anomalies/README.md). `npm exec nx run admin-api:anomaly-e2e` verifies that an injected latency spike delivers a webhook alert.
 
+### Kubernetes controller
+
+`integrations/k8s-controller` (Go, controller-runtime) manages routes and services as `GatewayRoute` and `GatewayService` resources in `novagate.dev/v1alpha1` (issue #125).
+
+- `kubectl apply -f route.yaml` creates the route in NovaGate and the gateways receive it.
+- Edits update the route in place.
+- `kubectl delete` soft-deletes it.
+- Status conditions explain refusals and conflicts.
+- A periodic resync repairs dashboard edits without needless configuration pushes.
+
+The controller uses a scoped automation token (`routes:write`, `services:write`). See the [controller guide](integrations/k8s-controller/README.md). `npm exec nx run k8s-controller:e2e` verifies it with a real kube-apiserver, admin API, control plane and gateway.
+
 ### WebAssembly plugins and the Plugin marketplace
 
 Workspaces can run their own plugins on their gateways without operator involvement (issue #123).

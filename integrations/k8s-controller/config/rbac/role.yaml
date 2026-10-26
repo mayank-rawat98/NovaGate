@@ -1,0 +1,40 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: novagate-controller
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - novagate.dev
+  resources:
+  - gatewayroutes
+  - gatewayservices
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - novagate.dev
+  resources:
+  - gatewayroutes/finalizers
+  - gatewayservices/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - novagate.dev
+  resources:
+  - gatewayroutes/status
+  - gatewayservices/status
+  verbs:
+  - get
+  - patch
+  - update

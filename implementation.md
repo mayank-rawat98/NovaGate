@@ -103,7 +103,7 @@ The code contains substantial work for phases 0–3, but file presence does not 
 | 3     | WebSocket, gRPC, HTTP/2 pool and GraphQL guard with tests                                                                                                                                         | Native gRPC/WebSocket checks exist (#41/#43), bounded AST GraphQL policies are verified (#53), and issue #55 hardens HTTP/2 lifecycle, limits and health-compatible fallback; issue #57 adds verified least-connections; formal protocol acceptance remains                                                 |
 | 4     | RustFS archives (#37), traces (#61), live metrics (#63), alerts (#65), external delivery (#95), bounded consumer rollups (#99)                                                                    | Larger workloads/provider acceptance, hydration (#69), RustFS cleanup (#90), formal acceptance and release remain                                                                                                                                                                                           |
 | 5     | REST configuration, reviewed declarative import/export (#103), private CLI/live logs (#105), automation tokens (#107), portal (#109), Terraform (#111), plugin SDK and third-party loading (#113) | CLI distribution, npm/registry publication, configuration history/rollback and formal acceptance remain                                                                                                                                                                                                     |
-| 6     | Circuit breaker (#115), anomaly detection (#117), multi-region failover (#121), quotas and billing metering (#119), WASM sandbox and marketplace (#123)                                           | Kubernetes reconciliation and federation remain to implement; database replication/DNS for regions are operator infrastructure                                                                                                                                                                              |
+| 6     | Circuit breaker (#115), anomaly detection (#117), multi-region failover (#121), quotas and billing metering (#119), WASM sandbox and marketplace (#123), Kubernetes controller (#125)             | GraphQL federation remains to implement; database replication/DNS for regions are operator infrastructure                                                                                                                                                                                                   |
 
 ### Prerequisites discovered by audit
 
@@ -1385,6 +1385,23 @@ warning is covered by the browser smoke. See the
 ---
 
 ### 6.5 Kubernetes Ingress Controller
+
+Implemented in [issue #125](https://github.com/mayank-rawat98/NovaGate/issues/125)
+as `integrations/k8s-controller` (Go, controller-runtime 0.19, Kubernetes 1.31 APIs).
+The API group is `novagate.dev/v1alpha1` rather than `gatewayx.io`, following the
+branding rule.
+
+- `GatewayRoute` follows the sketch below, except for `host`: NovaGate routes match
+  on method and path.
+- The backend is a `GatewayService` (upstream targets) or a Kubernetes Service and
+  port (a managed cluster-DNS service).
+- The controller reconciles through the admin API with an automation token. It uses
+  finalizers, status conditions and events, and repairs drift without unnecessary
+  writes.
+
+`k8s-controller:e2e` applies the example with `kubectl` against a real
+kube-apiserver. The route reached the admin API 0.3 s later and the gateway served
+it. See the [controller guide](integrations/k8s-controller/README.md).
 
 **Why this matters:** Teams deploying on Kubernetes want to define routes as Kubernetes resources, not via a dashboard. Kong has a K8s controller. We must match it.
 
