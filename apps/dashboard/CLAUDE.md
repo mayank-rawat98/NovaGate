@@ -238,3 +238,10 @@ browser verification covers all providers' explicit activation, pause/resume,
 removal/recreation, read/write failures, stale revisions, unavailable credentials,
 exact large coverage counts, interrupted writes, focus/Escape/Tab and mobile/desktop
 accessibility. No arbitrary source/payload enqueue is exposed by this UI.
+
+Issue #69: keep Next.js at 16.2 or later. The React bundled with 16.1 replayed
+a host element that suspended during hydration (on a flight lazy chunk wrapper
+that settled in a microtask) without rewinding the hydration cursor. That raised
+an intermittent #418 under CPU load on any page. `specs/hydration-replay.spec.tsx`
+reproduces the mechanism against Next.js' compiled React. Do not hide #418 from
+the browser gate.

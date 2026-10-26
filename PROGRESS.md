@@ -1,12 +1,24 @@
 # NovaGate progress and remaining work
 
-Updated: **12 October 2026** (Asia/Calcutta).
+Updated: **26 October 2026** (Asia/Calcutta).
 
 This report distinguishes merged development work, the alerting foundation checkpoint,
 and formal acceptance. The detailed roadmap is [implementation.md](implementation.md).
 No whole phase or production release is declared complete by this report.
 
 ## Current checkpoint
+
+- [Issue #69](https://github.com/mayank-rawat98/NovaGate/issues/69) finds and fixes the intermittent dashboard hydration recovery (React #418, `args[]=HTML`).
+  - **Reproduction:** under CPU contention (three production browser smokes in parallel), cold loads failed on several pages: `/services`, `/alerts`, `/billing`, `/routes` and `/settings`.
+  - **Evidence the server DOM was intact:**
+    - a DOM mutation recorder showed nothing changed it before the error;
+    - a snapshot of `<body>` at the error matched the server HTML structurally.
+  - **What threw:** the minified stack maps to `throwOnHydrationMismatch` in `beginWork`'s HostComponent branch, entered from `replaySuspendedUnitOfWork`.
+  - **Root cause:** a host element suspended while reconciling a not-yet-ready child, such as a flight lazy chunk wrapper. The child settled in a microtask, and React replayed the element without rewinding the hydration cursor. So it was matched against its own first child, and the tree was client-rendered.
+  - **The fix exists upstream:** the React bundled with Next.js 16.2 and later rewinds the cursor in that replay; Next.js 16.1.7's React does not.
+  - **The fix here:** Next.js ~16.2.12 (latest 16.2 patch; only `next` and `@next/*` platform packages change).
+  - **Regression:** `apps/dashboard/specs/hydration-replay.spec.tsx` hydrates a host element whose child is a settled-but-untracked promise, against the React build the dashboard ships. It fails on 16.1.7 ("Hydration failed because the server rendered HTML didn't match the client", both transition and default hydration) and passes on 16.2.12.
+  - **Production A/B,** same load, `dev` code, 12 smoke runs each: 16.1.7 hit #418 in **2** runs, 16.2.12 in **0**. The remaining failures were identical on both builds: alert-fixture assertions racing under six parallel browsers.
 
 - [Issue #105](https://github.com/mayank-rawat98/NovaGate/issues/105) / [PR #106](https://github.com/mayank-rawat98/NovaGate/pull/106) finishes the preserved private `gwx` CLI and authenticated live request logs. Current checks pass **862 admin tests / 48 suites**, including 15 real HTTP/PostgreSQL stream cases, and **27 built CLI tests on both Node 26 and Node 24**, with no failures or skips. Six-project static checks, five production builds, real POSIX terminal checks and four rebuilt guarded non-root images pass. The cleanup disposition covers all 85 original source paths: 19 already merged, four stale/unnecessary changes omitted and 62 useful changes reconciled through PRs #104 and #106. Scoped/revocable automation, public CLI distribution and formal phase acceptance remain open. Main remains reserved for final acceptance.
 
@@ -43,7 +55,7 @@ No whole phase or production release is declared complete by this report.
 - Alerting development checkpoint: [PR #68](https://github.com/mayank-rawat98/NovaGate/pull/68), linked to [issue #65](https://github.com/mayank-rawat98/NovaGate/issues/65), adds durable delivery and the Alerts dashboard.
 - Its issue-linked branch `65-feat-alert-delivery-and-dashboard` was created from `dev` at **653d7a00** / [PR #67](https://github.com/mayank-rawat98/NovaGate/pull/67), which merged the storage/evaluation foundations and roadmap documents. Foundation [issue #66](https://github.com/mayank-rawat98/NovaGate/issues/66) is closed.
 - **AppModule imports AlertsModule**. Authenticated endpoints and workers start after migration; missing dedicated encryption keys disable channel creation/delivery.
-- [Issue #69](https://github.com/mayank-rawat98/NovaGate/issues/69) tracks one intermittent dashboard hydration recovery. Expanded subsequent browser checks pass, but a root cause/fix has not been established. It remains part of the remaining work and formal release acceptance.
+- [Issue #69](https://github.com/mayank-rawat98/NovaGate/issues/69) tracked one intermittent dashboard hydration recovery; its root cause (React hydration replay of suspended host elements in Next.js 16.1) and fix (Next.js 16.2) are recorded in the current checkpoint above.
 - Work and verification use OrbStack. Nothing here authorizes or represents a main deployment.
 
 ## Implemented and merged into dev
