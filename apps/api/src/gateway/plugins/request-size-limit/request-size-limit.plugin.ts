@@ -1,45 +1,41 @@
 import { Injectable } from '@nestjs/common';
-import type { IncomingMessage } from 'http';
 import type {
   GatewayPlugin,
   PluginContext,
   PluginShortCircuit,
 } from '@api-gateway/shared-types';
-
-interface RequestSizeLimitConfig {
-  maxBodyBytes: number;
-}
+import {
+  BodyCaptureError,
+  RequestBodyService,
+} from '../../shared/request-body.service';
 
 @Injectable()
 export class RequestSizeLimitPlugin implements GatewayPlugin {
   readonly name = 'request-size-limit';
-
+  constructor(private readonly bodies: RequestBodyService) {}
   async onRequest(ctx: PluginContext): Promise<PluginShortCircuit | void> {
-    const limit = this.resolveLimit(ctx);
-    if (!limit) return;
-
-    const req = ctx.req as IncomingMessage;
-    const contentLength = parseInt(req.headers['content-length'] ?? '', 10);
-
-    if (!isNaN(contentLength) && contentLength > limit) {
+    if (!ctx.route.plugins?.some((p) => p.name === this.name)) return;
+    try {
+      await this.bodies.read(ctx);
+    } catch (error) {
+      const failure =
+        error instanceof BodyCaptureError
+          ? error
+          : new BodyCaptureError(400, 'BODY_CAPTURE_READ_ERROR');
       return {
-        status: 413,
-        headers: { 'Content-Type': 'application/json' },
+        status: failure.status,
+        headers: { 'Content-Type': 'application/json', Connection: 'close' },
         body: JSON.stringify({
-          error: 'REQUEST_TOO_LARGE',
-          message: 'Request body exceeds the configured size limit',
+          error: failure.code,
+          message:
+            failure.status === 413
+              ? 'Request body exceeds the configured size limit'
+              : 'Request body could not be read within gateway limits',
           requestId: ctx.requestId,
         }),
       };
+    } finally {
+      this.bodies.releaseDetached(ctx);
     }
-  }
-
-  private resolveLimit(ctx: PluginContext): number | undefined {
-    const entry = ctx.route.plugins?.find(
-      (p) => p.name === 'request-size-limit',
-    );
-    if (!entry) return undefined;
-    const cfg = entry.config as unknown as RequestSizeLimitConfig;
-    return typeof cfg.maxBodyBytes === 'number' ? cfg.maxBodyBytes : undefined;
   }
 }

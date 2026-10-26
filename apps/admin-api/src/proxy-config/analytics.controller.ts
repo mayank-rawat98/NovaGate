@@ -1,23 +1,35 @@
-import { Controller, Get, Patch, Param, Query, Body } from '@nestjs/common';
+import { AutomationScope } from '../automation-tokens/automation-scope.decorator';
+import { RETENTION_CUTOFF_SQL } from '../log-retention/log-retention.policy';
+import { logPrivacyPolicy, redactRequestLog } from '@api-gateway/shared-types';
+import type { MetricHistorySnapshot } from '@api-gateway/shared-types';
+import type { Request, Response } from 'express';
+import { MetricsStreamService } from './metrics-stream.service';
+import {
+  Controller,
+  Get,
+  Patch,
+  Param,
+  Query,
+  Body,
+  Req,
+  Res,
+  Header,
+} from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { ConfigPushService } from '../config-push/config-push.service';
-
-function tenantSchema(tenantId: string): string {
-  if (!/^[0-9a-f-]+$/i.test(tenantId)) throw new Error('Invalid tenantId');
-  return `tenant_${tenantId.replace(/-/g, '_')}`;
-}
-
-const PERIOD_INTERVALS: Record<string, string> = {
-  '1h': '1 hour',
-  '24h': '24 hours',
-  '7d': '7 days',
-};
+import {
+  ConsumerAnalyticsService,
+  consumerIdentity,
+} from './consumer-analytics.service';
+import { tenantSchema } from '../tenants/tenant-schema';
 
 @Controller('tenants/:tenantId')
 export class AnalyticsController {
   constructor(
     private readonly dataSource: DataSource,
     private readonly configPush: ConfigPushService,
+    private readonly metricsStream: MetricsStreamService,
+    private readonly consumerAnalytics: ConsumerAnalyticsService,
   ) {}
 
   private async withSchema<T>(
@@ -26,12 +38,16 @@ export class AnalyticsController {
   ): Promise<T> {
     const schema = tenantSchema(tenantId);
     return this.dataSource.transaction(async (manager) => {
-      await manager.query(`SET LOCAL search_path TO ${schema}, public`);
+      await manager.query(
+        `SET LOCAL search_path TO ${schema}, public; SET LOCAL statement_timeout='3s'; SET LOCAL lock_timeout='1s'`,
+      );
       return fn(manager, schema);
     });
   }
 
+  @AutomationScope('logs:read')
   @Get('logs')
+  @Header('Cache-Control', 'no-store')
   async getLogs(
     @Param('tenantId') tenantId: string,
     @Query('from') from?: string,
@@ -41,9 +57,19 @@ export class AnalyticsController {
     @Query('consumerId') consumerId?: string,
     @Query('page') page = '1',
   ) {
+    if (consumerId !== undefined) consumerId = consumerIdentity(consumerId);
     return this.withSchema(tenantId, async (manager) => {
-      const params: (string | number)[] = [];
-      const conditions: string[] = [];
+      await manager.query(
+        `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,
+        [`log-receipt:${tenantId.toLowerCase()}`],
+      );
+      const [tenant] = await manager.query(
+        `SELECT "logPrivacy",to_char(${RETENTION_CUTOFF_SQL} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cutoff FROM public.tenants WHERE id=$1`,
+        [tenantId],
+      );
+      const params: (string | number)[] = [tenant?.cutoff];
+      const hidden = logPrivacyPolicy(tenant?.logPrivacy).redactedFields ?? [];
+      const conditions: string[] = ['"receivedAt">=$1::timestamptz'];
 
       if (from) {
         params.push(from);
@@ -55,13 +81,16 @@ export class AnalyticsController {
       }
       if (path) {
         params.push(`%${path}%`);
-        conditions.push(`path ILIKE $${params.length}`);
+        conditions.push(
+          `${hidden.includes('path') ? "'[redacted]'" : 'path'} ILIKE $${params.length}`,
+        );
       }
       if (statusCode) {
         params.push(Number(statusCode));
         conditions.push(`"statusCode" = $${params.length}`);
       }
       if (consumerId) {
+        if (hidden.includes('consumerId')) conditions.push('FALSE');
         params.push(consumerId);
         conditions.push(`"consumerId" = $${params.length}`);
       }
@@ -72,13 +101,22 @@ export class AnalyticsController {
       const offset = (Math.max(1, Number(page)) - 1) * 50;
       params.push(offset);
 
-      return manager.query(
+      const rows: Array<Record<string, unknown>> = await manager.query(
         `SELECT * FROM request_logs ${where} ORDER BY timestamp DESC LIMIT 50 OFFSET $${params.length}`,
         params,
+      );
+      return rows.map(
+        ({
+          receivedAt: _receivedAt,
+          usageRollupVersion: _usageRollupVersion,
+          pathRollupVersion: _pathRollupVersion,
+          ...row
+        }) => redactRequestLog(row, tenant?.logPrivacy),
       );
     });
   }
 
+  @AutomationScope('analytics:read')
   @Get('health')
   async getHealth(@Param('tenantId') tenantId: string) {
     return this.withSchema(tenantId, (manager) =>
@@ -88,6 +126,7 @@ export class AnalyticsController {
     );
   }
 
+  @AutomationScope('analytics:read')
   @Get('errors')
   async getErrors(
     @Param('tenantId') tenantId: string,
@@ -116,6 +155,7 @@ export class AnalyticsController {
     });
   }
 
+  @AutomationScope('analytics:write')
   @Patch('errors/:errorId')
   async resolveError(
     @Param('tenantId') tenantId: string,
@@ -131,19 +171,68 @@ export class AnalyticsController {
     });
   }
 
-  @Get('metrics')
-  async getMetrics(
+  @AutomationScope('analytics:read')
+  @Get('metrics/stream')
+  streamMetrics(
     @Param('tenantId') tenantId: string,
-    @Query('period') period = '24h',
+    @Req() request: Request & { sessionExpiresAt?: number },
+    @Res() response: Response,
   ) {
-    const interval = PERIOD_INTERVALS[period] ?? PERIOD_INTERVALS['24h'];
-    return this.withSchema(tenantId, (manager) =>
-      manager.query(
-        `SELECT * FROM metrics_snapshots WHERE timestamp >= NOW() - INTERVAL '${interval}' ORDER BY timestamp ASC`,
-      ),
+    return this.metricsStream.open(
+      tenantId,
+      response,
+      request.sessionExpiresAt,
     );
   }
 
+  @AutomationScope('analytics:read')
+  @Get('consumers/:consumerId/stats')
+  @Header('Cache-Control', 'no-store')
+  getConsumerStats(
+    @Param('tenantId') tenantId: string,
+    @Param('consumerId') consumerId: string,
+    @Query('period') period = '24h',
+  ) {
+    return this.consumerAnalytics.get(tenantId, consumerId, period);
+  }
+
+  @AutomationScope('analytics:read')
+  @Get('metrics')
+  @Header('Cache-Control', 'no-store')
+  async getMetrics(
+    @Param('tenantId') tenantId: string,
+    @Query('period') period = '24h',
+    @Query('consumerId') consumerId?: string,
+  ): Promise<MetricHistorySnapshot[]> {
+    if (consumerId !== undefined) {
+      const usage = await this.consumerAnalytics.get(
+        tenantId,
+        consumerId,
+        period,
+      );
+      // Legacy metric snapshots have numeric latency fields. Empty consumer buckets
+      // carry zero rates; missing latency samples use 0. The stats API exposes null.
+      return usage.series.map((b) => ({
+        timestamp: b.timestamp,
+        rps: b.rps,
+        errorRate: b.errorRate,
+        p50Ms: b.p50Ms ?? 0,
+        p95Ms: b.p95Ms ?? 0,
+        p99Ms: b.p99Ms ?? 0,
+        consumerUsage: {
+          source: usage.source,
+          latencySamples: b.latencySamples,
+          ...(usage.rollup ? { rollup: usage.rollup } : {}),
+          ...(b.observedSeconds !== undefined
+            ? { observedSeconds: b.observedSeconds }
+            : {}),
+        },
+      }));
+    }
+    return this.metricsStream.history(tenantId, period);
+  }
+
+  @AutomationScope('analytics:read')
   @Get('gateway-status')
   async getGatewayStatus(@Param('tenantId') tenantId: string) {
     const online = await this.configPush.isOnline(tenantId);

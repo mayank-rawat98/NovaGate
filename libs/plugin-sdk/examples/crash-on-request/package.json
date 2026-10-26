@@ -1,0 +1,7 @@
+{
+  "name": "@novagate-examples/crash-on-request",
+  "version": "1.0.0",
+  "description": "Test fixture: crashes asynchronously outside the hook, and also throws or hangs inside it",
+  "main": "index.js",
+  "license": "MIT"
+}

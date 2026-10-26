@@ -1,12 +1,70 @@
+import { validateMetricPayload } from '@api-gateway/shared-types';
 import type {
   TenantEntity,
+  ConfigPreview,
+  ConfigApplyResult,
   RouteEntity,
   ServiceEntity,
   ConsumerEntity,
+  ConsumerAnalyticsPeriod,
+  ConsumerUsageStats,
   RequestLog,
   ErrorEvent,
   HealthSnapshot,
+  LogPrivacyState,
+  LogRetentionState,
+  SaveLogRetention,
+  SaveLogPrivacy,
+  LogExportFilter,
+  LogExportJob,
+  LogExportList,
+  LogExportScheduleState,
+  SaveLogExportSchedule,
+  LogExportDestination,
+  LogExportDestinationList,
+  CreateLogExportDestination,
+  UpdateLogExportDestination,
+  LogExportDeliveryState,
+  LogExportDeliveryHistory,
+  LogExportDeliverySchedule,
+  SaveLogExportDeliverySchedule,
+  RemoveLogExportDeliverySchedule,
+  TraceListResponse,
+  TraceDetailResponse,
+  MetricsSnapshot,
+  MetricHistorySnapshot,
+  AlertConfiguration,
+  AlertRule,
+  AlertChannel,
+  AlertEvent,
+  CreateAlertRuleDto,
+  UpdateAlertRuleDto,
+  CreateAlertChannelDto,
+  UpdateAlertChannelDto,
+  AutomationTokenSummary,
+  CreateAutomationToken,
+  CreatedAutomationToken,
+  PortalSettings,
+  SavePortalSettings,
+  PortalDeveloper,
+  GatewayPluginState,
+  SaveDisabledPlugins,
+  CircuitBreakerConfig,
+  CircuitBreakerSnapshot,
+  Anomaly,
+  AnomalySettings,
+  SaveAnomalySettings,
+  BillingOverview,
+  ConsumerQuotaUsage,
+  ControlPlaneRegionsState,
+  SavePreferredRegion,
+  WasmPluginState,
+  FederatedGraphSummary,
+  FederatedSubgraphConfig,
+  FederationCompositionResult,
+  UploadWasmPlugin,
 } from '@api-gateway/shared-types';
+import { parseCircuitStatuses } from '@api-gateway/shared-types';
 import { getToken, clearToken } from './auth';
 
 export type {
@@ -17,20 +75,12 @@ export type {
   RequestLog,
   ErrorEvent,
   HealthSnapshot,
+  MetricsSnapshot,
 };
 
 export interface GatewayStatus {
   tenantId: string;
   online: boolean;
-}
-
-export interface MetricsSnapshot {
-  rps: number;
-  p50Ms: number;
-  p95Ms: number;
-  p99Ms: number;
-  errorRate: number;
-  timestamp: string;
 }
 
 export interface PaginatedResult<T> {
@@ -62,11 +112,22 @@ export type CreateRouteDto = Pick<
   enabled?: boolean;
   retry?: RouteEntity['retry'];
   plugins?: RouteEntity['plugins'];
+  graphql?: RouteEntity['graphql'];
+  portal?: RouteEntity['portal'];
 };
 export type UpdateRouteDto = Partial<CreateRouteDto>;
 export type CreateServiceDto = Pick<ServiceEntity, 'name' | 'targets'> & {
+  loadBalancing?: ServiceEntity['loadBalancing'];
   healthCheckPath?: string;
+  healthCheckIntervalMs?: number;
+  healthCheckProtocol?: 'http' | 'grpc';
+  healthCheckService?: string;
+  h2?: boolean;
+  supportsWebSocket?: boolean;
+  unhealthyFallback?: boolean;
   timeoutMs?: number;
+  /** Null: no breaker. Omitted on create: the default breaker. */
+  circuitBreaker?: CircuitBreakerConfig | null;
 };
 export type UpdateServiceDto = Partial<CreateServiceDto>;
 
@@ -74,11 +135,22 @@ export type CreateConsumerDto = {
   name: string;
   rateLimitTier?: string;
   groups?: string[];
+  /** Requests per UTC month; null or omitted for no quota. */
+  monthlyQuota?: number | null;
 };
-export type UpdateConsumerDto = { groups?: string[] };
+export type UpdateConsumerDto = {
+  groups?: string[];
+  monthlyQuota?: number | null;
+};
 export type CreateConsumerResult = ConsumerEntity & { apiKey: string };
 
-const BASE = 'https://api.novagate.dev';
+// Same-origin requests use the Next.js admin API rewrite in each deployment.
+// An explicit public origin remains available for installations that need it.
+const BASE = (process.env.NEXT_PUBLIC_ADMIN_API_URL ?? '').replace(/\/$/, '');
+/** Shared developer portal host for workspaces without a custom domain. */
+export const PORTAL_URL = (
+  process.env.NEXT_PUBLIC_PORTAL_URL ?? 'http://localhost:3004'
+).replace(/\/+$/, '');
 function toQuery(
   params: Record<string, string | number | boolean | undefined>,
 ): string {
@@ -94,7 +166,10 @@ function toQuery(
   );
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function authorizedFetch(
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
   const token = getToken();
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
@@ -112,9 +187,29 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
-    throw new Error(text || `HTTP ${res.status}`);
+    let message = text;
+    try {
+      const error = JSON.parse(text) as { message?: unknown };
+      if (typeof error.message === 'string') message = error.message;
+      else if (
+        Array.isArray(error.message) &&
+        error.message.every((item) => typeof item === 'string')
+      )
+        message = error.message.join('. ');
+      else message = `Request failed (HTTP ${res.status}). Please try again.`;
+    } catch {
+      /* Plain-text API errors remain readable. */
+    }
+    throw new Error(
+      message || `Request failed (HTTP ${res.status}). Please try again.`,
+    );
   }
 
+  return res;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await authorizedFetch(path, init);
   if (res.status === 204) return undefined as unknown as T;
   return res.json() as Promise<T>;
 }
@@ -172,6 +267,47 @@ export function resetPassword(
 
 export function getTenant(id: string): Promise<TenantEntity> {
   return request(`/tenants/${id}`);
+}
+
+export async function exportConfiguration(
+  tenantId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const response = await authorizedFetch(`/tenants/${tenantId}/export`, {
+    signal,
+    cache: 'no-store',
+  });
+  return response.text();
+}
+export function previewConfiguration(
+  tenantId: string,
+  document: string,
+  signal?: AbortSignal,
+): Promise<ConfigPreview> {
+  return request(`/tenants/${tenantId}/import?dryRun=true`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/yaml' },
+    body: document,
+    signal,
+    cache: 'no-store',
+  });
+}
+export function applyConfiguration(
+  tenantId: string,
+  document: string,
+  revision: string,
+  signal?: AbortSignal,
+): Promise<ConfigApplyResult> {
+  return request(`/tenants/${tenantId}/import?dryRun=false`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/yaml',
+      'If-Match': `"${revision}"`,
+    },
+    body: document,
+    signal,
+    cache: 'no-store',
+  });
 }
 
 export function rotateGatewayKey(
@@ -293,6 +429,18 @@ export function getConsumers(tenantId: string): Promise<ConsumerEntity[]> {
   return request(`/tenants/${tenantId}/consumers`);
 }
 
+export function getConsumerUsage(
+  tenantId: string,
+  consumerId: string,
+  period: ConsumerAnalyticsPeriod = '24h',
+  signal?: AbortSignal,
+): Promise<ConsumerUsageStats> {
+  return request(
+    `/tenants/${tenantId}/consumers/${consumerId}/stats${toQuery({ period })}`,
+    { signal },
+  );
+}
+
 export function createConsumer(
   tenantId: string,
   dto: CreateConsumerDto,
@@ -339,6 +487,715 @@ export function getHealth(tenantId: string): Promise<HealthSnapshot[]> {
 export function getMetrics(
   tenantId: string,
   period: Period = '24h',
-): Promise<MetricsSnapshot[]> {
-  return request(`/tenants/${tenantId}/metrics?period=${period}`);
+  signal?: AbortSignal,
+  consumerId?: string,
+): Promise<MetricHistorySnapshot[]> {
+  return request(
+    `/tenants/${tenantId}/metrics${toQuery({ period, consumerId })}`,
+    { signal },
+  );
+}
+
+export function getLogExports(tenantId: string): Promise<LogExportList> {
+  return request(`/tenants/${tenantId}/log-exports`);
+}
+export function getLogExportDestinations(
+  tenantId: string,
+  signal?: AbortSignal,
+): Promise<LogExportDestinationList> {
+  return request(`/tenants/${tenantId}/log-export-destinations`, { signal });
+}
+export function createLogExportDestination(
+  tenantId: string,
+  input: CreateLogExportDestination,
+  signal?: AbortSignal,
+): Promise<LogExportDestination> {
+  return request(`/tenants/${tenantId}/log-export-destinations`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+export function getLogExportDelivery(
+  tenantId: string,
+  id: string,
+  signal?: AbortSignal,
+): Promise<LogExportDeliveryState> {
+  return request(
+    `/tenants/${tenantId}/log-export-destinations/${id}/delivery`,
+    { signal },
+  );
+}
+export function getLogExportDeliveryHistory(
+  tenantId: string,
+  id: string,
+  signal?: AbortSignal,
+): Promise<LogExportDeliveryHistory> {
+  return request(
+    `/tenants/${tenantId}/log-export-destinations/${id}/delivery/history`,
+    { signal },
+  );
+}
+export function saveLogExportDelivery(
+  tenantId: string,
+  id: string,
+  input: SaveLogExportDeliverySchedule,
+  signal?: AbortSignal,
+): Promise<LogExportDeliverySchedule> {
+  return request(
+    `/tenants/${tenantId}/log-export-destinations/${id}/delivery`,
+    { method: 'PUT', body: JSON.stringify(input), signal },
+  );
+}
+export function removeLogExportDelivery(
+  tenantId: string,
+  id: string,
+  input: RemoveLogExportDeliverySchedule,
+  signal?: AbortSignal,
+): Promise<{ removed: true }> {
+  return request(
+    `/tenants/${tenantId}/log-export-destinations/${id}/delivery`,
+    { method: 'DELETE', body: JSON.stringify(input), signal },
+  );
+}
+export function updateLogExportDestination(
+  tenantId: string,
+  id: string,
+  input: UpdateLogExportDestination,
+  signal?: AbortSignal,
+): Promise<LogExportDestination> {
+  return request(`/tenants/${tenantId}/log-export-destinations/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+export function reencryptLogExportDestination(
+  tenantId: string,
+  id: string,
+  expectedRevision: string,
+  signal?: AbortSignal,
+): Promise<LogExportDestination> {
+  return request(
+    `/tenants/${tenantId}/log-export-destinations/${id}/rotate-key`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ expectedRevision }),
+      signal,
+    },
+  );
+}
+export function removeLogExportDestination(
+  tenantId: string,
+  id: string,
+  expectedRevision: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  return request(`/tenants/${tenantId}/log-export-destinations/${id}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ expectedRevision }),
+    signal,
+  });
+}
+export function createLogExport(
+  tenantId: string,
+  filter: LogExportFilter,
+): Promise<LogExportJob> {
+  return request(`/tenants/${tenantId}/log-exports`, {
+    method: 'POST',
+    body: JSON.stringify(filter),
+  });
+}
+export function getLogExportSchedule(
+  tenantId: string,
+): Promise<LogExportScheduleState> {
+  return request(`/tenants/${tenantId}/log-exports/schedule`);
+}
+export function saveLogExportSchedule(
+  tenantId: string,
+  input: SaveLogExportSchedule,
+  signal?: AbortSignal,
+): Promise<LogExportScheduleState> {
+  return request(`/tenants/${tenantId}/log-exports/schedule`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+export function removeLogExportSchedule(
+  tenantId: string,
+  expectedRevision: string,
+  signal?: AbortSignal,
+): Promise<LogExportScheduleState> {
+  return request(`/tenants/${tenantId}/log-exports/schedule`, {
+    method: 'DELETE',
+    body: JSON.stringify({ expectedRevision }),
+    signal,
+  });
+}
+export function retryLogExport(
+  tenantId: string,
+  id: string,
+  signal?: AbortSignal,
+): Promise<LogExportJob> {
+  return request(`/tenants/${tenantId}/log-exports/${id}/retry`, {
+    method: 'POST',
+    signal,
+  });
+}
+export async function downloadLogExport(
+  tenantId: string,
+  id: string,
+): Promise<void> {
+  const response = await authorizedFetch(
+    `/tenants/${tenantId}/log-exports/${id}/download`,
+  );
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `novagate-logs-${id}.ndjson`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Allow the browser to begin the download before releasing the blob URL.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export type {
+  OidcPluginConfig,
+  OAuth2PluginConfig,
+} from '@api-gateway/shared-types';
+
+export type { MtlsPluginConfig } from '@api-gateway/shared-types';
+
+export type { HmacPluginConfig } from '@api-gateway/shared-types';
+
+export type { GraphqlPolicy } from '@api-gateway/shared-types';
+
+export type TraceParams = {
+  from?: string;
+  to?: string;
+  traceId?: string;
+  requestId?: string;
+  route?: string;
+  errorsOnly?: boolean;
+  cursor?: string;
+};
+export function getTraces(tenantId: string, params: TraceParams = {}) {
+  return request<TraceListResponse>(
+    `/tenants/${tenantId}/traces${toQuery(params)}`,
+  );
+}
+export function getTrace(tenantId: string, traceId: string) {
+  return request<TraceDetailResponse>(
+    `/tenants/${tenantId}/traces/${encodeURIComponent(traceId)}`,
+  );
+}
+
+// ─── Tenant alerts ───────────────────────────────────────────────────────────
+export function getAlertConfiguration(tenantId: string) {
+  return request<AlertConfiguration>(`/tenants/${tenantId}/alerts`);
+}
+export function getAlertHistory(tenantId: string) {
+  return request<AlertEvent[]>(`/tenants/${tenantId}/alerts/history`);
+}
+export function createAlertRule(
+  tenantId: string,
+  dto: CreateAlertRuleDto,
+  signal?: AbortSignal,
+) {
+  return request<AlertRule>(`/tenants/${tenantId}/alerts/rules`, {
+    method: 'POST',
+    body: JSON.stringify(dto),
+    signal,
+  });
+}
+export function updateAlertRule(
+  tenantId: string,
+  id: string,
+  dto: UpdateAlertRuleDto,
+  signal?: AbortSignal,
+) {
+  return request<AlertRule>(`/tenants/${tenantId}/alerts/rules/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(dto),
+    signal,
+  });
+}
+export function deleteAlertRule(
+  tenantId: string,
+  id: string,
+  revision: number,
+  signal?: AbortSignal,
+) {
+  return request<{ success: true }>(`/tenants/${tenantId}/alerts/rules/${id}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ revision }),
+    signal,
+  });
+}
+export function createAlertChannel(
+  tenantId: string,
+  dto: CreateAlertChannelDto,
+  signal?: AbortSignal,
+) {
+  return request<AlertChannel>(`/tenants/${tenantId}/alerts/channels`, {
+    method: 'POST',
+    body: JSON.stringify(dto),
+    signal,
+  });
+}
+export function updateAlertChannel(
+  tenantId: string,
+  id: string,
+  dto: UpdateAlertChannelDto,
+  signal?: AbortSignal,
+) {
+  return request<AlertChannel>(`/tenants/${tenantId}/alerts/channels/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(dto),
+    signal,
+  });
+}
+export function deleteAlertChannel(
+  tenantId: string,
+  id: string,
+  revision: number,
+  signal?: AbortSignal,
+) {
+  return request<{ success: true }>(
+    `/tenants/${tenantId}/alerts/channels/${id}`,
+    { method: 'DELETE', body: JSON.stringify({ revision }), signal },
+  );
+}
+
+export function validateMetricSnapshot(value: unknown): MetricsSnapshot {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error('Invalid live metric sample');
+  const snapshot = value as MetricsSnapshot;
+  if (
+    Object.keys(snapshot).some(
+      (key) =>
+        !['rps', 'p50Ms', 'p95Ms', 'p99Ms', 'errorRate', 'timestamp'].includes(
+          key,
+        ),
+    ) ||
+    typeof snapshot.timestamp !== 'string' ||
+    snapshot.timestamp.length > 32 ||
+    !Number.isFinite(Date.parse(snapshot.timestamp))
+  )
+    throw new Error('Invalid live metric sample');
+  validateMetricPayload({
+    rps: snapshot.rps,
+    p50: snapshot.p50Ms,
+    p95: snapshot.p95Ms,
+    p99: snapshot.p99Ms,
+    errorRate: snapshot.errorRate,
+  });
+  return snapshot;
+}
+export async function streamMetrics(
+  tenantId: string,
+  signal: AbortSignal,
+  onSnapshot: (snapshot: MetricsSnapshot) => void,
+  onReady: () => void,
+): Promise<void> {
+  const response = await authorizedFetch(
+    `/tenants/${encodeURIComponent(tenantId)}/metrics/stream`,
+    { signal, headers: { Accept: 'text/event-stream' }, cache: 'no-store' },
+  );
+  if (
+    !response.headers.get('content-type')?.includes('text/event-stream') ||
+    !response.body
+  )
+    throw new Error('Live metrics unavailable');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  let pending = '';
+  let activity = Date.now();
+  // Cancel an abandoned transport even if its TCP connection never closes.
+  const watchdog = setInterval(() => {
+    if (Date.now() - activity > 45000)
+      void reader.cancel().catch(() => undefined);
+  }, 5000);
+  try {
+    onReady();
+    while (!signal.aborted) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error('Live metrics connection ended');
+      activity = Date.now();
+      if (value.byteLength > 65536)
+        throw new Error('Live metrics frame too large');
+      pending = (pending + decoder.decode(value, { stream: true })).replace(
+        /\r\n/g,
+        '\n',
+      );
+      let boundary: number;
+      while ((boundary = pending.indexOf('\n\n')) >= 0) {
+        const frame = pending.slice(0, boundary);
+        pending = pending.slice(boundary + 2);
+        if (frame.length > 4096)
+          throw new Error('Live metrics frame too large');
+        const lines = frame.split('\n');
+        const event = lines
+          .find((line) => line.startsWith('event:'))
+          ?.slice(6)
+          .trim();
+        const data = lines
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
+          .join('\n');
+        if (event === 'metrics')
+          onSnapshot(validateMetricSnapshot(JSON.parse(data)));
+      }
+      if (pending.length > 4096)
+        throw new Error('Live metrics frame too large');
+    }
+  } finally {
+    clearInterval(watchdog);
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
+export function getAnomalies(
+  tenantId: string,
+  state: 'active' | 'all' = 'all',
+): Promise<Anomaly[]> {
+  return request(`/tenants/${tenantId}/anomalies?state=${state}`);
+}
+export function getAnomalySettings(tenantId: string): Promise<AnomalySettings> {
+  return request(`/tenants/${tenantId}/anomaly-settings`);
+}
+export function saveAnomalySettings(
+  tenantId: string,
+  input: SaveAnomalySettings,
+  signal?: AbortSignal,
+): Promise<AnomalySettings> {
+  return request(`/tenants/${tenantId}/anomaly-settings`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+
+/** Validates a circuit snapshot from the admin API or its live stream. */
+export function validateCircuitSnapshot(
+  value: unknown,
+): CircuitBreakerSnapshot {
+  const input = value as Record<string, unknown> | null;
+  const services = parseCircuitStatuses(input?.services);
+  if (
+    !services ||
+    !(
+      input?.reportedAt === null ||
+      (typeof input?.reportedAt === 'string' &&
+        !Number.isNaN(Date.parse(input.reportedAt)))
+    )
+  )
+    throw new Error('Invalid circuit status');
+  return { reportedAt: input.reportedAt as string | null, services };
+}
+
+export async function getCircuitBreakers(
+  tenantId: string,
+  signal?: AbortSignal,
+): Promise<CircuitBreakerSnapshot> {
+  return validateCircuitSnapshot(
+    await request(`/tenants/${tenantId}/circuit-breakers`, { signal }),
+  );
+}
+
+/** Authenticated fetch-based SSE: each frame is a full circuit snapshot. */
+export async function streamCircuitBreakers(
+  tenantId: string,
+  signal: AbortSignal,
+  onSnapshot: (snapshot: CircuitBreakerSnapshot) => void,
+): Promise<void> {
+  const response = await authorizedFetch(
+    `/tenants/${encodeURIComponent(tenantId)}/circuit-breakers/stream`,
+    { signal, headers: { Accept: 'text/event-stream' }, cache: 'no-store' },
+  );
+  if (
+    !response.headers.get('content-type')?.includes('text/event-stream') ||
+    !response.body
+  )
+    throw new Error('Live circuit status unavailable');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const maxFrame = 131072;
+  let pending = '';
+  let activity = Date.now();
+  const watchdog = setInterval(() => {
+    if (Date.now() - activity > 45000)
+      void reader.cancel().catch(() => undefined);
+  }, 5000);
+  try {
+    while (!signal.aborted) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error('Live circuit connection ended');
+      activity = Date.now();
+      pending = (pending + decoder.decode(value, { stream: true })).replace(
+        /\r\n/g,
+        '\n',
+      );
+      let boundary: number;
+      while ((boundary = pending.indexOf('\n\n')) >= 0) {
+        const frame = pending.slice(0, boundary);
+        pending = pending.slice(boundary + 2);
+        const lines = frame.split('\n');
+        const event = lines
+          .find((line) => line.startsWith('event:'))
+          ?.slice(6)
+          .trim();
+        const data = lines
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
+          .join('\n');
+        if (event === 'circuits')
+          onSnapshot(validateCircuitSnapshot(JSON.parse(data)));
+      }
+      if (pending.length > maxFrame)
+        throw new Error('Live circuit frame too large');
+    }
+  } finally {
+    clearInterval(watchdog);
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
+export function getLogPrivacy(tenantId: string): Promise<LogPrivacyState> {
+  return request(`/tenants/${tenantId}/log-privacy`);
+}
+export function saveLogPrivacy(
+  tenantId: string,
+  input: SaveLogPrivacy,
+  signal?: AbortSignal,
+): Promise<LogPrivacyState> {
+  return request(`/tenants/${tenantId}/log-privacy`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+
+export function getLogRetention(tenantId: string): Promise<LogRetentionState> {
+  return request('/tenants/' + tenantId + '/log-retention');
+}
+export function saveLogRetention(
+  tenantId: string,
+  input: SaveLogRetention,
+  signal?: AbortSignal,
+): Promise<LogRetentionState> {
+  return request('/tenants/' + tenantId + '/log-retention', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+
+export function getAutomationTokens(
+  tenantId: string,
+): Promise<AutomationTokenSummary[]> {
+  return request(`/tenants/${tenantId}/automation-tokens`);
+}
+export function createAutomationToken(
+  tenantId: string,
+  input: CreateAutomationToken,
+  signal?: AbortSignal,
+): Promise<CreatedAutomationToken> {
+  return request(`/tenants/${tenantId}/automation-tokens`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+export function revokeAutomationToken(
+  tenantId: string,
+  tokenId: string,
+  signal?: AbortSignal,
+): Promise<AutomationTokenSummary> {
+  return request(
+    `/tenants/${tenantId}/automation-tokens/${encodeURIComponent(tokenId)}`,
+    { method: 'DELETE', signal },
+  );
+}
+
+export function getGatewayPlugins(
+  tenantId: string,
+): Promise<GatewayPluginState> {
+  return request(`/tenants/${tenantId}/gateway-plugins`);
+}
+export function saveDisabledPlugins(
+  tenantId: string,
+  input: SaveDisabledPlugins,
+  signal?: AbortSignal,
+): Promise<GatewayPluginState> {
+  return request(`/tenants/${tenantId}/gateway-plugins`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+export function getWasmPlugins(tenantId: string): Promise<WasmPluginState> {
+  return request(`/tenants/${tenantId}/wasm-plugins`);
+}
+export function installWasmPlugin(
+  tenantId: string,
+  catalogId: string,
+  signal?: AbortSignal,
+): Promise<WasmPluginState> {
+  return request(`/tenants/${tenantId}/wasm-plugins/install`, {
+    method: 'POST',
+    body: JSON.stringify({ catalogId }),
+    signal,
+  });
+}
+export function uploadWasmPlugin(
+  tenantId: string,
+  input: UploadWasmPlugin,
+  signal?: AbortSignal,
+): Promise<WasmPluginState> {
+  return request(`/tenants/${tenantId}/wasm-plugins/upload`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+export function removeWasmPlugin(
+  tenantId: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<WasmPluginState> {
+  return request(
+    `/tenants/${tenantId}/wasm-plugins/${encodeURIComponent(name)}`,
+    { method: 'DELETE', signal },
+  );
+}
+export type FederatedSubgraphInput = Omit<FederatedSubgraphConfig, 'path'> & {
+  path?: string;
+  sdl: string;
+};
+export type FederatedGraphDetail = {
+  name: string;
+  subgraphs: Array<FederatedSubgraphConfig & { sdl: string }>;
+  publicSdl: string;
+  supergraphSha256: string;
+  updatedAt: string;
+};
+export function getFederatedGraphs(
+  tenantId: string,
+): Promise<{ graphs: FederatedGraphSummary[] }> {
+  return request(`/tenants/${tenantId}/graphql-federation/graphs`);
+}
+export function getFederatedGraph(
+  tenantId: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<FederatedGraphDetail> {
+  return request(
+    `/tenants/${tenantId}/graphql-federation/graphs/${encodeURIComponent(name)}`,
+    { signal },
+  );
+}
+/** Dry run: composition errors come back as data, not as a failed request. */
+export function composeFederatedGraph(
+  tenantId: string,
+  subgraphs: FederatedSubgraphInput[],
+  signal?: AbortSignal,
+): Promise<FederationCompositionResult> {
+  return request(`/tenants/${tenantId}/graphql-federation/compose`, {
+    method: 'POST',
+    body: JSON.stringify({ subgraphs }),
+    signal,
+  });
+}
+export function saveFederatedGraph(
+  tenantId: string,
+  name: string,
+  subgraphs: FederatedSubgraphInput[],
+  signal?: AbortSignal,
+): Promise<FederatedGraphDetail> {
+  return request(
+    `/tenants/${tenantId}/graphql-federation/graphs/${encodeURIComponent(name)}`,
+    { method: 'PUT', body: JSON.stringify({ subgraphs }), signal },
+  );
+}
+export function deleteFederatedGraph(
+  tenantId: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<{ success: boolean }> {
+  return request(
+    `/tenants/${tenantId}/graphql-federation/graphs/${encodeURIComponent(name)}`,
+    { method: 'DELETE', signal },
+  );
+}
+export function getControlPlaneRegions(
+  tenantId: string,
+): Promise<ControlPlaneRegionsState> {
+  return request(`/tenants/${tenantId}/control-plane`);
+}
+export function savePreferredRegion(
+  tenantId: string,
+  input: SavePreferredRegion,
+  signal?: AbortSignal,
+): Promise<ControlPlaneRegionsState> {
+  return request(`/tenants/${tenantId}/control-plane`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+export function getBilling(tenantId: string): Promise<BillingOverview> {
+  return request(`/tenants/${tenantId}/billing`);
+}
+export function getConsumerQuotas(
+  tenantId: string,
+): Promise<ConsumerQuotaUsage[]> {
+  return request(`/tenants/${tenantId}/billing/consumer-quotas`);
+}
+/** Returns the Stripe Checkout address to send the browser to. */
+export function startCheckout(
+  tenantId: string,
+  planId: string,
+  signal?: AbortSignal,
+): Promise<{ url: string }> {
+  return request(`/tenants/${tenantId}/billing/checkout`, {
+    method: 'POST',
+    body: JSON.stringify({ planId }),
+    signal,
+  });
+}
+export function getPortalSettings(tenantId: string): Promise<PortalSettings> {
+  return request(`/tenants/${tenantId}/portal-settings`);
+}
+export function savePortalSettings(
+  tenantId: string,
+  input: SavePortalSettings,
+  signal?: AbortSignal,
+): Promise<PortalSettings> {
+  return request(`/tenants/${tenantId}/portal-settings`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    signal,
+  });
+}
+export function getPortalDevelopers(
+  tenantId: string,
+): Promise<PortalDeveloper[]> {
+  return request(`/tenants/${tenantId}/portal/developers`);
+}
+export function setPortalDeveloperStatus(
+  tenantId: string,
+  developerId: string,
+  status: 'active' | 'suspended',
+  signal?: AbortSignal,
+): Promise<{ status: 'active' | 'suspended'; revokedKeys: number }> {
+  return request(
+    `/tenants/${tenantId}/portal/developers/${encodeURIComponent(developerId)}`,
+    { method: 'PUT', body: JSON.stringify({ status }), signal },
+  );
 }

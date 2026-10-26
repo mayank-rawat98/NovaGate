@@ -7,11 +7,11 @@ out-tsc
 
 # dependencies
 node_modules
+# Environment files, including variants and named templates, at any depth
 .env
-.env.development
-.env.local
-.env.production
-.env.example
+.env.*
+*.env
+*.env.*
 compose.dev.yml
 # IDEs and editors
 /.idea
@@ -55,3 +55,5 @@ test-output
 # Next.js
 .next
 out
+# Repository-local caches and verification artifacts
+.local-work/

@@ -14,7 +14,36 @@ export class PluginRunnerService {
     plugins: GatewayPlugin[],
     ctx: PluginContext,
   ): Promise<PluginShortCircuit | void> {
+    // Capture signed bytes under admission/deadline limits before any body-aware
+    // hook can consume or reconstruct them. Policy hooks still run in saved order.
     for (const plugin of plugins) {
+      if (ctx.signal?.aborted) return;
+      if (!plugin.prepareRequest) continue;
+      try {
+        const result = await plugin.prepareRequest(ctx);
+        if (result) return result;
+      } catch {
+        return {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            error: 'PLUGIN_ERROR',
+            message: 'Internal plugin error',
+            requestId: ctx.requestId,
+          }),
+        };
+      }
+    }
+    for (const plugin of plugins) {
+      if (ctx.signal?.aborted)
+        return {
+          status: 503,
+          body: JSON.stringify({
+            error: 'ADMISSION_CANCELLED',
+            message: 'Request cancelled',
+            requestId: ctx.requestId,
+          }),
+        };
       if (!plugin.onRequest) continue;
       try {
         const result = await plugin.onRequest(ctx);
@@ -37,6 +66,23 @@ export class PluginRunnerService {
         };
       }
     }
+    for (const plugin of plugins) {
+      if (!plugin.validateRequest) continue;
+      try {
+        const result = await plugin.validateRequest(ctx);
+        if (result) return result;
+      } catch {
+        return {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            error: 'PLUGIN_ERROR',
+            message: 'Internal plugin error',
+            requestId: ctx.requestId,
+          }),
+        };
+      }
+    }
   }
 
   async runOnResponse(
@@ -44,6 +90,7 @@ export class PluginRunnerService {
     ctx: PluginContext & { statusCode: number; headers: OutgoingHttpHeaders },
   ): Promise<void> {
     for (const plugin of plugins) {
+      if (ctx.signal?.aborted) return;
       if (!plugin.onResponse) continue;
       try {
         await plugin.onResponse(ctx);

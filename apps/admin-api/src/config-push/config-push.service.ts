@@ -1,87 +1,258 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+  OnApplicationBootstrap,
+} from '@nestjs/common';
 import Redis from 'ioredis';
-import { DataSource } from 'typeorm';
-import { TenantConfig } from '@api-gateway/shared-types';
+import { DataSource, EntityManager } from 'typeorm';
+import {
+  circuitBreakerConfig,
+  disabledPluginList,
+  logPrivacyPolicy,
+  parsePluginStatuses,
+  parseWasmStatuses,
+  FEDERATED_GRAPH_CONFIG_COLUMNS,
+  federatedGraphConfigs,
+  type WasmPluginState,
+  type GatewayPluginState,
+  TenantConfig,
+} from '@api-gateway/shared-types';
 
 @Injectable()
-export class ConfigPushService implements OnModuleInit {
+export class ConfigPushService
+  implements OnModuleInit, OnModuleDestroy, OnApplicationBootstrap
+{
   private readonly logger = new Logger(ConfigPushService.name);
   private redis!: Redis;
+  private timer?: NodeJS.Timeout;
+  private retry?: Promise<void>;
+  private stopping = false;
 
   constructor(private readonly dataSource: DataSource) {}
 
   onModuleInit() {
-    this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+    // Idempotent: a shared instance can receive the hook more than once.
+    this.redis ??= new Redis(
+      process.env.REDIS_URL || 'redis://localhost:6379',
+      {
+        commandTimeout: 3000,
+        maxRetriesPerRequest: 1,
+      },
+    );
+  }
+
+  onApplicationBootstrap() {
+    if (this.timer) return;
+    this.timer = setInterval(() => {
+      if (this.retry || this.stopping) return;
+      this.retry = this.retryPending()
+        .catch(() =>
+          this.logger.warn('Configuration retry will resume on the next tick'),
+        )
+        .finally(() => {
+          this.retry = undefined;
+        });
+    }, 5000);
+    this.timer.unref();
+  }
+  async onModuleDestroy() {
+    this.stopping = true;
+    clearInterval(this.timer);
+    this.redis.disconnect();
+    await this.retry;
+  }
+  private async retryPending() {
+    const pending = await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `SET LOCAL statement_timeout='3s'; SET LOCAL lock_timeout='1s'`,
+      );
+      return manager.query<
+        Array<{
+          tenantId: string;
+          config: { config: TenantConfig; version: number };
+        }>
+      >(`WITH due AS (
+        SELECT id FROM public.pending_config_updates WHERE "lastPublishAt" IS NULL OR "lastPublishAt"<clock_timestamp()-INTERVAL '10 seconds'
+        ORDER BY "lastPublishAt" NULLS FIRST,"createdAt",id LIMIT 16 FOR UPDATE SKIP LOCKED
+      ), claimed AS (UPDATE public.pending_config_updates p SET "lastPublishAt"=clock_timestamp() FROM due WHERE p.id=due.id RETURNING p."tenantId",p.config) SELECT * FROM claimed`);
+    });
+    for (const row of pending) {
+      if (this.stopping) break;
+      await this.publish({ tenantId: row.tenantId, ...row.config });
+    }
+  }
+  async publish(payload: {
+    tenantId: string;
+    config: TenantConfig;
+    version: number;
+  }): Promise<boolean> {
+    try {
+      await this.redis.publish('config.update', JSON.stringify(payload));
+      return true;
+    } catch {
+      this.logger.warn('Configuration is persisted and waiting for delivery');
+      return false;
+    }
+  }
+  async persistUpdate(tenantId: string, manager: EntityManager) {
+    const [tenant] = await manager.query(
+      `WITH versioned AS (
+      UPDATE public.tenants SET "gatewayConfigVersion"="gatewayConfigVersion"+1 WHERE id=$1 RETURNING "gatewayConfigVersion"
+    ) SELECT * FROM versioned`,
+      [tenantId],
+    );
+    if (!tenant) throw new Error('Tenant not found');
+    const version = tenant.gatewayConfigVersion as number;
+    const config = await this.assembleConfig(tenantId, manager);
+    await manager.query(
+      `INSERT INTO public.pending_config_updates ("tenantId",config) VALUES ($1,$2)
+      ON CONFLICT ("tenantId") DO UPDATE SET config=$2,"createdAt"=NOW(),"lastPublishAt"=NULL`,
+      [tenantId, JSON.stringify({ config, version })],
+    );
+    return { tenantId, config, version };
   }
 
   async triggerUpdate(tenantId: string): Promise<void> {
-    const config = await this.assembleConfig(tenantId);
-    await this.pushUpdate(tenantId, config);
-  }
-
-  async pushUpdate(tenantId: string, config: TenantConfig): Promise<void> {
-    this.logger.log(`Pushing config update for tenant ${tenantId}`);
-
-    const rows = await this.dataSource.query(
-      `UPDATE public.tenants SET "gatewayConfigVersion" = "gatewayConfigVersion" + 1 WHERE id = $1 RETURNING "gatewayConfigVersion"`,
-      [tenantId],
+    this.logger.log(`Publishing configuration for tenant ${tenantId}`);
+    const payload = await this.dataSource.transaction((manager) =>
+      this.persistUpdate(tenantId, manager),
     );
-    const version: number = rows[0]?.gatewayConfigVersion ?? 0;
-
-    const payload = JSON.stringify({ tenantId, config, version });
-    const subscriberCount = await this.redis.publish('config.update', payload);
-
-    if (subscriberCount === 0) {
-      await this.dataSource.query(
-        `INSERT INTO public.pending_config_updates ("tenantId", config) VALUES ($1, $2)
-         ON CONFLICT ("tenantId") DO UPDATE SET config = $2, "createdAt" = NOW()`,
-        [tenantId, JSON.stringify({ config, version })],
-      );
-      this.logger.warn(
-        `Gateway offline for tenant ${tenantId} — stored pending update`,
-      );
-    }
+    // Persist before publishing: subscriber presence does not imply delivery.
+    await this.redis.publish('config.update', JSON.stringify(payload));
   }
 
-  async assembleConfig(tenantId: string): Promise<TenantConfig> {
+  async assembleConfig(
+    tenantId: string,
+    manager: EntityManager | DataSource = this.dataSource,
+  ): Promise<TenantConfig> {
+    if (!/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(tenantId))
+      throw new Error('Invalid tenant ID');
     const schema = `tenant_${tenantId.replace(/-/g, '_')}`;
 
-    const [routes, serviceRows, consumers, tenantRows] = await Promise.all([
-      this.dataSource.query(
-        `SELECT * FROM ${schema}.routes WHERE "deletedAt" IS NULL AND enabled = true`,
-      ),
-      this.dataSource.query(
-        `SELECT * FROM ${schema}.services WHERE "deletedAt" IS NULL`,
-      ),
-      this.dataSource.query(
-        `SELECT * FROM ${schema}.consumers WHERE "revokedAt" IS NULL`,
-      ),
-      this.dataSource.query(
-        `SELECT "caCertPem" FROM public.tenants WHERE id = $1`,
-        [tenantId],
-      ),
-    ]);
+    const routes = await manager.query(
+      `SELECT * FROM ${schema}.routes WHERE "deletedAt" IS NULL AND enabled = true ORDER BY "configOrder" NULLS LAST,"createdAt",id`,
+    );
+    const serviceRows = await manager.query(
+      `SELECT * FROM ${schema}.services WHERE "deletedAt" IS NULL`,
+    );
+    const consumers = await manager.query(
+      `SELECT * FROM ${schema}.consumers WHERE "revokedAt" IS NULL`,
+    );
+    const tenantRows = await manager.query(
+      `SELECT "caCertPem", "logPrivacy", "disabledPlugins", "quotaSuspendedUntil", "preferredRegion" FROM public.tenants WHERE id = $1`,
+      [tenantId],
+    );
 
     const services = serviceRows.map((row: Record<string, unknown>) => ({
       id: row.id,
       name: row.name,
       targets: row.targets,
       healthCheckPath: row.healthCheckPath,
+      healthCheckIntervalMs: row.healthCheckIntervalMs ?? 10000,
+      healthCheckProtocol: row.healthCheckProtocol ?? 'http',
+      healthCheckService: row.healthCheckService ?? '',
+      unhealthyFallback: row.unhealthyFallback ?? false,
       timeoutMs: row.timeoutMs,
+      loadBalancing: row.loadBalancing ?? 'weighted-round-robin',
       h2: row.h2 ?? false,
       supportsWebSocket: row.supportsWebSocket ?? false,
+      circuitBreaker: circuitBreakerConfig(row.circuitBreaker),
     }));
 
     const caCertPem: string | undefined = tenantRows[0]?.caCertPem ?? undefined;
 
+    // Portal publication and developer ownership are administration-only.
     const config: TenantConfig = {
-      routes,
+      logPrivacy: logPrivacyPolicy(tenantRows[0]?.logPrivacy),
+      routes: routes.map(
+        ({ portal: _portal, ...route }: Record<string, unknown>) => route,
+      ),
       services,
-      consumers,
+      consumers: consumers.map(
+        ({
+          portalDeveloperId: _developer,
+          portalKeyName: _key,
+          ...consumer
+        }: Record<string, unknown>) => consumer,
+      ),
       rateLimit: { windowMs: 60000, unauthMax: 100, authMax: 500 },
+      disabledPlugins: disabledPluginList(tenantRows[0]?.disabledPlugins),
+      suspended: null,
+      preferredRegion: tenantRows[0]?.preferredRegion ?? null,
+      wasmPlugins: await manager.query(
+        `SELECT name, sha256, hooks, "allowedHosts" FROM ${schema}.wasm_plugins WHERE "deletedAt" IS NULL ORDER BY name`,
+      ),
+      federatedGraphs: federatedGraphConfigs(
+        await manager.query(
+          `SELECT ${FEDERATED_GRAPH_CONFIG_COLUMNS} FROM ${schema}.federated_graphs WHERE "deletedAt" IS NULL ORDER BY name`,
+        ),
+      ),
     };
+    const suspendedUntil: Date | null = tenantRows[0]?.quotaSuspendedUntil;
+    if (suspendedUntil && suspendedUntil.getTime() > Date.now())
+      config.suspended = {
+        reason: 'QUOTA_EXCEEDED',
+        until: suspendedUntil.toISOString(),
+      };
     if (caCertPem) config.caCertPem = caCertPem;
     return config;
+  }
+
+  /** Last third-party plugin report from the tenant's gateway, if fresh. */
+  async pluginReport(
+    tenantId: string,
+  ): Promise<Pick<GatewayPluginState, 'reportedAt' | 'plugins'>> {
+    const none = { reportedAt: null, plugins: [] };
+    let raw: string | null;
+    try {
+      raw = await this.redis.get(`gw:plugins:${tenantId.toLowerCase()}`);
+    } catch {
+      return none;
+    }
+    if (!raw) return none;
+    try {
+      const report = JSON.parse(raw) as {
+        reportedAt?: unknown;
+        plugins?: unknown;
+      };
+      const plugins = parsePluginStatuses(report.plugins);
+      if (
+        !plugins ||
+        typeof report.reportedAt !== 'string' ||
+        Number.isNaN(Date.parse(report.reportedAt))
+      )
+        return none;
+      return { reportedAt: report.reportedAt, plugins };
+    } catch {
+      return none;
+    }
+  }
+
+  /** Last WebAssembly plugin report from the tenant's gateway, if fresh. */
+  async wasmReport(
+    tenantId: string,
+  ): Promise<Pick<WasmPluginState, 'reportedAt' | 'statuses'>> {
+    const none = { reportedAt: null, statuses: [] };
+    try {
+      const raw = await this.redis.get(`gw:wasm:${tenantId.toLowerCase()}`);
+      if (!raw) return none;
+      const report = JSON.parse(raw) as {
+        reportedAt?: unknown;
+        plugins?: unknown;
+      };
+      const statuses = parseWasmStatuses(report.plugins);
+      if (
+        !statuses ||
+        typeof report.reportedAt !== 'string' ||
+        Number.isNaN(Date.parse(report.reportedAt))
+      )
+        return none;
+      return { reportedAt: report.reportedAt, statuses };
+    } catch {
+      return none;
+    }
   }
 
   async isOnline(tenantId: string): Promise<boolean> {

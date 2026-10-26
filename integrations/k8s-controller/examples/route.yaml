@@ -1,0 +1,15 @@
+# kubectl apply -f route.yaml creates the route in NovaGate; kubectl delete
+# soft-deletes it there.
+apiVersion: novagate.dev/v1alpha1
+kind: GatewayRoute
+metadata:
+  name: users-api
+spec:
+  method: GET
+  path: /users
+  backend:
+    serviceName: users
+  plugins:
+    - name: cors
+      config:
+        origins: ['*']

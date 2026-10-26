@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import * as http from 'http';
+import { performance } from 'node:perf_hooks';
 import type * as net from 'net';
 import type { OutgoingHttpHeaders } from 'http';
 import type { Request } from 'express';
@@ -11,20 +12,50 @@ import type {
   PluginContext,
   RouteConfig,
   ServiceConfig,
+  TenantConfig,
 } from '@api-gateway/shared-types';
 import { GatewayError } from '../shared/gateway-error';
 import type {
   RequestWithUser,
+  GatewayTraceHandle,
   ResponseWithLocals,
 } from '../shared/request-context';
 import { MetricsService } from '../metrics/metrics.service';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
-import { LoadBalancerService } from './load-balancer.service';
+import { LoadBalancerService, type TargetLease } from './load-balancer.service';
 import { UpstreamHealthService } from '../health/upstream-health.service';
 import { matchRoute } from '../shared/route-matcher';
 import { PluginRegistryService } from '../plugins/plugin-registry.service';
 import { PluginRunnerService } from '../plugins/plugin-runner.service';
-import { Http2SessionPool } from './http2-session-pool.service';
+import { Http2SessionPool, Http2PoolError } from './http2-session-pool.service';
+import { DEFAULT_PROXY_HANDLERS } from '../../config/configuration';
+import { ConfigService } from '@nestjs/config';
+import {
+  RequestBodyService,
+  BodyCaptureError,
+} from '../shared/request-body.service';
+import {
+  CircuitBreakerService,
+  type CircuitAdmission,
+} from '../circuit-breaker/circuit-breaker.service';
+import { MeteringService } from '../metering/metering.service';
+import { GraphqlFederationService } from '../plugins/graphql-federation/graphql-federation.service';
+
+/** Refuses all traffic while the workspace's monthly plan quota is exhausted. */
+export function assertNotSuspended(
+  config: TenantConfig,
+  onRefused?: () => void,
+): void {
+  const until = config.suspended ? Date.parse(config.suspended.until) : NaN;
+  if (!(until > Date.now())) return;
+  onRefused?.();
+  throw new GatewayError(
+    'QUOTA_EXCEEDED',
+    'The monthly request quota for this workspace is exhausted',
+    429,
+    { 'Retry-After': String(Math.ceil((until - Date.now()) / 1000)) },
+  );
+}
 
 // Per-request context attached to the request object so cached handlers can
 // read retry state without holding per-request closures.
@@ -33,6 +64,13 @@ interface RetryContext {
   isLastAttempt: boolean;
   serviceName: string;
   resolve: (statusCode: number) => void;
+  abort?: (error: NodeJS.ErrnoException) => void;
+  lease?: TargetLease;
+  upstreamStarted?: boolean;
+  trace?: GatewayTraceHandle;
+  outcome?: number;
+  /** Circuit-breaker admission for this attempt; settles at upstream classification. */
+  circuit?: CircuitAdmission;
 }
 
 interface PluginState {
@@ -76,11 +114,125 @@ export class ProxyService {
     private readonly pluginRegistry: PluginRegistryService,
     private readonly pluginRunner: PluginRunnerService,
     private readonly http2Pool: Http2SessionPool,
-  ) {}
+    private readonly bodies: RequestBodyService = new RequestBodyService(
+      new ConfigService(),
+    ),
+    private readonly config: ConfigService = new ConfigService(),
+    @Optional() private readonly circuits?: CircuitBreakerService,
+    @Optional() private readonly metering?: MeteringService,
+    @Optional() private readonly federation?: GraphqlFederationService,
+  ) {
+    circuits?.onChange(() => {
+      const names = new Map(
+        (this.configManager.getConfig()?.services ?? []).map((service) => [
+          service.id,
+          service.name,
+        ]),
+      );
+      this.metricsService.setCircuitStates(
+        circuits.statuses().map((status) => ({
+          service: names.get(status.serviceId) ?? status.serviceId,
+          state: status.state,
+        })),
+      );
+    });
+  }
+
+  /** Admits one upstream attempt or refuses it while the service's circuit is open. */
+  private admitCircuit(service: ServiceConfig): CircuitAdmission | undefined {
+    if (!this.circuits) return undefined;
+    const admission = this.circuits.admit(service.id);
+    if (admission.allowed) return admission;
+    this.metricsService.incrementCircuitRejection(service.name);
+    throw new GatewayError(
+      'CIRCUIT_OPEN',
+      'Upstream service is temporarily unavailable',
+      503,
+      { 'Retry-After': String(admission.retryAfterSeconds) },
+    );
+  }
+
+  private async respondFederated(
+    state: PluginState,
+    route: RouteConfig,
+    response: ResponseWithLocals,
+  ): Promise<void> {
+    const trace = response.locals.trace?.child('graphql federation', {
+      'gateway.route.id': route.id,
+      'http.route': route.pathPattern,
+    });
+    let status = 499;
+    try {
+      const result = await (this.federation as GraphqlFederationService)
+        .execute(state.ctx, {
+          acquire: (service) =>
+            this.loadBalancer.acquireTarget(
+              service.id,
+              service.targets,
+              this.upstreamHealth.getHealthyUrls(service.targets, service.id),
+              service.unhealthyFallback === true,
+              service.loadBalancing,
+            ),
+          traceHeaders: () => trace?.headers() ?? {},
+        })
+        .catch((error: unknown) => {
+          // A client that went away aborts execution; nothing to answer.
+          if (state.ctx.signal?.aborted || response.destroyed) return null;
+          throw error;
+        });
+      if (!result || state.ctx.signal?.aborted || response.headersSent) return;
+      status = result.status;
+      for (const [name, value] of Object.entries(result.headers))
+        response.setHeader(name, value);
+      response.statusCode = result.status;
+      await this.pluginRunner.runOnResponse(state.plugins, {
+        ...state.ctx,
+        statusCode: result.status,
+        headers: response.getHeaders() as OutgoingHttpHeaders,
+      });
+      response.end(result.body);
+    } finally {
+      trace?.end(status);
+    }
+  }
+
+  /**
+   * Counts the request against the workspace and its consumer, refusing a
+   * consumer at its monthly quota. Redis failures admit the request.
+   */
+  private async meter(config: TenantConfig, request: Request) {
+    if (!this.metering) return;
+    const consumerId = (request as RequestWithUser).user?.consumerId;
+    const consumer = consumerId
+      ? config.consumers.find((item) => item.id === consumerId)
+      : undefined;
+    const result = await this.metering.admit(
+      consumer?.id,
+      consumer?.monthlyQuota,
+    );
+    if (result.allowed) {
+      if (result.degraded) this.metricsService.incrementMeteringError();
+      return;
+    }
+    this.metricsService.incrementQuotaRejection('consumer');
+    throw new GatewayError(
+      'QUOTA_EXCEEDED',
+      'The monthly request quota for this consumer is exhausted',
+      429,
+      {
+        'Retry-After': String(
+          Math.ceil((result.resetAt.getTime() - Date.now()) / 1000),
+        ),
+        'X-Quota-Limit': String(result.quota),
+        'X-Quota-Remaining': '0',
+        'X-Quota-Reset': result.resetAt.toISOString(),
+      },
+    );
+  }
 
   async forward(request: Request, response: ResponseWithLocals): Promise<void> {
     const originalUrl = request.originalUrl ?? request.url ?? '';
-    const [pathWithoutQuery, query] = originalUrl.split('?');
+    const [pathWithoutQuery] = originalUrl.split('?');
     const baseUrl = request.baseUrl ?? '';
     const normalizedPath =
       baseUrl && pathWithoutQuery.startsWith(baseUrl)
@@ -95,19 +247,26 @@ export class ProxyService {
         404,
       );
     }
+    assertNotSuspended(config, () =>
+      this.metricsService.incrementQuotaRejection('workspace'),
+    );
 
-    const route = matchRoute(request.method, normalizedPath, config.routes);
+    const preflightMethod =
+      request.method === 'OPTIONS' && request.headers.origin
+        ? request.headers['access-control-request-method']
+        : undefined;
+    const isPreflight = typeof preflightMethod === 'string';
+    const route = matchRoute(
+      isPreflight ? preflightMethod : request.method,
+      normalizedPath,
+      config.routes,
+    );
     if (!route) {
       throw new GatewayError(
         'SERVICE_NOT_FOUND',
         'No downstream service matches the path',
         404,
       );
-    }
-
-    const user = (request as RequestWithUser).user;
-    if (route.authRequired && !user) {
-      throw new GatewayError('TOKEN_INVALID', 'Authentication required', 401);
     }
 
     const service = config.services.find(
@@ -128,11 +287,44 @@ export class ProxyService {
       );
     }
 
+    response.locals.routePattern = route.pathPattern;
+    response.locals.trace?.set({
+      'gateway.route.id': route.id,
+      'gateway.service.id': service.id,
+      'http.route': route.pathPattern,
+    });
     response.locals.downstreamService = service.name;
+    // Certificate assertions are not downstream identity. mTLS reads original rawHeaders only after source verification.
+    for (const name of Object.keys(request.headers))
+      if (name.startsWith('ssl_client_') || name.startsWith('x-ssl-client-'))
+        delete request.headers[name];
 
     // Run plugin onRequest hooks before proxying
-    const pluginEntries = route.plugins ?? [];
-    const activePlugins = this.pluginRegistry.resolve(pluginEntries);
+    let pluginEntries = route.plugins ?? [];
+    if (isPreflight) {
+      pluginEntries = pluginEntries.filter((entry) => entry.name === 'cors');
+      if (!pluginEntries.length)
+        throw new GatewayError(
+          'SERVICE_NOT_FOUND',
+          'CORS is not configured for this route',
+          404,
+        );
+    } else if (
+      route.graphql &&
+      !pluginEntries.some((entry) => entry.name === 'graphql-guard')
+    ) {
+      pluginEntries = [...pluginEntries, { name: 'graphql-guard', config: {} }];
+    }
+    let activePlugins: GatewayPlugin[];
+    try {
+      activePlugins = this.pluginRegistry.resolve(pluginEntries);
+    } catch {
+      throw new GatewayError(
+        'PLUGIN_CONFIG_INVALID',
+        'Route policy configuration is invalid',
+        500,
+      );
+    }
 
     if (activePlugins.length > 0) {
       const requestId = this.getRequestIdFromRequest(request, response);
@@ -147,6 +339,7 @@ export class ProxyService {
         activePlugins,
         pluginCtx,
       );
+      if (pluginCtx.signal?.aborted) return;
       if (shortCircuit) {
         this.sendShortCircuit(response, shortCircuit);
         return;
@@ -158,10 +351,33 @@ export class ProxyService {
       } satisfies PluginState;
     }
 
+    const pluginAuthentication = (request as unknown as GwRequest).__gw_plugins
+      ?.ctx.authentication;
+    if (
+      route.authRequired &&
+      !(request as RequestWithUser).user &&
+      !pluginAuthentication
+    ) {
+      throw new GatewayError('TOKEN_INVALID', 'Authentication required', 401);
+    }
+    // Preflights are answered by the CORS plugin and are not traffic.
+    if (!isPreflight) await this.meter(config, request);
+
+    // A federated GraphQL route answers from its supergraph, calling the
+    // subgraphs itself, instead of forwarding the request.
+    const federated = (request as unknown as GwRequest).__gw_plugins;
+    if (federated && this.federation?.handles(federated.ctx)) {
+      await this.respondFederated(federated, route, response);
+      return;
+    }
+
     const start = Date.now();
 
     // Strip prefix once and reuse across all retry attempts
     const strippedPath = this.stripPrefix(normalizedPath, route.pathPattern);
+    const modifiedUrl = request.url ?? originalUrl;
+    const queryIndex = modifiedUrl.indexOf('?');
+    const query = queryIndex < 0 ? '' : modifiedUrl.slice(queryIndex + 1);
     const finalUrl = query ? `${strippedPath}?${query}` : strippedPath;
 
     const retryConfig = route.retry;
@@ -177,39 +393,76 @@ export class ProxyService {
       safeRetryMethods.includes(requestMethod) &&
       retryMethods.includes(requestMethod);
 
-    const healthyUrls = this.upstreamHealth.getHealthyUrls(service.targets);
     const useH2 = service.h2 === true;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const isLastAttempt = attempt === maxAttempts - 1;
-      const targetUrl = this.loadBalancer.selectTarget(
-        service.id,
+      const healthyUrls = this.upstreamHealth.getHealthyUrls(
         service.targets,
-        healthyUrls,
+        service.id,
+      );
+      const isLastAttempt = attempt === maxAttempts - 1;
+      // Retried attempts never commit a response, so refusing here is safe.
+      const circuit = this.admitCircuit(service);
+      let lease: TargetLease;
+      try {
+        lease = this.loadBalancer.acquireTarget(
+          service.id,
+          service.targets,
+          healthyUrls,
+          service.unhealthyFallback === true,
+          service.loadBalancing,
+        );
+      } catch (error) {
+        circuit?.settle('neutral');
+        throw error;
+      }
+      const targetUrl = lease.url;
+      const attemptTrace = response.locals.trace?.child(
+        useH2 ? 'upstream HTTP2' : 'upstream HTTP1',
+        {
+          'gateway.route.id': route.id,
+          'gateway.service.id': service.id,
+          'gateway.retry.count': attempt,
+          'http.request.method': request.method,
+          'http.route': route.pathPattern,
+        },
       );
 
       // Reset the URL for each attempt (safe for GET/HEAD/OPTIONS which have no body)
       request.url = finalUrl;
 
-      const statusCode = useH2
-        ? await this.callH2Proxy(
-            targetUrl,
-            finalUrl,
-            service,
-            route,
-            request,
-            response,
-            canRetry && !isLastAttempt,
-            retryOn,
-          )
-        : await this.callProxy(
-            targetUrl,
-            service,
-            request,
-            response,
-            isLastAttempt,
-            retryOn,
-          );
+      let statusCode: number;
+      try {
+        statusCode = useH2
+          ? await this.callH2Proxy(
+              targetUrl,
+              finalUrl,
+              service,
+              route,
+              request,
+              response,
+              canRetry && !isLastAttempt,
+              retryOn,
+              lease,
+              attemptTrace,
+              circuit,
+            )
+          : await this.callProxy(
+              targetUrl,
+              service,
+              request,
+              response,
+              !canRetry || isLastAttempt,
+              retryOn,
+              undefined,
+              lease,
+              attemptTrace,
+              circuit,
+            );
+      } finally {
+        // No upstream classification (for example a client body failure).
+        circuit?.settle('neutral');
+      }
 
       if (canRetry && !isLastAttempt && retryOn.includes(statusCode)) {
         this.metricsService.incrementProxyRetry(route.pathPattern, attempt + 1);
@@ -231,53 +484,126 @@ export class ProxyService {
     response: ResponseWithLocals,
     isLastAttempt: boolean,
     retryOn: number[],
+    absoluteTimeoutMs?: number,
+    lease?: TargetLease,
+    attemptTrace?: GatewayTraceHandle,
+    circuit?: CircuitAdmission,
   ): Promise<number> {
+    const retryContext: RetryContext = {
+      retryOn,
+      isLastAttempt,
+      serviceName: service.name,
+      resolve: () => undefined,
+      lease,
+      upstreamStarted: false,
+      trace: attemptTrace,
+      outcome: 499,
+      circuit,
+    };
     return new Promise<number>((resolve) => {
       let settled = false;
+      let deadline: NodeJS.Timeout | undefined;
       let cleanup: () => void = () => undefined;
       const resolveOnce = (code: number) => {
         if (!settled) {
           settled = true;
+          retryContext.outcome = code;
           cleanup();
           delete (request as unknown as GwRequest).__gw_retry;
           resolve(code);
         }
       };
 
-      (request as unknown as GwRequest).__gw_retry = {
-        retryOn,
-        isLastAttempt,
-        serviceName: service.name,
-        resolve: resolveOnce,
-      } satisfies RetryContext;
+      retryContext.resolve = resolveOnce;
+      (request as unknown as GwRequest).__gw_retry = retryContext;
 
       const handler = this.getHandler(targetUrl, service.timeoutMs ?? 10_000);
 
       // Fallback: if the handler calls next() without a proxyRes/error event
       const onFinish = () => resolveOnce(response.statusCode ?? 200);
-      const onClose = () => resolveOnce(response.statusCode ?? 200);
+      const onClose = () => {
+        retryContext.abort?.(
+          Object.assign(new Error('Caller cancelled'), { code: 'ECANCELED' }),
+        );
+        resolveOnce(response.writableFinished ? response.statusCode : 499);
+      };
+      // The proxy's idle timeout also applies to the client socket and can
+      // close it before the upstream timeout reports. A fully received
+      // request that times out is waiting on the upstream; a stalled upload
+      // is the caller's.
+      const onSocketTimeout = () => {
+        if (request.complete) circuit?.record(504);
+        else circuit?.settle('neutral');
+      };
+      const socket = request.socket;
       cleanup = () => {
+        clearTimeout(deadline);
         response.off('finish', onFinish);
         response.off('close', onClose);
+        socket?.off('timeout', onSocketTimeout);
       };
       response.once('finish', onFinish);
       response.once('close', onClose);
+      if (circuit) socket?.once('timeout', onSocketTimeout);
+      if (absoluteTimeoutMs !== undefined) {
+        deadline = setTimeout(() => {
+          if (settled) return;
+          if (response.headersSent) {
+            this.metricsService.incrementDownstreamTimeout(service.name);
+            retryContext.abort?.(
+              Object.assign(new Error('Upstream deadline exceeded'), {
+                code: 'ECANCELED',
+              }),
+            );
+            response.destroy();
+            resolveOnce(504);
+          } else if (retryContext.abort) {
+            retryContext.abort(
+              Object.assign(new Error('Upstream deadline exceeded'), {
+                code: 'ETIMEDOUT',
+              }),
+            );
+          } else {
+            circuit?.record(504);
+            if (isLastAttempt) {
+              this.metricsService.incrementDownstreamTimeout(service.name);
+              response.statusCode = 504;
+              response.setHeader('Content-Type', 'application/json');
+              response.end(
+                JSON.stringify({
+                  error: 'DOWNSTREAM_TIMEOUT',
+                  message: 'Upstream request timed out',
+                  requestId: this.getRequestIdFromRequest(request, response),
+                }),
+              );
+            }
+            resolveOnce(504);
+          }
+        }, absoluteTimeoutMs);
+        deadline.unref();
+      }
 
       handler(
         request as unknown as http.IncomingMessage,
         response as unknown as http.ServerResponse,
         (err?: unknown) => {
           if (err && !response.headersSent) {
+            circuit?.record(502);
             resolveOnce(502);
           } else {
             resolveOnce(response.statusCode ?? 200);
           }
         },
       );
+    }).finally(() => {
+      if (!retryContext.upstreamStarted) {
+        lease?.release();
+        attemptTrace?.end(retryContext.outcome);
+      }
     });
   }
 
-  /** Forward via HTTP/2 session pool; falls back to 502 on session error. */
+  /** Buffer under shared limits and fall back only before application dispatch. */
   private async callH2Proxy(
     targetUrl: string,
     finalUrl: string,
@@ -287,11 +613,20 @@ export class ProxyService {
     response: ResponseWithLocals,
     retriesRemaining: boolean,
     retryOn: number[],
+    lease: TargetLease,
+    attemptTrace?: GatewayTraceHandle,
+    circuit?: CircuitAdmission,
   ): Promise<number> {
     const requestId = this.getRequestIdFromRequest(request, response);
 
-    // Buffer request body (already consumed by body-parser or still streaming)
-    const body = await this.bufferBody(request);
+    const pluginState = (request as unknown as GwRequest).__gw_plugins;
+    const ctx =
+      pluginState?.ctx ??
+      this.buildPluginContext(request, response, route, service, requestId);
+    let started = performance.now();
+    let dispatched = false,
+      handedOff = false;
+    let outcome = 499;
 
     // Build forward headers (strip hop-by-hop)
     const forwardHeaders: Record<string, string | string[]> = {};
@@ -300,11 +635,19 @@ export class ProxyService {
         continue;
       if (v !== undefined) forwardHeaders[k] = v as string | string[];
     }
+    if (attemptTrace) {
+      delete forwardHeaders.traceparent;
+      delete forwardHeaders.tracestate;
+      delete forwardHeaders.baggage;
+      Object.assign(forwardHeaders, attemptTrace.headers());
+    }
     forwardHeaders['x-request-id'] = requestId;
     const fwd = this.getForwardedForFromRequest(request);
     if (fwd) forwardHeaders['x-forwarded-for'] = fwd;
 
     try {
+      const body = await this.bodies.read(ctx);
+      started = performance.now();
       const h2res = await this.http2Pool.request(
         targetUrl,
         request.method,
@@ -312,8 +655,20 @@ export class ProxyService {
         forwardHeaders,
         body,
         service.timeoutMs ?? 10_000,
+        ctx.signal,
+        {
+          onDispatch: () => {
+            dispatched = true;
+          },
+          onClose: (status) => {
+            lease.release();
+            attemptTrace?.end(status);
+          },
+        },
       );
 
+      outcome = h2res.statusCode;
+      circuit?.record(h2res.statusCode);
       // A retryable status with attempts left: don't commit the response —
       // let the outer loop retry, mirroring the HTTP/1 proxy path.
       if (retriesRemaining && retryOn.includes(h2res.statusCode)) {
@@ -326,8 +681,6 @@ export class ProxyService {
           if (v !== undefined) response.setHeader(k, v as string | string[]);
         }
         response.statusCode = h2res.statusCode;
-        response.end(h2res.body);
-
         // Run onResponse plugins
         const pluginState = (request as unknown as GwRequest).__gw_plugins;
         if (pluginState?.plugins.length) {
@@ -337,68 +690,94 @@ export class ProxyService {
             headers: response.getHeaders() as OutgoingHttpHeaders,
           });
         }
+        response.end(h2res.body);
       }
 
       return h2res.statusCode;
     } catch (err) {
-      this.logger.error(
+      let failure = err;
+      if (ctx.signal?.aborted || response.destroyed) return 499;
+      if (err instanceof Http2PoolError && err.fallbackSafe) {
+        const remaining =
+          (service.timeoutMs ?? 10000) - (performance.now() - started);
+        if (remaining > 0) {
+          handedOff = true;
+          attemptTrace?.end(502);
+          const fallbackTrace = response.locals.trace?.child(
+            'upstream HTTP1 fallback',
+            {
+              'gateway.route.id': route.id,
+              'gateway.service.id': service.id,
+              'http.request.method': request.method,
+              'http.route': route.pathPattern,
+            },
+          );
+          return this.callProxy(
+            targetUrl,
+            { ...service, timeoutMs: remaining },
+            request,
+            response,
+            !retriesRemaining,
+            retryOn,
+            remaining,
+            lease,
+            fallbackTrace,
+            circuit,
+          );
+        }
+        failure = new Http2PoolError(504, 'DOWNSTREAM_TIMEOUT');
+      }
+      const status =
+        failure instanceof Http2PoolError || failure instanceof BodyCaptureError
+          ? failure.status
+          : 502;
+      const code =
+        failure instanceof Http2PoolError || failure instanceof BodyCaptureError
+          ? failure.code
+          : 'DOWNSTREAM_ERROR';
+      outcome = status;
+      // Client body failures say nothing about the upstream service.
+      if (!(failure instanceof BodyCaptureError)) circuit?.record(status);
+      if (status === 504)
+        this.metricsService.incrementDownstreamTimeout(service.name);
+      this.logger.warn(
         JSON.stringify({
-          msg: 'HTTP/2 downstream error, falling back to 502',
-          error: (err as Error).message,
-          targetUrl,
+          msg: 'HTTP/2 upstream request failed',
+          code,
           routeId: route.id,
           requestId,
         }),
       );
-      // Defer the error response while retries remain so a later attempt can
-      // still send a successful response on the same (untouched) connection.
-      if (retriesRemaining && retryOn.includes(502)) {
-        return 502;
+      if (pluginState?.plugins.length) {
+        const result = await this.pluginRunner.runOnError(pluginState.plugins, {
+          ...ctx,
+          error: new Error('Upstream request failed'),
+        });
+        if (result) {
+          this.sendShortCircuit(response, result);
+          return result.status;
+        }
       }
+      if (retriesRemaining && retryOn.includes(status)) return status;
       if (!response.headersSent) {
-        response.statusCode = 502;
+        response.statusCode = status;
         response.setHeader('Content-Type', 'application/json');
         response.end(
           JSON.stringify({
-            error: 'DOWNSTREAM_ERROR',
-            message: 'Downstream service error',
+            error: code,
+            message: 'Upstream request failed',
             requestId,
           }),
         );
       }
-      return 502;
+      return status;
+    } finally {
+      if (!dispatched && !handedOff) {
+        lease.release();
+        attemptTrace?.end(outcome);
+      }
+      this.bodies.releaseDetached(ctx);
     }
-  }
-
-  private bufferBody(request: Request): Promise<Buffer> {
-    return new Promise<Buffer>((resolve, reject) => {
-      // If body-parser already consumed and parsed the body, reconstruct it
-      const rawBody = (request as Request & { rawBody?: Buffer }).rawBody;
-      if (rawBody) {
-        resolve(rawBody);
-        return;
-      }
-      // Check if body is already an object (body-parser parsed it)
-      if (request.body !== undefined && request.body !== null) {
-        const bodyStr =
-          typeof request.body === 'string'
-            ? request.body
-            : JSON.stringify(request.body);
-        resolve(Buffer.from(bodyStr));
-        return;
-      }
-      // Bodyless request (e.g. GET/HEAD) or a stream already drained by an
-      // upstream parser — attaching 'data'/'end' here would wait forever.
-      if (request.readableEnded || request.complete) {
-        resolve(Buffer.alloc(0));
-        return;
-      }
-      // Stream is still available
-      const chunks: Buffer[] = [];
-      request.on('data', (chunk: Buffer) => chunks.push(chunk));
-      request.on('end', () => resolve(Buffer.concat(chunks)));
-      request.on('error', reject);
-    });
   }
 
   private getForwardedForFromRequest(request: Request): string | undefined {
@@ -411,7 +790,8 @@ export class ProxyService {
     targetUrl: string,
     timeoutMs: number,
   ): RequestHandler<http.IncomingMessage, http.ServerResponse> {
-    const cached = this.handlers.get(targetUrl);
+    const cacheKey = `${targetUrl}:${timeoutMs}`;
+    const cached = this.handlers.get(cacheKey);
     if (cached) return cached;
 
     const options: Options = {
@@ -422,9 +802,36 @@ export class ProxyService {
       timeout: timeoutMs,
       selfHandleResponse: true,
       on: {
-        proxyReq: (proxyReq: http.ClientRequest, req: http.IncomingMessage) => {
-          const rid = req.headers['x-request-id'];
-          const requestId = Array.isArray(rid) ? rid[0] : rid;
+        proxyReq: (
+          proxyReq: http.ClientRequest,
+          req: http.IncomingMessage,
+          res: http.ServerResponse,
+        ) => {
+          if (res.destroyed || res.writableEnded) {
+            proxyReq.destroy();
+            return;
+          }
+          const retryContext = (req as unknown as GwRequest).__gw_retry;
+          if (retryContext) {
+            retryContext.upstreamStarted = true;
+            proxyReq.once('close', () => {
+              retryContext.lease?.release();
+              retryContext.trace?.end(retryContext.outcome);
+            });
+            // The upstream deadline fires here even when the client socket's
+            // own timeout closes the connection and suppresses the error event.
+            proxyReq.once('timeout', () => retryContext.circuit?.record(504));
+            if (retryContext.trace) {
+              for (const header of ['traceparent', 'tracestate', 'baggage'])
+                proxyReq.removeHeader(header);
+              for (const [header, value] of Object.entries(
+                retryContext.trace.headers(),
+              ))
+                proxyReq.setHeader(header, value);
+            }
+            retryContext.abort = (error) => proxyReq.destroy(error);
+          }
+          const requestId = this.getRequestId(req, res);
           if (requestId) proxyReq.setHeader('X-Request-ID', requestId);
           const fwd = this.getForwardedFor(req);
           if (fwd) proxyReq.setHeader('X-Forwarded-For', fwd);
@@ -434,6 +841,8 @@ export class ProxyService {
           const rawBody = (req as http.IncomingMessage & { rawBody?: Buffer })
             .rawBody;
           if (rawBody) {
+            // Incoming chunked framing cannot accompany a replayed fixed-size body.
+            proxyReq.removeHeader('transfer-encoding');
             proxyReq.setHeader('Content-Length', rawBody.length);
             proxyReq.write(rawBody);
             proxyReq.end();
@@ -449,6 +858,8 @@ export class ProxyService {
           const retryCtx: RetryContext | undefined = (
             req as unknown as GwRequest
           ).__gw_retry;
+          if (retryCtx) retryCtx.outcome = statusCode;
+          retryCtx?.circuit?.record(statusCode);
           const requestId = this.getRequestId(req, res);
 
           if (
@@ -519,6 +930,10 @@ export class ProxyService {
           const nodeError = error as NodeJS.ErrnoException;
           const isTimeout = this.isTimeoutError(nodeError);
           const statusCode = isTimeout ? 504 : 502;
+          // Caller cancellation (ECANCELED) is neutral for the breaker.
+          if (nodeError.code === 'ECANCELED')
+            retryCtx?.circuit?.settle('neutral');
+          else retryCtx?.circuit?.record(statusCode);
 
           // Run onError plugins — first short-circuit wins
           const pluginState: PluginState | undefined = (
@@ -598,7 +1013,15 @@ export class ProxyService {
       http.IncomingMessage,
       http.ServerResponse
     >;
-    this.handlers.set(targetUrl, handler);
+    const maxEntries =
+      this.config.get<number>('proxy.maxHandlerCacheEntries') ??
+      DEFAULT_PROXY_HANDLERS.maxCacheEntries;
+    while (this.handlers.size >= maxEntries) {
+      const oldest = this.handlers.keys().next().value;
+      if (oldest === undefined) break;
+      this.handlers.delete(oldest);
+    }
+    this.handlers.set(cacheKey, handler);
     return handler;
   }
 
@@ -609,6 +1032,21 @@ export class ProxyService {
     service: ServiceConfig,
     requestId: string,
   ): PluginContext {
+    const abort = new AbortController();
+    const cancelled = () => abort.abort();
+    const cleanup = () => {
+      request.off?.('aborted', cancelled);
+      response.off?.('close', closed);
+      response.off?.('finish', cleanup);
+    };
+    const closed = () => {
+      if (!response.writableFinished) abort.abort();
+      cleanup();
+    };
+    request.once?.('aborted', cancelled);
+    response.once?.('close', closed);
+    response.once?.('finish', cleanup);
+    if (request.aborted || response.destroyed) abort.abort();
     const tenantId = this.configManager.getTenantId() ?? 'unknown';
     const user = (request as RequestWithUser).user;
     return {
@@ -618,6 +1056,7 @@ export class ProxyService {
       service,
       tenantId,
       requestId,
+      signal: abort.signal,
       logger: {
         info: (msg, meta) => this.logger.log(JSON.stringify({ msg, ...meta })),
         warn: (msg, meta) => this.logger.warn(JSON.stringify({ msg, ...meta })),
@@ -674,8 +1113,8 @@ export class ProxyService {
   ): string {
     const h = req.headers['x-request-id'];
     return (
-      (Array.isArray(h) ? h[0] : h) ??
       (res as unknown as ResponseWithLocals).locals?.requestId ??
+      (Array.isArray(h) ? h[0] : h) ??
       uuidv4()
     );
   }
@@ -686,6 +1125,6 @@ export class ProxyService {
   ): string {
     const h = request.headers['x-request-id'];
     const fromHeader = Array.isArray(h) ? h[0] : h;
-    return fromHeader ?? response.locals?.requestId ?? uuidv4();
+    return response.locals?.requestId ?? fromHeader ?? uuidv4();
   }
 }

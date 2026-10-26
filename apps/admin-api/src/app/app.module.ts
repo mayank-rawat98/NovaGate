@@ -1,4 +1,22 @@
+import { LogStreamController } from '../proxy-config/log-stream.controller';
+import { LogStreamService } from '../proxy-config/log-stream.service';
+import { LogRetentionController } from '../log-retention/log-retention.controller';
+import { LogRetentionService } from '../log-retention/log-retention.service';
+import { LogPrivacyController } from '../log-privacy/log-privacy.controller';
+import { LogPrivacyService } from '../log-privacy/log-privacy.service';
+import { ConsumerAnalyticsService } from '../proxy-config/consumer-analytics.service';
+import { ConsumerRollupService } from '../proxy-config/consumer-rollup.service';
+import { MetricsStreamService } from '../proxy-config/metrics-stream.service';
+import { metricStreamConfiguration } from '../proxy-config/metrics-stream.configuration';
+import { TracesController } from '../proxy-config/traces.controller';
+import { TracesService } from '../proxy-config/traces.service';
+import { validateTraceQueryConfiguration } from '../proxy-config/traces.configuration';
+import { LogExportModule } from '../log-export/log-export.module';
 import { Module } from '@nestjs/common';
+import { ConfigImportController } from '../config-import/config-import.controller';
+import { ConfigImportService } from '../config-import/config-import.service';
+import { APP_GUARD } from '@nestjs/core';
+import { TenantAuthGuard } from '../auth/tenant-auth.guard';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import {
@@ -19,10 +37,43 @@ import { AuthController } from '../auth/auth.controller';
 import { AuthService } from '../auth/auth.service';
 import { EmailService } from '../email/email.service';
 import { MigrationService } from '../database/migration.service';
+import { AlertsModule } from '../alerts/alerts.module';
+import { AutomationTokensController } from '../automation-tokens/automation-tokens.controller';
+import { AutomationTokensService } from '../automation-tokens/automation-tokens.service';
+import { PortalService } from '../portal/portal.service';
+import { PortalDevelopersService } from '../portal/portal-developers.service';
+import { PortalPublicController } from '../portal/portal-public.controller';
+import { PortalDeveloperController } from '../portal/portal-developer.controller';
+import { PortalAdminController } from '../portal/portal-admin.controller';
+import { PortalDeveloperGuard } from '../portal/portal-developer.guard';
+import { GatewayPluginsController } from '../gateway-plugins/gateway-plugins.controller';
+import { GatewayPluginsService } from '../gateway-plugins/gateway-plugins.service';
+import { CircuitBreakersController } from '../circuit-breakers/circuit-breakers.controller';
+import { CircuitBreakersService } from '../circuit-breakers/circuit-breakers.service';
+import {
+  BillingController,
+  StripeWebhookController,
+} from '../billing/billing.controller';
+import { BillingService } from '../billing/billing.service';
+import { StripeService } from '../billing/stripe.service';
+import { RegionsController } from '../regions/regions.controller';
+import { RegionsService } from '../regions/regions.service';
+import { WasmPluginsController } from '../wasm-plugins/wasm-plugins.controller';
+import { WasmPluginsService } from '../wasm-plugins/wasm-plugins.service';
+import { GraphqlFederationController } from '../graphql-federation/graphql-federation.controller';
+import { GraphqlFederationService } from '../graphql-federation/graphql-federation.service';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validate: (env) => ({
+        ...validateTraceQueryConfiguration(env),
+        metricStream: metricStreamConfiguration(env),
+      }),
+    }),
+    LogExportModule,
+    AlertsModule,
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
@@ -30,11 +81,21 @@ import { MigrationService } from '../database/migration.service';
         url: config.get('DATABASE_URL'),
         entities: [Tenant, ApiKey, PendingConfigUpdate],
         synchronize: false,
+        // Bound pool admission as well as worker SQL/network deadlines.
+        extra: {
+          max: 20,
+          connectionTimeoutMillis: 3000,
+          idleTimeoutMillis: 30000,
+        },
       }),
     }),
     TypeOrmModule.forFeature([Tenant, ApiKey, PendingConfigUpdate]),
   ],
   controllers: [
+    LogStreamController,
+    ConfigImportController,
+    LogRetentionController,
+    LogPrivacyController,
     HealthController,
     AuthController,
     TenantsController,
@@ -42,14 +103,46 @@ import { MigrationService } from '../database/migration.service';
     ServicesController,
     ConsumersController,
     AnalyticsController,
+    TracesController,
+    AutomationTokensController,
+    PortalPublicController,
+    PortalDeveloperController,
+    PortalAdminController,
+    GatewayPluginsController,
+    CircuitBreakersController,
+    BillingController,
+    StripeWebhookController,
+    RegionsController,
+    WasmPluginsController,
+    GraphqlFederationController,
   ],
   providers: [
+    LogStreamService,
+    ConfigImportService,
+    { provide: APP_GUARD, useClass: TenantAuthGuard },
     AuthService,
     EmailService,
     TenantsService,
     TenantProvisioningService,
     ConfigPushService,
+    LogPrivacyService,
+    LogRetentionService,
     MigrationService,
+    TracesService,
+    MetricsStreamService,
+    ConsumerAnalyticsService,
+    ConsumerRollupService,
+    AutomationTokensService,
+    PortalService,
+    PortalDevelopersService,
+    PortalDeveloperGuard,
+    GatewayPluginsService,
+    CircuitBreakersService,
+    BillingService,
+    StripeService,
+    RegionsService,
+    WasmPluginsService,
+    GraphqlFederationService,
   ],
 })
 export class AppModule {}

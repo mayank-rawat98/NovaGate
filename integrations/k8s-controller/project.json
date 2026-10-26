@@ -1,0 +1,79 @@
+{
+  "name": "k8s-controller",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "integrations/k8s-controller",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/dist"],
+      "inputs": [
+        "{projectRoot}/**/*.go",
+        "{projectRoot}/go.mod",
+        "{projectRoot}/go.sum"
+      ],
+      "options": {
+        "command": "go build -trimpath -o dist/novagate-controller .",
+        "cwd": "integrations/k8s-controller"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "inputs": [
+        "{projectRoot}/**/*.go",
+        "{projectRoot}/go.mod",
+        "{projectRoot}/go.sum"
+      ],
+      "options": {
+        "commands": [
+          "test -z \"$(gofmt -l .)\"",
+          "go vet ./...",
+          "go vet -tags e2e ./..."
+        ],
+        "cwd": "integrations/k8s-controller",
+        "parallel": false
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "inputs": [
+        "{projectRoot}/**/*.go",
+        "{projectRoot}/go.mod",
+        "{projectRoot}/go.sum",
+        "{projectRoot}/config/**/*",
+        { "env": "KUBEBUILDER_ASSETS" }
+      ],
+      "options": {
+        "command": "go test ./... -count=1",
+        "cwd": "integrations/k8s-controller"
+      }
+    },
+    "generate": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "commands": [
+          "go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.5 object paths=./api/...",
+          "go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.5 crd paths=./api/... output:crd:artifacts:config=config/crd",
+          "go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.5 rbac:roleName=novagate-controller paths=./... output:rbac:artifacts:config=config/rbac"
+        ],
+        "cwd": "integrations/k8s-controller",
+        "parallel": false
+      }
+    },
+    "e2e": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "dependsOn": [
+        {
+          "projects": ["admin-api", "control-plane", "@api-gateway/api"],
+          "target": "build"
+        }
+      ],
+      "options": {
+        "commands": ["eslint tools/k8s-e2e.mjs", "node tools/k8s-e2e.mjs"],
+        "parallel": false
+      }
+    }
+  }
+}

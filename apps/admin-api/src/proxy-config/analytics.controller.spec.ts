@@ -1,7 +1,10 @@
+import { ConsumerAnalyticsService } from './consumer-analytics.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AnalyticsController } from './analytics.controller';
 import { DataSource } from 'typeorm';
 import { ConfigPushService } from '../config-push/config-push.service';
+import { ConfigService } from '@nestjs/config';
+import { MetricsStreamService } from './metrics-stream.service';
 
 const TENANT = 'aabbccdd-1111-2222-3333-444455556666';
 
@@ -20,8 +23,16 @@ async function build(ds: MockDs, cp = mockConfigPush()) {
   const module: TestingModule = await Test.createTestingModule({
     controllers: [AnalyticsController],
     providers: [
+      { provide: ConsumerAnalyticsService, useValue: {} },
       { provide: DataSource, useValue: ds },
       { provide: ConfigPushService, useValue: cp },
+      {
+        provide: MetricsStreamService,
+        useValue: new MetricsStreamService(
+          ds as unknown as DataSource,
+          new ConfigService(),
+        ),
+      },
     ],
   }).compile();
   return { controller: module.get(AnalyticsController), ds, cp };
@@ -29,6 +40,16 @@ async function build(ds: MockDs, cp = mockConfigPush()) {
 
 describe('AnalyticsController', () => {
   describe('GET logs', () => {
+    it('keeps database receipt metadata out of public request log records', async () => {
+      const manager = mockManager([
+        { id: 'log-1', path: '/users', receivedAt: new Date() },
+      ]);
+      const ds = { transaction: jest.fn(async (fn) => fn(manager)) };
+      const { controller } = await build(ds);
+      expect(await controller.getLogs(TENANT)).toEqual([
+        { id: 'log-1', path: '/users', clientIp: '[redacted]' },
+      ]);
+    });
     it('executes SET LOCAL search_path and queries request_logs', async () => {
       const manager = mockManager([{ id: 'log-1' }]);
       const ds = {
@@ -46,8 +67,8 @@ describe('AnalyticsController', () => {
       expect(calls[0][0]).toContain(
         'tenant_aabbccdd_1111_2222_3333_444455556666',
       );
-      expect(calls[1][0]).toContain('request_logs');
-      expect(calls[1][0]).toContain('LIMIT 50');
+      expect(calls[3][0]).toContain('request_logs');
+      expect(calls[3][0]).toContain('LIMIT 50');
     });
 
     it('applies path filter', async () => {
@@ -62,7 +83,7 @@ describe('AnalyticsController', () => {
       const { controller } = await build(ds);
       await controller.getLogs(TENANT, undefined, undefined, '/users');
 
-      const queryCall = manager.query.mock.calls[1];
+      const queryCall = manager.query.mock.calls[3];
       expect(queryCall[0]).toContain('ILIKE');
       expect(queryCall[1]).toContain('%/users%');
     });
@@ -79,7 +100,7 @@ describe('AnalyticsController', () => {
       const { controller } = await build(ds);
       await controller.getLogs(TENANT, undefined, undefined, undefined, '500');
 
-      const queryCall = manager.query.mock.calls[1];
+      const queryCall = manager.query.mock.calls[3];
       expect(queryCall[1]).toContain(500);
     });
   });
@@ -159,7 +180,8 @@ describe('AnalyticsController', () => {
       await controller.getMetrics(TENANT);
 
       const queryCall = manager.query.mock.calls[1];
-      expect(queryCall[0]).toContain("'24 hours'");
+      expect(queryCall[1]).toEqual([86400, 600]);
+      expect(queryCall[0]).toContain('LIMIT $2');
     });
 
     it('accepts 7d period', async () => {
@@ -175,7 +197,7 @@ describe('AnalyticsController', () => {
       await controller.getMetrics(TENANT, '7d');
 
       const queryCall = manager.query.mock.calls[1];
-      expect(queryCall[0]).toContain("'7 days'");
+      expect(queryCall[1]).toEqual([604800, 600]);
     });
   });
 

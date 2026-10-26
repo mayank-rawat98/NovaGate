@@ -2,6 +2,9 @@
 
 import { useState } from 'react';
 import useSWR from 'swr';
+import { toast } from 'sonner';
+import { WorkspaceDialog } from '../../../components/workspace-dialog';
+import { DataLoadNotice } from '../../../components/data-load-notice';
 import { Trash2, Plus, X, Pencil, GripVertical } from 'lucide-react';
 import {
   getServices,
@@ -10,7 +13,14 @@ import {
   updateService,
   deleteService,
 } from '../../../lib/api-client';
-import { getTenantId } from '../../../lib/auth';
+import { useTenantId } from '../../../lib/auth';
+import { useLiveCircuits } from '../../../lib/use-live-circuits';
+import {
+  CIRCUIT_BREAKER_LIMITS,
+  DEFAULT_CIRCUIT_BREAKER,
+  circuitBreakerConfig,
+  type CircuitState,
+} from '@api-gateway/shared-types';
 import type {
   Service,
   CreateServiceDto,
@@ -21,8 +31,34 @@ import type {
 const HEALTH_STYLES: Record<string, string> = {
   healthy: 'bg-green-100 text-green-700',
   unhealthy: 'bg-red-100 text-red-700',
+  degraded: 'bg-amber-100 text-amber-800',
   unknown: 'bg-gray-100 text-gray-500',
 };
+
+type CircuitBadgeState = CircuitState | 'off' | 'unreported';
+const CIRCUIT_STYLES: Record<CircuitBadgeState, string> = {
+  closed: 'bg-green-100 text-green-700',
+  'half-open': 'bg-amber-100 text-amber-800',
+  open: 'bg-red-100 text-red-700',
+  off: 'bg-gray-100 text-gray-600',
+  unreported: 'bg-gray-100 text-gray-600',
+};
+const CIRCUIT_LABELS: Record<CircuitBadgeState, string> = {
+  closed: 'Closed',
+  'half-open': 'Probing',
+  open: 'Open',
+  off: 'Off',
+  // The gateway has not reported this service recently (offline or not yet configured).
+  unreported: 'No report',
+};
+type CircuitField = keyof typeof CIRCUIT_BREAKER_LIMITS;
+const CIRCUIT_FIELDS: Array<{ key: CircuitField; label: string }> = [
+  { key: 'windowSize', label: 'Window (requests)' },
+  { key: 'failureRatePercent', label: 'Open above failure rate (%)' },
+  { key: 'minimumRequests', label: 'Minimum requests' },
+  { key: 'openMs', label: 'Open period (ms)' },
+  { key: 'halfOpenSuccesses', label: 'Successful probes to close' },
+];
 
 interface TargetRow {
   url: string;
@@ -31,23 +67,77 @@ interface TargetRow {
 
 interface FormState {
   name: string;
+  loadBalancing: 'weighted-round-robin' | 'least-connections';
   targets: TargetRow[];
   healthCheckPath: string;
   timeoutMs: string;
+  healthCheckIntervalMs: string;
+  healthCheckProtocol: 'http' | 'grpc';
+  healthCheckService: string;
+  h2: boolean;
+  supportsWebSocket: boolean;
+  unhealthyFallback: boolean;
+  circuitEnabled: boolean;
+  circuit: Record<CircuitField, string>;
 }
+
+const circuitStrings = (
+  config = DEFAULT_CIRCUIT_BREAKER,
+): Record<CircuitField, string> =>
+  Object.fromEntries(
+    Object.keys(CIRCUIT_BREAKER_LIMITS).map((key) => [
+      key,
+      String(config[key as CircuitField]),
+    ]),
+  ) as Record<CircuitField, string>;
 
 const EMPTY_TARGET: TargetRow = { url: '', weight: '1' };
 
 const EMPTY_FORM: FormState = {
   name: '',
+  loadBalancing: 'weighted-round-robin',
   targets: [{ url: '', weight: '1' }],
   healthCheckPath: '/health',
   timeoutMs: '10000',
+  healthCheckIntervalMs: '10000',
+  healthCheckProtocol: 'http',
+  healthCheckService: '',
+  h2: false,
+  supportsWebSocket: false,
+  unhealthyFallback: false,
+  // New services get the automatic circuit breaker.
+  circuitEnabled: true,
+  circuit: circuitStrings(),
 };
 
+/** The breaker settings, or an error message when a value is out of range. */
+function circuitFromForm(form: FormState) {
+  const config = circuitBreakerConfig({
+    enabled: form.circuitEnabled,
+    ...Object.fromEntries(
+      Object.entries(form.circuit).map(([key, value]) => [key, Number(value)]),
+    ),
+  });
+  return (
+    config ??
+    'Circuit breaker values are out of range. The minimum requests cannot exceed the window.'
+  );
+}
+
 function formToDto(form: FormState): CreateServiceDto {
+  const circuit = circuitFromForm(form);
   return {
     name: form.name,
+    // Saved even when off, so turning it back on keeps the settings.
+    ...(typeof circuit === 'string' ? {} : { circuitBreaker: circuit }),
+    loadBalancing: form.loadBalancing,
+    healthCheckIntervalMs: Number(form.healthCheckIntervalMs),
+    healthCheckProtocol: form.healthCheckProtocol,
+    healthCheckService:
+      form.healthCheckProtocol === 'grpc' ? form.healthCheckService.trim() : '',
+    h2: form.h2,
+    supportsWebSocket: form.supportsWebSocket,
+    unhealthyFallback: form.unhealthyFallback,
     targets: form.targets
       .filter((t) => t.url.trim())
       .map((t) => {
@@ -62,9 +152,13 @@ function formToDto(form: FormState): CreateServiceDto {
 }
 
 export default function ServicesPage() {
-  const tenantId = getTenantId() ?? '';
+  const tenantId = useTenantId() ?? '';
 
-  const { data: services, mutate } = useSWR(
+  const {
+    data: services,
+    error: loadError,
+    mutate,
+  } = useSWR(
     tenantId ? `services-${tenantId}` : null,
     () => getServices(tenantId),
     { refreshInterval: 30000 },
@@ -100,6 +194,16 @@ export default function ServicesPage() {
       })),
       healthCheckPath: service.healthCheckPath,
       timeoutMs: String(service.timeoutMs),
+      healthCheckIntervalMs: String(service.healthCheckIntervalMs ?? 10000),
+      loadBalancing: service.loadBalancing ?? 'weighted-round-robin',
+      healthCheckProtocol: service.healthCheckProtocol ?? 'http',
+      healthCheckService: service.healthCheckService ?? '',
+      h2: service.h2 ?? false,
+      supportsWebSocket: service.supportsWebSocket ?? false,
+      unhealthyFallback: service.unhealthyFallback ?? false,
+      // Services created before circuit breakers existed have none.
+      circuitEnabled: service.circuitBreaker?.enabled ?? false,
+      circuit: circuitStrings(service.circuitBreaker ?? undefined),
     });
     setFormError(null);
     setPanelOpen(true);
@@ -133,6 +237,11 @@ export default function ServicesPage() {
     setSaving(true);
     try {
       setFormError(null);
+      const circuit = circuitFromForm(form);
+      if (typeof circuit === 'string') {
+        setFormError(circuit);
+        return;
+      }
       const dto = formToDto(form);
       if (dto.targets.length === 0) {
         setFormError('Add at least one target URL before saving.');
@@ -145,6 +254,8 @@ export default function ServicesPage() {
       }
       setPanelOpen(false);
       await mutate();
+    } catch {
+      setFormError('Service could not be saved. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -157,11 +268,14 @@ export default function ServicesPage() {
       await deleteService(tenantId, deleteTarget);
       setDeleteTarget(null);
       await mutate();
+    } catch {
+      toast.error('Service could not be deleted. Please try again.');
     } finally {
       setDeleting(false);
     }
   }
 
+  const circuits = useLiveCircuits(tenantId);
   const healthMap = Object.fromEntries(
     (healthSnapshots ?? []).map((h: HealthSnapshot) => [h.serviceId, h]),
   );
@@ -175,8 +289,11 @@ export default function ServicesPage() {
   }
 
   return (
-    <div className="p-8">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="p-4 sm:p-8">
+      {loadError && (
+        <DataLoadNotice label="Services" onRetry={() => mutate()} />
+      )}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold text-gray-900">Services</h1>
         <button
           onClick={openCreate}
@@ -187,7 +304,21 @@ export default function ServicesPage() {
         </button>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <p role="status" className="mb-2 text-xs text-gray-500">
+        Circuit status{' '}
+        {circuits.connection === 'live'
+          ? `is live${circuits.reportedAt ? `; last gateway report ${new Date(circuits.reportedAt).toLocaleTimeString()}` : ''}`
+          : circuits.connection === 'reconnecting'
+            ? 'is reconnecting; showing the last report'
+            : 'is connecting'}
+        .
+      </p>
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label="Services table"
+        className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm"
+      >
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50">
@@ -209,6 +340,9 @@ export default function ServicesPage() {
               <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-gray-500">
                 Latency
               </th>
+              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                Circuit
+              </th>
               <th className="px-4 py-3" />
             </tr>
           </thead>
@@ -216,16 +350,16 @@ export default function ServicesPage() {
             {!services ? (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={8}
                   className="px-4 py-8 text-center text-sm text-gray-400"
                 >
-                  Loading…
+                  {loadError ? 'Data unavailable' : 'Loading…'}
                 </td>
               </tr>
             ) : services.length === 0 ? (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={8}
                   className="px-4 py-8 text-center text-sm text-gray-400"
                 >
                   No services configured
@@ -274,7 +408,9 @@ export default function ServicesPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-500">
-                      {service.healthCheckPath}
+                      {service.healthCheckProtocol === 'grpc'
+                        ? `gRPC: ${service.healthCheckService || 'overall server'}`
+                        : service.healthCheckPath}
                     </td>
                     <td className="px-4 py-3">
                       <span
@@ -298,6 +434,12 @@ export default function ServicesPage() {
                       ) : (
                         <span className="text-gray-400">—</span>
                       )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <CircuitBadge
+                        enabled={service.circuitBreaker?.enabled === true}
+                        status={circuits.byService.get(service.id)}
+                      />
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
@@ -350,17 +492,17 @@ export default function ServicesPage() {
 
       {/* Slide-over panel */}
       {panelOpen && (
-        <div className="fixed inset-0 z-40 flex justify-end">
-          <div
-            className="fixed inset-0 bg-black/20"
-            onClick={() => setPanelOpen(false)}
-          />
-          <div className="relative z-50 flex h-full w-[480px] flex-col bg-white shadow-xl">
+        <WorkspaceDialog
+          label="Services form"
+          onClose={() => setPanelOpen(false)}
+        >
+          <div className="relative z-50 flex h-full w-full max-w-[480px] flex-col bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
               <h2 className="text-base font-semibold text-gray-900">
                 {editId ? 'Edit Service' : 'Add Service'}
               </h2>
               <button
+                aria-label="Close form"
                 onClick={() => setPanelOpen(false)}
                 className="rounded p-1 text-gray-400 hover:bg-gray-100"
               >
@@ -374,10 +516,14 @@ export default function ServicesPage() {
             >
               {/* Name */}
               <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700">
+                <label
+                  htmlFor="services-field-1"
+                  className="text-sm font-medium text-gray-700"
+                >
                   Name
                 </label>
                 <input
+                  id="services-field-1"
                   type="text"
                   required
                   placeholder="user-service"
@@ -392,7 +538,10 @@ export default function ServicesPage() {
               {/* Targets */}
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
-                  <label className="text-sm font-medium text-gray-700">
+                  <label
+                    htmlFor="services-target-0"
+                    className="text-sm font-medium text-gray-700"
+                  >
                     Targets
                     <span className="ml-1 font-normal text-gray-400 text-xs">
                       (URL + weight for load balancing)
@@ -405,7 +554,9 @@ export default function ServicesPage() {
                     <div key={i} className="flex items-center gap-2">
                       <GripVertical className="h-4 w-4 flex-shrink-0 text-gray-300" />
                       <input
+                        id={`services-target-${i}`}
                         type="url"
+                        aria-label={`Target ${i + 1} URL`}
                         required
                         placeholder="http://service:4000"
                         value={target.url}
@@ -423,12 +574,14 @@ export default function ServicesPage() {
                             updateTarget(i, 'weight', e.target.value)
                           }
                           className="w-14 rounded-md border border-gray-300 px-2 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                          aria-label={`Target ${i + 1} weight`}
                           title="Weight (1–100)"
                         />
                       </div>
                       {form.targets.length > 1 && (
                         <button
                           type="button"
+                          aria-label={`Remove target ${i + 1}`}
                           onClick={() => removeTarget(i)}
                           className="flex-shrink-0 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-red-500"
                         >
@@ -449,7 +602,9 @@ export default function ServicesPage() {
                 </button>
 
                 {formError && (
-                  <p className="text-xs text-red-500">{formError}</p>
+                  <p role="alert" className="text-xs text-red-700">
+                    {formError}
+                  </p>
                 )}
 
                 {form.targets.length > 1 && (
@@ -460,35 +615,287 @@ export default function ServicesPage() {
                 )}
               </div>
 
-              {/* Health Check Path */}
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700">
-                  Health Check Path
+              <div className="flex flex-col gap-2 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
+                <label
+                  htmlFor="service-load-balancing"
+                  className="text-sm font-medium text-gray-800"
+                >
+                  Load balancing
                 </label>
-                <input
-                  type="text"
-                  placeholder="/health"
-                  value={form.healthCheckPath}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, healthCheckPath: e.target.value }))
+                <select
+                  id="service-load-balancing"
+                  value={form.loadBalancing}
+                  onChange={(event) =>
+                    setForm((value) => ({
+                      ...value,
+                      loadBalancing: event.target
+                        .value as FormState['loadBalancing'],
+                    }))
                   }
-                  className="rounded-md border border-gray-300 px-3 py-2 font-mono text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                />
-                <p className="text-xs text-gray-400">
-                  GET request sent every 10s. Target is marked unhealthy after 3
-                  consecutive failures.
+                  className="rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm"
+                  aria-describedby="service-load-balancing-help"
+                >
+                  <option value="weighted-round-robin">
+                    Weighted round robin
+                  </option>
+                  <option value="least-connections">Least connections</option>
+                </select>
+                <p
+                  id="service-load-balancing-help"
+                  className="text-xs leading-relaxed text-gray-600"
+                >
+                  {form.loadBalancing === 'least-connections'
+                    ? 'Send new work to the least busy healthy target, adjusted by weight. Useful for slow requests, gRPC streams and WebSocket tunnels. Counts are local to each gateway.'
+                    : 'Rotate healthy targets according to their relative weights. A predictable default for requests with similar duration.'}
                 </p>
               </div>
 
+              <fieldset className="flex flex-col gap-3 rounded-lg border border-gray-200 p-3">
+                <legend className="px-1 text-sm font-medium text-gray-700">
+                  Upstream protocols
+                </legend>
+                <label className="flex items-start gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={form.h2}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, h2: e.target.checked }))
+                    }
+                  />
+                  <span>
+                    Use HTTP/2 for upstream connections
+                    <span className="block text-xs text-gray-500">
+                      Native gRPC calls use HTTP/2 through the gateway’s
+                      separate gRPC endpoint. Choose gRPC health checks below
+                      for native gRPC servers.
+                    </span>
+                  </span>
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    aria-describedby="services-websocket-help"
+                    checked={form.supportsWebSocket}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        supportsWebSocket: e.target.checked,
+                      }))
+                    }
+                  />
+                  Allow WebSocket upgrades
+                </label>
+                <p
+                  id="services-websocket-help"
+                  className="text-xs text-gray-500"
+                >
+                  Add a GET route for your WebSocket endpoint. Authentication
+                  and connection limits apply before connecting. Basic Auth,
+                  OIDC, OAuth introspection, ACL and IP rules support upgrades;
+                  use a separate route for plugins that inspect HTTP bodies.
+                  Prefer credentials in headers; query tokens need operator
+                  opt-in.
+                </p>
+              </fieldset>
+              <div className="flex flex-col gap-1">
+                <label
+                  htmlFor="services-health-protocol"
+                  className="text-sm font-medium text-gray-700"
+                >
+                  Health check protocol
+                </label>
+                <select
+                  id="services-health-protocol"
+                  value={form.healthCheckProtocol}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      healthCheckProtocol: e.target.value as 'http' | 'grpc',
+                    }))
+                  }
+                  className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+                >
+                  <option value="http">HTTP endpoint</option>
+                  <option value="grpc">Native gRPC health service</option>
+                </select>
+              </div>
+              {form.healthCheckProtocol === 'grpc' && (
+                <div className="flex flex-col gap-1">
+                  <label
+                    htmlFor="services-grpc-health-service"
+                    className="text-sm font-medium text-gray-700"
+                  >
+                    gRPC health service name
+                  </label>
+                  <input
+                    id="services-grpc-health-service"
+                    value={form.healthCheckService}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        healthCheckService: e.target.value,
+                      }))
+                    }
+                    placeholder="Leave empty for overall server health"
+                    className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  />
+                  <p className="text-xs text-gray-500">
+                    Calls the standard health Check RPC. Only a successful
+                    SERVING response counts as healthy. Your upstream must
+                    implement grpc.health.v1.Health.
+                  </p>
+                </div>
+              )}
+
+              {/* Health Check Path */}
+              {form.healthCheckProtocol === 'http' && (
+                <div className="flex flex-col gap-1">
+                  <label
+                    htmlFor="services-health-path"
+                    className="text-sm font-medium text-gray-700"
+                  >
+                    Health Check Path
+                  </label>
+                  <input
+                    type="text"
+                    id="services-health-path"
+                    placeholder="/health"
+                    value={form.healthCheckPath}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        healthCheckPath: e.target.value,
+                      }))
+                    }
+                    className="rounded-md border border-gray-300 px-3 py-2 font-mono text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-400">
+                    Only successful (2xx) responses count as healthy. Failure
+                    and recovery thresholds are controlled by the gateway
+                    operator.
+                  </p>
+                </div>
+              )}
+
+              <div className="flex flex-col gap-1">
+                <label
+                  htmlFor="services-health-interval"
+                  className="text-sm font-medium text-gray-700"
+                >
+                  Health check interval (ms)
+                </label>
+                <input
+                  id="services-health-interval"
+                  type="number"
+                  required
+                  min={1000}
+                  max={60000}
+                  value={form.healthCheckIntervalMs}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      healthCheckIntervalMs: e.target.value,
+                    }))
+                  }
+                  className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+                />
+                <p className="text-xs text-gray-500">
+                  Choose 1–60 seconds. Shorter intervals detect failures sooner
+                  and send more probe requests.
+                </p>
+              </div>
+              <label className="flex items-start gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={form.unhealthyFallback}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      unhealthyFallback: e.target.checked,
+                    }))
+                  }
+                />
+                <span>
+                  Try failed targets when all targets are unhealthy
+                  <span className="mt-1 block text-xs text-gray-500">
+                    Disabled by default: requests receive unavailable until a
+                    target recovers. Enable only if continuing to attempt failed
+                    upstreams is appropriate for your service.
+                  </span>
+                </span>
+              </label>
+
+              <fieldset className="flex flex-col gap-3 rounded-md border border-gray-200 p-3">
+                <legend className="px-1 text-sm font-medium text-gray-700">
+                  Circuit breaker
+                </legend>
+                <label className="flex items-start gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={form.circuitEnabled}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        circuitEnabled: e.target.checked,
+                      }))
+                    }
+                  />
+                  <span>
+                    Stop sending traffic while this service is failing
+                    <span className="mt-1 block text-xs text-gray-500">
+                      When more than the failure rate of recent requests fail
+                      (5xx, timeouts or connection errors), the gateway answers
+                      503 CIRCUIT_OPEN for the open period, then lets one probe
+                      request through at a time until enough succeed.
+                    </span>
+                  </span>
+                </label>
+                {form.circuitEnabled && (
+                  <div className="grid grid-cols-2 gap-3">
+                    {CIRCUIT_FIELDS.map(({ key, label }) => (
+                      <div key={key} className="flex flex-col gap-1">
+                        <label
+                          htmlFor={`services-circuit-${key}`}
+                          className="text-xs font-medium text-gray-700"
+                        >
+                          {label}
+                        </label>
+                        <input
+                          id={`services-circuit-${key}`}
+                          type="number"
+                          required
+                          min={CIRCUIT_BREAKER_LIMITS[key][0]}
+                          max={CIRCUIT_BREAKER_LIMITS[key][1]}
+                          value={form.circuit[key]}
+                          onChange={(e) =>
+                            setForm((f) => ({
+                              ...f,
+                              circuit: { ...f.circuit, [key]: e.target.value },
+                            }))
+                          }
+                          className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </fieldset>
+
               {/* Timeout */}
               <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700">
+                <label
+                  htmlFor="services-field-3"
+                  className="text-sm font-medium text-gray-700"
+                >
                   Timeout{' '}
                   <span className="font-normal text-gray-400">(ms)</span>
                 </label>
                 <input
+                  id="services-field-3"
                   type="number"
                   min={100}
+                  max={3600000}
+                  required
                   placeholder="10000"
                   value={form.timeoutMs}
                   onChange={(e) =>
@@ -501,6 +908,7 @@ export default function ServicesPage() {
               <div className="mt-auto flex justify-end gap-2 pt-4">
                 <button
                   type="button"
+                  aria-label="Close form"
                   onClick={() => setPanelOpen(false)}
                   className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                 >
@@ -516,8 +924,34 @@ export default function ServicesPage() {
               </div>
             </form>
           </div>
-        </div>
+        </WorkspaceDialog>
       )}
     </div>
+  );
+}
+
+function CircuitBadge({
+  enabled,
+  status,
+}: {
+  enabled: boolean;
+  status?: { state: CircuitState; failures: number; requests: number };
+}) {
+  const state: CircuitBadgeState = enabled
+    ? (status?.state ?? 'unreported')
+    : 'off';
+  return (
+    <span className="flex flex-col gap-0.5">
+      <span
+        className={`inline-block w-fit rounded px-2 py-0.5 text-xs font-medium ${CIRCUIT_STYLES[state]}`}
+      >
+        {CIRCUIT_LABELS[state]}
+      </span>
+      {enabled && status && status.requests > 0 && (
+        <span className="text-xs text-gray-500">
+          {status.failures}/{status.requests} failed
+        </span>
+      )}
+    </span>
   );
 }

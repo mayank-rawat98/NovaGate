@@ -1,6 +1,6 @@
 # NovaGate — Self-Hosted API Gateway
 
-> A production-grade, multi-tenant API gateway where **live traffic never touches the SaaS servers**. Tenants deploy the gateway binary on their own VPS; the SaaS control plane handles config, analytics, and routing rules only.
+> A multi-tenant API gateway where **API proxy traffic stays on the customer's data plane**. Tenants deploy the gateway binary on their own VPS; the control plane manages configuration and recorded telemetry. Production acceptance and remaining capabilities are tracked in [PROGRESS.md](PROGRESS.md).
 
 **Live:** [novagate.dev](https://novagate.dev) &nbsp;·&nbsp; **Docs:** [novagate.dev/docs](https://novagate.dev/docs) &nbsp;·&nbsp; **Dashboard:** [app.novagate.dev](https://app.novagate.dev)
 
@@ -8,11 +8,13 @@
 
 ## Why this exists
 
-Most API gateway SaaS products (Kong Cloud, Zuplo, etc.) proxy your production traffic through their servers — introducing latency, per-request costs, and data-sovereignty concerns. NovaGate separates the **data plane** (traffic) from the **control plane** (configuration), so:
+NovaGate separates the **data plane** (API traffic) from the **control plane** (configuration and recorded telemetry):
 
-- Live traffic is proxied directly on the customer's own server — zero latency added by SaaS hops
-- SaaS server cost scales with number of tenants, not request volume
-- If the control plane goes offline, the gateway keeps serving from its local Redis warm-start cache
+- The customer's gateway proxies requests directly to downstream services.
+- Shared control-plane services manage configuration and recorded telemetry; telemetry storage and processing still scale with recorded volume.
+- A valid local Redis configuration cache lets a gateway warm-start while the control plane is unavailable.
+
+Kong also supports [separate control and data planes](https://developer.konghq.com/gateway/hybrid-mode/) and [self-managed data-plane hosting](https://developer.konghq.com/gateway/topology-hosting-options/). Our beyond-Kong roadmap requires verified capabilities, reliability, operator workflows and comparative acceptance; this deployment model alone does not establish an advantage.
 
 ---
 
@@ -25,7 +27,7 @@ CUSTOMER'S VPS                          SAAS SERVERS (novagate.dev)
 │  ControlPlaneConnector  ───┼──WSS────►│  TenantConnectionManager            │
 │  GatewayConfigManager      │          │                                      │
 │  (in-memory + Redis cache) │          │  apps/admin-api  (NestJS REST)      │
-│                            │          │  apps/dashboard  (Next.js 14)       │
+│                            │          │  apps/dashboard  (Next.js 16)       │
 │  Proxy  (live traffic)     │          │  PostgreSQL  (schema-per-tenant)    │
 │  Client → Gateway          │          │  Redis  (config.update pub/sub)     │
 │    → Downstream service    │          └─────────────────────────────────────┘
@@ -43,14 +45,14 @@ CUSTOMER'S VPS                          SAAS SERVERS (novagate.dev)
 
 ## Tech Stack
 
-| Layer                | Technology                                                      |
-| -------------------- | --------------------------------------------------------------- |
-| Gateway (data plane) | NestJS 10, TypeScript, Redis (sliding-window rate limiter)      |
-| Control plane        | NestJS, WebSocket (`ws`), Redis pub/sub                         |
-| Admin API            | NestJS, TypeORM, PostgreSQL (schema-per-tenant)                 |
-| Dashboard            | Next.js 14 App Router, Tailwind CSS, SWR                        |
+| Layer                | Technology                                                                              |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| Gateway (data plane) | NestJS 11, TypeScript, Redis (sliding-window rate limiter)                              |
+| Control plane        | NestJS, WebSocket (`ws`), Redis pub/sub                                                 |
+| Admin API            | NestJS, TypeORM, PostgreSQL (schema-per-tenant)                                         |
+| Dashboard            | Next.js 16 App Router, Tailwind CSS, SWR                                                |
 | Infrastructure       | Docker, Docker Compose, Caddy (SSL termination, shared with squadup.in), GitHub Actions |
-| Monorepo             | Nx 20 with project-boundary lint rules                          |
+| Monorepo             | Nx 22 with project-boundary lint rules                                                  |
 
 ---
 
@@ -66,7 +68,7 @@ Each tenant gets a dedicated schema (`tenant_<uuid>`) provisioned at signup. Que
 
 ### WebSocket config delivery with offline queue
 
-The control plane holds one persistent WebSocket per connected gateway. If a gateway is offline when a config change is published, the update is stored in `public.pending_config_updates` and replayed on reconnect. Gateways also persist config to local Redis so they can cold-start without a control-plane round-trip.
+The control plane holds one persistent WebSocket per connected gateway. Every configuration is stored in `public.pending_config_updates` before publication and retained until the gateway acknowledges its database version. The latest persisted tenant configuration is also loaded on authentication. Gateways also persist config to local Redis so they can cold-start without a control-plane round-trip.
 
 ### Plugin system — zero gateway.module.ts changes for new plugins
 
@@ -111,7 +113,7 @@ ESLint tags prevent circular imports between `proxy`, `rate-limit`, `logging`, a
 apps/
   api/                    Gateway binary — Docker image deployed on customer VPS
     src/gateway/
-      plugins/            Plugin system — registry, runner, and 12 built-in plugins
+      plugins/            Plugin system — registry, runner, built-in, WASM and third-party plugins
         cors/             Per-route CORS headers and preflight handling
         ip-restriction/   CIDR allow/deny per route
         rate-limit/       Per-route Redis sliding-window rate limiter
@@ -124,11 +126,24 @@ apps/
         hmac-auth/        HMAC-SHA256/512 signature validation; multi-secret rotation; clock skew
         acl/              Consumer group allow/deny — reads groups from TenantConfig.consumers
         mtls/             Client cert validation via ssl_client_cert header; uses tenant CA PEM
+        graphql-guard/    AST depth/complexity/introspection policy for GraphQL routes
+        graphql-federation/  Supergraph query planning and subgraph execution
+        wasm/             WebAssembly plugin sandbox (worker threads, host functions only)
+        third-party/      Operator-pinned npm plugins behind deadlines and quarantine
+      circuit-breaker/    Per-service circuits across HTTP/1, HTTP/2, WebSocket and gRPC
+      metering/           Monthly usage meters and consumer quotas
   control-plane/          WebSocket server — config push & telemetry ingestion
   admin-api/              REST API for dashboard — CRUD, analytics, auth
-  dashboard/              Next.js 14 tenant UI — route management, observability
+  dashboard/              Next.js 16.2 tenant UI — route management, observability
+  developer-portal/       Next.js 16.2 portal for a workspace's API consumers
+integrations/
+  terraform-provider/     Go Terraform provider (novagate_*)
+  k8s-controller/         Go Kubernetes controller (GatewayService/GatewayRoute CRDs)
+tools/
+  gwx/                    Administration CLI (declarative config, live logs)
 libs/
   shared-types/           Single source of truth for WS message types, DB entities, TenantConfig, GatewayPlugin interface
+  plugin-sdk/             @api-gateway/plugin-sdk — definePlugin, test helpers, WASM C SDK
 docker/
   Dockerfile.api
   Dockerfile.dashboard
@@ -143,7 +158,7 @@ docker/
 Request path (order is load-bearing):
 
 ```text
-JwtMiddleware → [RateLimitGuard] → [LoggingInterceptor] → ProxyMiddleware
+LoggingMiddleware → JwtMiddleware → [RateLimitGuard] → ProxyMiddleware
                                                                ↓
                                                        PluginRunner.onRequest
                                                        → forward to downstream
@@ -152,7 +167,7 @@ JwtMiddleware → [RateLimitGuard] → [LoggingInterceptor] → ProxyMiddleware
 
 - `JwtMiddleware` — attaches `req.user` when it recognises a platform JWT or consumer API key; passes through otherwise. Only hard-blocks on `TOKEN_EXPIRED` (platform-signed token that has expired). Third-party OIDC tokens are passed through for the `oidc` plugin to validate.
 - `RateLimitGuard` — Redis sliding window; separate limits for authenticated vs unauthenticated clients
-- `LoggingInterceptor` — captures latency, status, `X-Request-ID`; batches logs for async upload
+- `LoggingMiddleware` — observes actual response finish/close before authentication; captures monotonic latency, final status and validated `X-Request-ID`; batches logs for async upload
 - `ProxyMiddleware` → `ProxyService.forward()` — resolves and runs route plugins, then forwards to downstream
 
 CORS, IP restriction, rate limiting, body size limits, auth, and all other per-route policies run as **plugins** — not middleware. This keeps the middleware pipeline thin and makes every policy configurable per route without gateway restarts.
@@ -161,11 +176,11 @@ CORS, IP restriction, rate limiting, body size limits, auth, and all other per-r
 
 ## Running Locally
 
-**Prerequisites:** Node 22, Docker
+**Prerequisites:** Node 26.11.1 (see `.nvmrc`), Docker
 
 ```sh
-# Install dependencies
-npm install
+# Install locked dependencies and reject extraction warnings
+node tools/npm-verified.mjs ci --no-audit --no-fund
 
 # Start backing services (Postgres, Redis, control-plane, admin-api, dashboard)
 docker compose up -d
@@ -216,11 +231,13 @@ Full setup guide: [novagate.dev/docker](https://novagate.dev/docker)
 
 GitHub Actions pipeline on push to `main`:
 
-1. Build Docker images for `api`, `control-plane`, `admin-api`, `dashboard`
-2. Push to GitHub Container Registry (`ghcr.io/mayank-rawat98/novagate/*`)
-3. SSH into VPS → `docker compose pull && docker compose up -d`
+1. Run reusable CI: lint, typecheck, test, build and dashboard browser checks.
+2. After CI succeeds, build and push Docker images for `api`, `control-plane`, `admin-api`, `dashboard` and `developer-portal` to GitHub Container Registry.
+3. After every image build succeeds, SSH into the VPS and deploy the tested SHA, waiting for container health.
 
-Zero-downtime: Docker Compose restarts containers one at a time; the reverse proxy keeps serving during image pulls.
+CI runs only within this deployment workflow on pushes to `main`. Pull requests and pushes to `dev`, tags and manual dispatch do not trigger CI or deployment. A failed verification job prevents all image publishing and the deployment script. Continue running feature and regression checks locally while implementation stays on `dev`.
+
+Deployment uses images tagged with the tested commit SHA and waits for Docker Compose health checks before finishing.
 
 TLS and routing: the VPS is shared with squadup.in, whose Caddy owns ports 80/443 and serves `novagate.dev`, `api.novagate.dev` and `ws.novagate.dev` (see `caddy/Caddyfile` in that repo). Caddy reaches `dashboard`, `admin-api` and `control-plane` over the `novagate-edge` network defined here, and issues and renews the certificates itself.
 
@@ -228,14 +245,616 @@ TLS and routing: the VPS is shared with squadup.in, whose Caddy owns ports 80/44
 
 ## Gateway Environment Variables
 
-| Variable                | Default  | Notes                                          |
-| ----------------------- | -------- | ---------------------------------------------- |
-| `GATEWAY_API_KEY`       | required | Authenticates gateway with control plane       |
-| `CONTROL_PLANE_URL`     | required | `wss://ws.novagate.dev/gateway-ws`             |
-| `REDIS_URL`             | required | Local Redis for config cache and rate limiting |
-| `JWT_SECRET`            | required | Min 32 chars — validates consumer tokens       |
-| `PORT`                  | `3000`   | HTTP port                                      |
-| `PROXY_TIMEOUT_MS`      | `10000`  | Downstream request timeout                     |
-| `RATE_LIMIT_WINDOW_MS`  | `60000`  | Sliding window duration                        |
-| `RATE_LIMIT_UNAUTH_MAX` | `100`    | Requests/window for unauthenticated clients    |
-| `RATE_LIMIT_AUTH_MAX`   | `500`    | Requests/window for authenticated consumers    |
+| Variable                                       | Default     | Notes                                                                                            |
+| ---------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------ |
+| `GATEWAY_API_KEY`                              | required    | Authenticates gateway with control plane                                                         |
+| `CONTROL_PLANE_URL`                            | required    | `wss://ws.novagate.dev/gateway-ws` (or use `CONTROL_PLANE_URLS`)                                 |
+| `CONTROL_PLANE_URLS`                           | —           | Ordered failover list, e.g. `us-east=wss://us.example/ws,eu-west=wss://eu.example/ws` (up to 8)  |
+| `CONTROL_PLANE_FAILBACK_MS`                    | `300000`    | Time on a fallback region before retrying the first one; doubles while it stays down             |
+| `GATEWAY_INSTANCE_NAME`                        | host name   | Label shown in Settings → Control plane regions                                                  |
+| `REDIS_URL`                                    | required    | Local Redis for config cache and rate limiting                                                   |
+| `JWT_SECRET`                                   | required    | Min 32 chars — validates consumer tokens                                                         |
+| `TRUSTED_PROXY_CIDRS`                          | empty       | Comma-separated trusted reverse-proxy IPs/CIDRs; forwarding headers are ignored by default       |
+| `PORT`                                         | `3000`      | HTTP port                                                                                        |
+| `HEALTH_DEFAULT_INTERVAL_MS`                   | `10000`     | Legacy service probe interval; integer 1000–60000 ms, overridden by service settings             |
+| `HEALTH_FAILURE_THRESHOLD`                     | `3`         | Consecutive failures before eviction; integer 1–10                                               |
+| `HEALTH_RECOVERY_THRESHOLD`                    | `2`         | Consecutive successes before a failed target recovers; integer 1–10                              |
+| `HEALTH_PROBE_TIMEOUT_MS`                      | `3000`      | Absolute probe deadline including connection and headers; integer 100–10000 ms                   |
+| `HEALTH_PROBE_CONCURRENCY`                     | `8`         | Maximum simultaneous probes per gateway; integer 1–64                                            |
+| `WS_ALLOW_QUERY_TOKEN`                         | `false`     | Explicit legacy query-token opt-in; credentials are stripped from the upstream URL               |
+| `WS_HANDSHAKE_TIMEOUT_MS`                      | `5000`      | Absolute auth, quota and upstream upgrade deadline, 100–60000 ms; service timeout can shorten it |
+| `WS_MAX_CONNECTIONS`                           | `256`       | Cap including pending admission, accepted connections and cancelled provider work, 1–10000       |
+| `WS_MAX_HEADER_BYTES`                          | `16384`     | Request and upstream handshake header limit, 1024–65536 bytes                                    |
+| `WS_MAX_BUFFERED_HEAD_BYTES`                   | `65536`     | Bound on data coalesced with upgrade headers, 0–1048576 bytes                                    |
+| `WS_IDLE_TIMEOUT_MS`                           | `300000`    | Inactive tunnel expiry, 1000–3600000 ms                                                          |
+| `WS_SHUTDOWN_GRACE_MS`                         | `5000`      | Drain accepted tunnels before closing sockets, 0–60000 ms                                        |
+| `GRPC_ENABLED`                                 | `false`     | Enable the separate native HTTP/2 gRPC listener                                                  |
+| `GRPC_ALLOW_INSECURE`                          | `false`     | Explicit private cleartext operation behind a trusted TLS-terminating proxy                      |
+| `GRPC_HOST`                                    | `127.0.0.1` | Listener address; container deployments need an appropriate private interface                    |
+| `GRPC_PORT`                                    | `50051`     | Listener port, 1–65535                                                                           |
+| `GRPC_TLS_CERT_FILE`                           | unset       | Read-only PEM server certificate file; pair with key                                             |
+| `GRPC_TLS_KEY_FILE`                            | unset       | Read-only PEM private key file; pair with certificate                                            |
+| `GRPC_MAX_MESSAGE_BYTES`                       | `4194304`   | Maximum encoded frame payload, 1–64 MiB; compressed payloads remain opaque                       |
+| `GRPC_MAX_HEADER_BYTES`                        | `16384`     | Request/response metadata bound, 1024–65536 bytes                                                |
+| `GRPC_MAX_CONCURRENT_STREAMS`                  | `100`       | Per-session stream cap, 1–1000, also capped by upstream settings                                 |
+| `GRPC_MAX_SESSIONS_PER_TARGET`                 | `4`         | Per-service/target upstream session cap, 1–32                                                    |
+| `GRPC_MAX_ACTIVE_CALLS`                        | `256`       | Admission cap (including pending cancelled auth/quota work) and incoming-session cap, 1–10000    |
+| `GRPC_DEADLINE_MS`                             | `30000`     | Absolute maximum call duration, 100–3600000 ms; caller/service deadlines can shorten it          |
+| `GRPC_IDLE_TIMEOUT_MS`                         | `30000`     | Unused upstream session expiry, 1000–3600000 ms                                                  |
+| `GRPC_SHUTDOWN_GRACE_MS`                       | `5000`      | Drain existing calls before cancellation, 0–60000 ms                                             |
+| `IDENTITY_PROVIDER_ALLOW_INSECURE_HTTP`        | `false`     | Explicit private HTTP opt-in                                                                     |
+| `IDENTITY_PROVIDER_TIMEOUT_MS`                 | `5000`      | Absolute provider/cache verification deadline, 100–60000 ms                                      |
+| `IDENTITY_PROVIDER_MAX_RESPONSE_BYTES`         | `262144`    | Provider JSON response limit, 1024–1048576 bytes                                                 |
+| `IDENTITY_PROVIDER_MAX_HEADER_BYTES`           | `16384`     | Provider response header limit, 1024–65536 bytes                                                 |
+| `IDENTITY_PROVIDER_MAX_TOKEN_BYTES`            | `16384`     | Credential/token byte limit, 128–65536 bytes                                                     |
+| `IDENTITY_PROVIDER_MAX_PENDING_REQUESTS`       | `128`       | Pending callers including cancelled unsettled work, 1–10000                                      |
+| `IDENTITY_PROVIDER_MAX_CONCURRENT_FETCHES`     | `16`        | Simultaneous provider connections, 1–256                                                         |
+| `IDENTITY_PROVIDER_MAX_CACHE_ENTRIES`          | `128`       | Per-process shared LRU cache cap, 1–4096                                                         |
+| `IDENTITY_PROVIDER_MAX_JWKS_KEYS`              | `64`        | Keys accepted per JWKS document, 1–256                                                           |
+| `IDENTITY_PROVIDER_JWKS_CACHE_TTL_MS`          | `300000`    | JWKS lifetime, 1000–86400000 ms                                                                  |
+| `IDENTITY_PROVIDER_JWKS_REFRESH_COOLDOWN_MS`   | `30000`     | Unknown-key refresh cooldown, 1000–60000 ms                                                      |
+| `IDENTITY_PROVIDER_INTROSPECTION_CACHE_TTL_MS` | `30000`     | Maximum active introspection cache lifetime, 0–300000 ms; 0 disables                             |
+| `IDENTITY_PROVIDER_OUTBOUND_CACHE_TTL_MS`      | `3600000`   | Maximum outbound credential lifetime, 0–86400000 ms; 0 disables                                  |
+| `HTTP_TLS_CERT_FILE`                           | `unset`     | PEM server certificate/chain; pair with key to enable HTTPS/WSS                                  |
+| `HTTP_TLS_KEY_FILE`                            | `unset`     | Read-only PEM listener private key; never upload private keys to dashboard                       |
+| `HTTP_TLS_CLIENT_CA_FILE`                      | `unset`     | Read-only verified client CA bundle; requests TLS client certificates                            |
+| `HTTP_TLS_CRL_FILE`                            | `unset`     | Optional PEM revocation list; requires listener client CA                                        |
+| `GRPC_TLS_CLIENT_CA_FILE`                      | `unset`     | Native gRPC client CA bundle; requires gRPC cert/key                                             |
+| `GRPC_TLS_CRL_FILE`                            | `unset`     | Optional gRPC revocation list; requires gRPC client CA                                           |
+| `TLS_HANDSHAKE_TIMEOUT_MS`                     | `10000`     | HTTP/gRPC native TLS handshake deadline, 100–60000 ms                                            |
+| `HTTP_TLS_MAX_CONNECTIONS`                     | `1024`      | Native HTTPS socket cap, 1–100000                                                                |
+| `MTLS_TRUSTED_PROXY_CIDRS`                     | `empty`     | Explicit socket-peer CIDRs for verifying certificate proxies; wildcard trust rejected            |
+| `MTLS_MAX_CERTIFICATE_BYTES`                   | `16384`     | Native/forwarded client chain byte limit, 1024–65536 bytes                                       |
+| `MTLS_MAX_CA_BUNDLE_BYTES`                     | `65536`     | Tenant trust bundle limit, 1024–65536 bytes                                                      |
+| `MTLS_MAX_CHAIN_DEPTH`                         | `8`         | Maximum parsed certificate chain/tenant anchor count, 1–16                                       |
+| `MTLS_MAX_IDENTITY_BYTES`                      | `4096`      | Verified subject-header byte limit, 128–16384 bytes                                              |
+| `PROXY_TIMEOUT_MS`                             | `10000`     | Downstream request timeout                                                                       |
+| `THIRD_PARTY_PLUGIN_DIR`                       | unset       | Absolute directory holding `node_modules` with third-party plugin packages                       |
+| `THIRD_PARTY_PLUGINS`                          | `[]`        | JSON list of `{ "package": "@scope/name", "version": "1.2.3" }`; exact versions, at most 16      |
+| `THIRD_PARTY_PLUGIN_HOOK_TIMEOUT_MS`           | `2000`      | Per-hook deadline for third-party plugins (10–60000)                                             |
+| `THIRD_PARTY_PLUGIN_FAILURE_THRESHOLD`         | `5`         | Consecutive failures before a plugin is paused                                                   |
+| `THIRD_PARTY_PLUGIN_QUARANTINE_MS`             | `30000`     | How long a paused plugin stays paused before it is retried                                       |
+
+Third-party plugins are trusted npm packages the gateway operator installs and pins; see the [plugin SDK guide](libs/plugin-sdk/README.md) for the trust model, authoring, testing and installation. `npm exec nx run @api-gateway/api:plugins-e2e` verifies loading, crash isolation and the workspace kill switch on real processes.
+| `RATE_LIMIT_WINDOW_MS` | `60000` | Sliding window duration |
+| `RATE_LIMIT_UNAUTH_MAX` | `100` | Requests/window for unauthenticated clients |
+| `RATE_LIMIT_AUTH_MAX` | `500` | Requests/window for authenticated consumers |
+
+For native gRPC upstreams, choose **Native gRPC health service** in the Services form. Leave the health service name empty to check overall server health, or enter the name registered by the upstream. The gateway calls the standard `grpc.health.v1.Health/Check` RPC and accepts only a successful `SERVING` response; it caps the encoded health response at 4096 bytes and applies the gateway probe deadline and failure/recovery thresholds. Your upstream must implement that RPC. See the [official health service schema](https://github.com/grpc/grpc-proto/blob/master/grpc/health/v1/health.proto). HTTP health checks continue to use the configured path, with HTTP/2 when that service setting is enabled.
+
+WebSocket clients use the HTTP listener and a GET route pointing to a service with **WebSocket upgrades** enabled. Header Bearer credentials accept consumer API keys or HS256 gateway JWTs. Basic Auth, OIDC, OAuth introspection, ACL and IP restriction are compatible handshake plugins; unsupported plugins reject the upgrade explicitly. Outbound OAuth credential injection does not authenticate an inbound client. Upgrade quotas apply after verified authentication, and forwarding/certificate assertions are stripped before authorization. Prefer Authorization headers; browser clients that need `?token=` must use the explicit operator opt-in. Query credentials never reach the upstream URL or gateway connection logs.
+
+Accepted tunnels preserve text, binary, fragmentation, ping/pong, close frames, negotiated subprotocols and compression bytes with stream backpressure. The handshake follows [RFC 6455](https://datatracker.ietf.org/doc/html/rfc6455#section-4); the transport uses [Node HTTP upgrade sockets](https://nodejs.org/download/release/v26.11.1/docs/api/http.html#event-upgrade). HTTPS upstreams verify certificates using Node’s trust store. Tenant, route policy, consumer, service or target removal closes affected connections. Handshake deadlines include provider and quota work, and disconnected requests retain admission capacity until that work settles. Active connections and traffic bytes are counted only after successful upstream acceptance. Shutdown rejects new upgrades and permits accepted tunnels to drain for the configured grace before terminating remaining sockets; it does not inject frames into an opaque partial frame. WebSocket authentication happens during the handshake; continuous message authorization is outside this transport’s contract.
+
+The Services form also exposes HTTP/2 upstream connections and WebSocket upgrades. Native gRPC client traffic uses the separate opt-in gRPC endpoint; the HTTP/2 setting controls ordinary HTTP proxy connections and HTTP health probes. The service timeout and caller `grpc-timeout` can shorten the gateway's maximum gRPC deadline. Live-network verification covers listener/upstream TLS, call/session admission limits, cancellation reuse, slow-client backpressure and shutdown grace. Upstreams use Node’s certificate trust store; mount a private CA and set `NODE_EXTRA_CA_CERTS` before startup when your upstream uses a private PKI. Certificate/key mounts must be readable by the image’s non-root UID 1000. Publish the gRPC port explicitly on your private network when enabling the listener.
+
+The gateway data plane uses Redis and tenant configuration from the control plane. It has no PostgreSQL connection or local administrative CRUD; manage services through the authenticated tenant admin API. `DATABASE_URL` is required by the admin API and control plane, and is ignored by the gateway.
+
+Configure the gateway using the environment variable reference above; keep local env files out of Git. Only list reverse proxies you control in `TRUSTED_PROXY_CIDRS`; do not use a broad network to make client IP detection appear to work. Route IP restrictions support IPv4 and IPv6.
+
+## Local regression verification
+
+Use OrbStack's Docker context. The isolated verification stack uses loopback ports 15432 and 16379, independently of production and other local projects:
+
+```sh
+docker compose -f docker/compose.verification.yml up -d --wait
+TEST_DATABASE_URL=postgres://novagate_test:local-verification-only@127.0.0.1:15432/novagate_test \
+TEST_REDIS_URL=redis://127.0.0.1:16379 \
+NX_DAEMON=false NX_NO_CLOUD=true \
+npm exec nx run-many -- -t test lint typecheck build --skipNxCache
+```
+
+The test credentials are for the isolated local stack only. Integration suites run when both TEST variables are set. Release CI supplies the same dependencies before deployment on a push to `main`; development PRs use local verification. Formal acceptance testing follows the remaining implementation phases.
+
+Fresh PostgreSQL volumes are initialized with `docker/postgres-init.sql`; admin-api performs idempotent schema upgrades for existing volumes. The control plane uses `synchronize: false` to preserve admin authentication columns. Admin-api requires `PLATFORM_JWT_SECRET` with at least 32 characters; tenant operations require a signed bearer token whose subject matches the tenant ID. Signup goes through email verification, and tenant responses exclude password and recovery tokens.
+
+The packaged gRPC verifier creates a disposable gateway/Redis network with no PostgreSQL dependency. Build the image, then run the task:
+
+```sh
+docker build -f docker/Dockerfile.api -t novagate-api:verification .
+NOVAGATE_GRPC_IMAGE=novagate-api:verification npm exec -- nx run @api-gateway/api:grpc-container-smoke
+```
+
+It requires OrbStack, OpenSSL and access to the pinned grpcurl image. It generates short-lived fixture certificates inside `.local-work`, checks authenticated protobuf calls with grpcurl and real WebSocket traffic through trusted/untrusted TLS upstreams, and writes evidence to `.local-work/grpc-container-evidence.json`. WebSocket checks cover malformed-token survival, negotiated compression/subprotocols, binary/text/control traffic, actual Redis route quota, connection capacity, live metrics and target removal. It verifies absent local admin CRUD and an authenticated tenant proxy route on the same prefix, then removes its containers, network and certificate directory. Existing storage and cache contents are preserved.
+
+## Release and developer checks
+
+Use Node 26.11.1 (`.nvmrc`) and `node tools/npm-verified.mjs ci --no-audit --no-fund`. The four application Dockerfiles pin the same Node patch release in their build and runtime stages; CI reads `.nvmrc`. CI and Docker installs/pruning reject npm tar extraction diagnostics even when npm exits zero; see [the dependency-install guard and real npm regression](tools/npm-verified.README.md). `npm run check` runs lint, typecheck, tests and builds for the workspace. `npm run docker:up` (also `docker:up:dev`) starts the isolated PostgreSQL/Redis verification dependencies in OrbStack; `docker:down` stops them. Run application serve targets separately through Nx.
+
+Node 26.11.1 is a **Current, non-LTS release**. This runtime choice fixes native mTLS with client certificates issued by an intermediate CA: Node 24.21.0 consumes peer-chain metadata during its internal X509 authorization read, leaving the gateway unable to verify the presented chain against current tenant anchors. Node's [upstream fix](https://github.com/nodejs/node/pull/65602) preserves that metadata. The gateway still requires verified private-key possession, clientAuth usage and current tenant trust; do not relax those checks to support the affected runtime. Use the pinned runtime for local checks and rebuilt images, and run the verification below before adopting it in a deployment. This change does not deploy or establish production acceptance. Check the [official release index](https://nodejs.org/dist/index.json) when reviewing runtime support and future upgrades.
+
+The pre-commit hook checks formatting of the staged content without writing files or adding unrelated edits. Format and stage the files you intend to commit.
+
+The production workflow calls the same CI checks before building all release images. It queues releases, builds from the tested revision, deploys full SHA image tags, checks out that revision on the server and waits for container health. Pull requests and pushes to `dev` do not run CI; verification is a prerequisite within the `main` deployment workflow. Production secrets remain in GitHub environment secrets; this workflow change does not initiate a production release.
+
+Tenant schema upgrades run in a transaction under a database migration lock. Legacy route CORS, IP restriction and body-limit fields are converted to plugins before their columns are removed; explicitly configured plugins take precedence. A failed migration rolls back and prevents admin API startup. An existing installation whose old migration already removed those fields needs its lost settings restored from a backup or re-entered; this repair cannot recover previously deleted values.
+
+Configuration PUT requests preserve omitted fields. Send `null` to clear optional route retry, GraphQL, plugin or rate-limit override policies; use an empty array to clear consumer groups. Updating a missing configuration record returns 404.
+
+### Declarative configuration
+
+Settings → Configuration import & export downloads active services, routes and
+consumers as YAML and reviews YAML/JSON documents before applying them. Documents
+require `version: 1` and all three arrays; route `serviceId` references a unique
+service name. Missing entries are removed or revoked. Matching consumer keys and
+omitted existing plugin credentials are preserved; new keys return once.
+
+The authenticated `/api/tenants/:id/import?dryRun=true` API returns a metadata-only
+diff and a ten-minute revision. Apply uses `dryRun=false` and that revision in
+`If-Match`. Configuration drift or document edits require another preview. Rows,
+version and durable delivery queue commit atomically. A queued result does not
+claim gateway confirmation. Export omits credentials and refuses opaque URL
+credentials or files exceeding import limits. The import/export workflow supports
+200 total entries and 64 KiB. See [the complete operator contract](apps/admin-api/src/config-import/README.md)
+for schema, credential preservation, failure recovery and remaining phase 5 work.
+
+### Administration CLI
+
+The local `tools/gwx` Nx app provides a bundled `gwx` executable for login/logout,
+route listing/export, reviewed configuration apply, consumer creation, alert-rule
+listing and live retained-log tail. Build with `npm exec -- nx run gwx:build` and
+inspect commands with `node tools/gwx/dist/main.js --help`. The private package can
+be packed/installed locally; it has not been published to npm.
+
+Saved credentials are private and bound to an API URL/workspace. Automation can
+use an explicit tenant session JWT; operation-scoped tokens and revocation remain
+open. Apply requires a preview and confirmation or `--yes`, returns new consumer
+keys once and reports queued gateway delivery. Logs use authenticated SSE with
+encrypted receipt cursors, bounded reads and current privacy/retention policy.
+See [the CLI guide](tools/gwx/README.md), including one-time key handling and
+timeouts, and [the log stream contract](apps/admin-api/src/proxy-config/log-stream.README.md).
+
+### Dashboard browser verification
+
+The workspace uses a responsive ivory, mint and indigo dashboard with CSS clay illustrations. Navigation and configuration forms support keyboard focus, Escape dismissal and focus restoration. Data outages show retry controls; an unavailable gateway status is distinct from an offline gateway.
+
+Run the production standalone preview and its browser checks through Nx:
+
+```sh
+mkdir -p .local-work/t .local-work/s
+NEXT_PUBLIC_ADMIN_API_URL=/ NX_DAEMON=false NX_NO_CLOUD=true \
+TMPDIR="$PWD/.local-work/t" NX_SOCKET_DIR="$PWD/.local-work/s" \
+npm exec nx run dashboard:ui-smoke
+```
+
+The verifier uses fixture credentials and intercepts tenant API requests. It checks desktop and mobile layouts, saved-session hydration, retry recovery, navigation and form keyboard behavior, every expanded plugin form, the one-time consumer key dialog, reduced motion and axe WCAG A/AA rules. Screenshots and accessibility findings are written under `.local-work/dashboard-verification/`. It uses local Google Chrome when available; otherwise install Playwright Chromium with `PLAYWRIGHT_BROWSERS_PATH="$PWD/.local-work/playwright" npm exec playwright install -- chromium`, and use the same environment variable when running checks. `DASHBOARD_BROWSER_EXECUTABLE` can select another Chromium executable. CI runs these checks and uploads the screenshots and findings.
+
+Completed runs retain `browser-trace.zip` (screenshots, DOM snapshots and source) plus
+`run.json` with actual completed cold-load counts, runtime errors and accessibility
+findings. Flow assertions and asynchronous API-fixture contract failures also retain
+`failure.json` and a screenshot; tracing finalization
+always closes the browser/fixture server and removes its temporary profile. CI retains
+these artifacts within the existing push-to-main deployment prerequisite.
+
+The dashboard requires Next.js 16.2 or later. The React bundled with 16.1 replayed a host element that suspended during hydration without rewinding its hydration cursor, which caused the intermittent React #418 of issue #69. `apps/dashboard/specs/hydration-replay.spec.tsx` guards it.
+
+To investigate hydration, use `DASHBOARD_HYDRATION_PASSES=6` for 42 cold loads of seven
+workspace pages under sixfold CPU throttling, followed by the full functional suite
+and three Alerts reloads. The setting accepts only integers from 1 to 20; normal
+verification defaults to one pass. Open the local trace with
+`npm exec -- playwright show-trace .local-work/dashboard-verification/browser-trace.zip`.
+These runs use disposable fixture credentials/API responses. Passing sweeps do not
+establish a fix for an intermittent failure; issue #69 remains open until its cause
+and correction or an evidence-supported disposition are established.
+
+Browser API calls default to the dashboard's same-origin `/api` rewrite. `NEXT_PUBLIC_ADMIN_API_URL` optionally selects another browser API origin at build time. Set it to `/` for a same-origin verification build when a local production env file already defines an override. `ADMIN_API_URL` selects the server-side rewrite destination. Both settings participate in the Nx build cache key. These fixture checks complement integration tests; they do not establish production or final phase acceptance.
+
+### Tenant log privacy
+
+Settings → **Log privacy** controls client IP and user-agent retention, both omitted
+by default, and six optional metadata fields: request paths, downstream service names,
+request IDs, consumer attribution, trace IDs and span IDs. Security rules and
+authentication still receive the original request. Wire request IDs remain intact;
+log identity, method, status, timings and database receipts are preserved. Explicit
+retention applies to future observations and cannot recover erased values. Updated gateways enforce the policy in their local JSON output and telemetry;
+the collector also enforces the saved policy for older gateway frames.
+
+Saving requires the displayed revision. On a conflict, reload the current revision,
+review your retained selections and retry. Changes expire existing archives and start
+private object cleanup; create new archives when needed. Omitted fields disappear from
+log views immediately, then a resumable background sweep erases historical values.
+Wait for cleanup to finish before retaining a previously omitted field. Pending or
+retrying cleanup and unconfirmed gateway updates are shown in Settings. Downloaded
+copies and older gateway output cannot be recalled.
+
+Deploy the admin schema upgrade before the new collector. Legacy archives without a
+proven privacy revision expire during upgrade. New downloads require the current
+revision; in-progress downloads recheck eligibility every second, with bounded query
+waits and a two-minute deadline. Client disconnect and shutdown cancel owned streams.
+Storage outages defer physical object removal while API revocation stays effective.
+Selected paths and request IDs become `[redacted]`; selected optional metadata is
+omitted. Path filters operate on the projected value, and a hidden consumer ID cannot
+match consumer filters. Consumer usage includes the current privacy revision and
+selected fields: hidden paths retain counts with redacted groups, while hidden
+consumer attribution produces zero recorded counts even before historical erasure.
+These zeros do not prove there was no traffic. Usage checks both privacy and retention
+revisions before returning a snapshot and asks for retry after concurrent changes.
+
+The policy API accepts optional `redactedFields` with the six field names
+`path`, `downstreamService`, `requestId`, `consumerId`, `traceId`, `spanId`. Missing
+or empty selections preserve legacy metadata behavior; saves canonicalize order and
+reject duplicates, unknown fields and malformed arrays. Deploy updated admin and
+collector services before enabling the new selections, and updated gateways for local
+output enforcement. Malformed configuration containing a selection fails closed to
+all six fields. Trace storage, metric snapshots, error events, operator diagnostics,
+backups and previously downloaded copies have separate policies. Request bodies and
+arbitrary headers are not collected by this request-log product. External destination
+payload rules, encryption and delivery integrations remain roadmap work.
+Database request-log age retention is available separately under Settings → Log retention.
+Archive TTL remains the operator's existing setting below.
+
+### Private log archives with RustFS
+
+Settings → **Log archives** queues a private NDJSON copy of a tenant's request logs. Choose a UTC range of up to 31 days, optionally a minimum response status or literal path prefix, then download the completed archive. The API also accepts a consumer filter. Failed reads and downloads offer recovery feedback. The dashboard lists the latest 50 jobs and refreshes every 30 seconds.
+
+The API uses tenant session authorization for creation, listing and streaming downloads; it returns neither storage credentials nor private object keys. Jobs persist in PostgreSQL. Replicas claim jobs with row locks and tenant locks, renew fenced leases and recover interrupted work. Each replica runs at most two exports and each tenant has at most one active export and 20 pending requests. Each export reads a repeatable snapshot in 500-row keyset pages, preserves microsecond cursors, and stops at one million records, 512 MiB or two minutes. Automatic attempts stop after three failures; create a new archive with a smaller range when necessary. The worker never marks an incomplete upload ready.
+
+Storage commands and download admission have a 15-second absolute budget covering
+connection acquisition, SDK retries and backoff. The handler also rejects requests
+that exceed its transport timeout; connection timeout remains three seconds and
+fast transient failures can still retry up to three attempts within the budget.
+Uploads retain the archive worker's two-minute deadline and cancellation. Single
+and multipart SDK transfers, completion and abort cleanup use the same absolute
+command budget; cancelling the upload also cancels its actual network requests. A whole private-prefix
+object/multipart cleanup has a two-minute budget. Shutdown cancels admitted storage
+requests and uploads, destroys owned download streams, and cancels worker cleanup
+before waiting for it. Failed or cancelled deletion retains durable retry metadata.
+
+Archives expire after seven days by default (`LOG_EXPORT_RETENTION_DAYS`, 1–90). Expiry immediately prevents API downloads; background cleanup removes attempt objects and abandoned multipart uploads. Cleanup retries after a storage outage, and expired job metadata remains available to explain why a download disappeared. Expired job metadata is kept for 30 more days, then removed only after successful object cleanup. Preserve archive jobs during tenant offboarding until their object prefixes have been deleted.
+
+Settings → **Automatic log archives** schedules private receipt windows every minute or on UTC hour boundaries. Minute batching is near real time; each window waits 15 seconds after closing and then joins the archive queue. Saving starts from the database receipt time, so existing logs are not backfilled automatically. Gateway request timestamps remain intact in the NDJSON; a late-arriving request enters the window in which NovaGate receives it. Manual archives continue to filter by request time.
+
+Choose a minimum status, literal path prefix and optional consumer. Pause retains the receipt cursor and stops new windows; queued jobs finish. Resume catches up without resetting that cursor. Changing cadence/filters applies to waiting windows; queued jobs retain their original filters. Removing a schedule retains job/download history, discards unprocessed scheduling work, and a newly created schedule starts at its new save time. Revision checks reject concurrent edits. The dashboard exposes backlog, pending limits and failed jobs; failed, unexpired archives can be retried with their original window and filters. Each run allows three attempts, and requested retry count remains visible.
+
+The scheduler handles at most 16 windows per two-second sweep with no overlapping sweeps. Transactional row claims and a shared receipt-ingestion lock coordinate replicas; job insertion and cursor advancement commit together. Twenty pending jobs per tenant apply to manual, automatic and requested retries. Empty windows create no objects. Queue saturation retains the cursor for retry rather than skipping logs. Jobs retain the existing one-million-row / 512 MiB / 120-second processing limits and private expiry cleanup. Archive retention starts when a window is queued. Scheduling does not claim exactly-once delivery of gateway telemetry or external providers.
+
+Admin startup upgrades legacy UTC-naive log timestamps to TIMESTAMPTZ and adds database-owned receipt metadata/indexes before the updated control plane starts. Existing rows receive migration-time receipt values, and automatic schedules start after save. These table conversions may rewrite historical log tables; include them in the database maintenance/backup plan for an existing installation. Receipt metadata is excluded from public log records and NDJSON. Explicit UTC comparisons/formatting and microsecond keysets are exercised with a non-UTC PostgreSQL session. See PostgreSQL's [timestamp comparison semantics](https://www.postgresql.org/docs/current/functions-datetime.html) and [transaction-scoped advisory locks](https://www.postgresql.org/docs/current/explicit-locking.html).
+
+OrbStack verification includes RustFS 1.0.4 pinned by digest, persistent verification volumes, a loopback S3 listener on port 19000 and no published console. Run the live integration checks with:
+
+```sh
+docker compose -f docker/compose.verification.yml up -d --wait
+TEST_DATABASE_URL=postgres://novagate_test:local-verification-only@127.0.0.1:15432/novagate_test \
+TEST_REDIS_URL=redis://127.0.0.1:16379 \
+TEST_OBJECT_STORAGE_ENDPOINT=http://127.0.0.1:19000 \
+NX_DAEMON=false NX_NO_CLOUD=true npm exec nx run admin-api:test -- --skipNxCache
+```
+
+RustFS 1.0.4 replaces 1.0.1 (issue #90). On 1.0.1, a delete that the caller cancelled mid-request, as an archive deadline or shutdown does, left files no S3 API lists. Such a bucket could then never be deleted (`409 BucketNotEmpty`). 1.0.4 reads 1.0.1 data in place, but it does not remove residue that 1.0.1 already wrote. That residue only costs disk in a bucket you keep. To delete such a bucket, its server log names the blockers (`bucket_delete_blocked`, `blocker=orphan_directory`); remove those paths with RustFS's own tooling, not by editing the data directory.
+
+Production storage is disabled until configured. Set the documented `OBJECT_STORAGE_*` variables in the deployment environment; all env files and env templates are ignored by Git. `COMPOSE_PROFILES=object-storage` enables the bundled RustFS service (Compose 2.20+ is required for its optional dependency). It has persistent data/log volumes and readiness checks, joins only the internal gateway network, and publishes neither S3 nor console ports. External S3-compatible storage can use the same API settings without enabling that profile. Startup checks the bucket policy and ACL and refuses public grants; the adapter never adds a public policy or ACL. Keep AWS S3 Block Public Access enabled as an additional operator control.
+
+External S3-compatible, webhook and Datadog connections start as encrypted drafts in **Settings → External export destinations**. Choose **Delivery & history** to explicitly enable receipt scheduling, select filters and stricter payload omissions, pause/resume, remove automatic delivery or inspect metadata-only history. Saving credentials never enables delivery. First configuration starts at database save time; resume catches up with retained receipts and pause lets queued batches finish. Removal revokes scheduled waiting bytes and preserves history; external copies cannot be recalled. Enabled is a saved configuration state, and provider acknowledgement does not establish indexing or health. Dedicated keys, safe reads, revision-aware controls and rotation are documented in [the destination guide](apps/admin-api/src/log-export/README.md).
+
+The external delivery checkpoint in [issue #95](https://github.com/mayank-rawat98/NovaGate/issues/95) / [PR #96](https://github.com/mayank-rawat98/NovaGate/pull/96) includes bounded transports, immutable snapshots, leased attempts and authenticated receipt scheduling controls. Scheduled terminal history rolls off with exact workspace coverage while preserving caller identities and active retries. Discovery continues independently of provider latency within free worker slots and claims only scheduled batches. Controlled runtime checks cover signed retries, full history, slow receivers, queue pressure, pause/resume and reconstruction. Larger workload/replica acceptance, actual-provider acceptance and formal phase/release acceptance remain pending.
+
+Keep RustFS root credentials separate from the application's archive service account. Pre-create a private archive bucket, or use `OBJECT_STORAGE_CREATE_BUCKET=true` once with a provisioning identity and disable it afterward. The application account needs bucket location/list, policy/ACL read and multipart listing permissions, plus object get/put/delete and multipart abort permissions scoped to the archive bucket. It does not need to modify policies or ACLs. Use a TLS endpoint for external storage and restrict credential access. RustFS installation/readiness guidance: [official container documentation](https://docs.rustfs.com/en/installation/container) and [health endpoints](https://docs.rustfs.com/en/operations/status-check).
+
+The bundled single-node storage has no distributed redundancy. Back up PostgreSQL job metadata and RustFS objects together, protect backup credentials and preserve the bucket/object paths. Restore both into an isolated environment first; verify a known archive through the authenticated download endpoint and confirm anonymous access is denied. Expired objects will be removed when the restored worker starts. Distributed storage and restore drills remain roadmap work; local and CI evidence does not establish final production acceptance.
+
+The packaged runtime check verifies actual gateway traffic and a separately authenticated late log through the control plane, automatic scheduling, private RustFS downloads, live metrics/alerting and service shutdown. Rebuild the three verification images before running it:
+
+```sh
+docker build -f docker/Dockerfile.api -t novagate-api:verification .
+docker build -f docker/Dockerfile.admin-api -t novagate-admin:verification .
+docker build -f docker/Dockerfile.control-plane -t novagate-control-plane:verification .
+npm exec -- nx run admin-api:runtime-smoke
+```
+
+This local target requires OrbStack, uses disposable fixture infrastructure and receivers, and records `.local-work/metrics-container-evidence.json`. It does not contact production recipients or deploy anything. CI remains the prerequisite of deployment on pushes to `main`; development/PR pushes do not trigger it.
+
+### Consumer usage analytics
+
+Consumers → **Usage** opens an accessible activity panel with recorded request counts, window-average RPS, server-error rate, observed latency percentiles, a request trend and the ten busiest method/path groups. Choose the last hour, 24 hours or seven days; refresh every 30 seconds or manually. Keyboard interval inspection gives exact counts behind the chart. Failed refreshes retain clearly marked prior data; empty periods show no latency samples rather than measured zero latency. Switching workspaces closes the panel and clears its selection.
+
+`GET /tenants/:tenantId/consumers/:consumerId/stats?period=1h|24h|7d` uses tenant session authorization and returns no-store shared contracts. Unknown/foreign consumers return 404; revoked consumers retain queryable history. Logs and non-streaming metric history also accept `consumerId`. Unfiltered live metric history/SSE retain their gateway histogram behavior. Filtered metric snapshots use the same consumer buckets and numeric zero latency for empty/no-sample buckets to preserve that legacy contract; use the stats endpoint for explicit null latency values.
+
+Consumer attribution is separate from authentication identity: configured consumer keys and signed subjects matching a registered consumer capture its UUID when authenticated. Other principals retain their authentication policy without consumer attribution. Captured attribution survives an in-flight configuration replacement. The updated control plane normalizes malformed legacy principal IDs to unassigned logs so an unrelated subject cannot reject a mixed batch.
+
+These figures describe persisted request logs, not complete gateway traffic accounting. Windows use UTC request timestamps with an inclusive start and exclusive end. RPS divides by the whole selected interval, including empty buckets; server errors are statuses 500 and above. Negative/missing response durations do not enter observed latency percentiles. PostgreSQL's [continuous percentile aggregate](https://www.postgresql.org/docs/current/functions-aggregate.html) interpolates between valid observations. Paths remove query strings and group prefixes beyond 512 characters; response metadata excludes consumer hashes and credentials.
+
+Queries use one repeatable snapshot, a consumer/time/id index, eight admitted queries per admin process (two per tenant), three-second statements and one-second lock waits. Windows of at most 100,000 retained raw records use observed interpolated percentiles, up to 168 series buckets and ten path groups. Larger windows automatically use exact retained-observation rollup counts and versioned histogram upper-bound latency estimates. Rollup reads reconcile partial request/receipt minutes and pending records, support at most 20,000 cells / 100,000 raw boundary records / 169 UTC buckets, and use actual partial-edge durations for rates. Excess reconciliation or unsafe numeric totals return actionable 503 recovery without truncated totals. Current policy revisions are checked before publication. Pool admission remains bounded by the admin connection timeout. Shutdown rejects new requests and drains actual admitted work. Existing installations build the new indexes during admin-owned migration; plan index creation against the maintenance window for large log tables.
+
+New pending ingestion wakes recently idle workspaces through a durable one-row notification that commits with source/aggregate writes. Discovery acknowledges it under the same receipt fence as its pending flag, preserving lock order and replica identity. Startup recovers pending sources; notification failure rejects the source transaction. Privacy discovery prefers unlocked workspaces, then waits within its existing lock budget so brief contention cannot discard every cleanup sweep. The local `admin-api:consumer-rollup-replicas-smoke` task passes a two-production-admin 400,001-record/20,000-cell workload, including restart, admission recovery and irreversible privacy cleanup; see PROGRESS.md for measured results and acceptance limits.
+
+The dashboard labels rollup percentile estimates, UTC partial intervals, late observations and complete/backfilling/capacity-limited materialization. Coverage describes retained observations, not guaranteed traffic. Filtered REST metrics preserve source, sample counts, observed interval duration and rollup coverage in optional consumerUsage metadata. High-volume path queries reconcile independent markers and exact raw edges in the same count snapshot. Complete grouped counts and all histogram bins must match count totals before selecting the global top ten with deterministic ties. Current privacy projects historical paths before grouping. Independent path coverage exposes all normalized groups, backfill/capacity state and query limits; the dashboard labels group percentile upper estimates and retains previous data on refresh failure. Oversized path reconciliation refuses the entire response. The path store preserves query-free groups, bounded backfill and count-preserving privacy erasure. See [the rollup contract](apps/admin-api/src/proxy-config/consumer-rollup.README.md). The packaged OrbStack verifier checks a real consumer key through the gateway, retained attribution, tenant guards and filtered metric history. A separate 200,001-record bulk-import fixture exercises automatic production backfill of both stores, authenticated rollup reads, estimate metadata and privacy suppression/erasure. Larger workload/cardinality acceptance remains open.
+
+### Remote authentication providers
+
+OIDC and OAuth endpoints require HTTPS with normal certificate verification. Redirects are rejected. Explicit private HTTP requires `IDENTITY_PROVIDER_ALLOW_INSECURE_HTTP=true`. Provider calls and cache reads/writes share an absolute deadline and bounded admission; concurrent callers coalesce without allowing one cancelled caller to abort others. Cache scopes include tenant, endpoint, issuer/audience, credentials and token identity, so tenant changes or credential rotation cannot reuse another trust scope. Introspection caches contain only active responses with a known future expiration and never exceed the configured lifetime; Redis failure falls back to remote verification. Outbound OAuth tokens never establish inbound client authentication.
+
+OIDC requires an expiring JWT, a matching issuer/audience and an explicitly compatible public signing key. RSA keys must be at least 2048 bits. Client-supplied `x-claim-*` headers are removed before verified claims are forwarded. Unknown signing keys can refresh only after the cooldown; providers should overlap signing keys during rotation.
+
+### Client certificates and tenant trust
+
+Enable native HTTPS/WSS with `HTTP_TLS_CERT_FILE` and `HTTP_TLS_KEY_FILE`, mount a client CA bundle with `HTTP_TLS_CLIENT_CA_FILE`, and upload the tenant's active public CA bundle in Settings. Native gRPC uses its existing listener cert/key and `GRPC_TLS_CLIENT_CA_FILE`. Mount operator files read-only, with permissions readable by the non-root gateway. Native listeners use TLS 1.2 or newer and bounded handshakes; they request client certificates while allowing anonymous health/public routes. Required mTLS routes need a verified peer certificate with clientAuth extended key usage and current tenant trust. A copied public certificate is insufficient. Resumed sessions without a peer certificate are rejected on required mTLS routes.
+
+OpenSSL verifies native certificate paths and any configured CRLs. PEM listener/private-key/CA/CRL files are bounded to 64 KiB; restart the gateway after changing these operator files. Tenant CA changes update native listener client trust without a restart and close affected gRPC calls and WebSocket tunnels; HTTP requests recheck current trust. Operator file mounts enable the listener initially; later public CA uploads replace its client trust. With CRLs enabled, the operator must supply CRLs covering every active issuing CA. Overlap old/new CA certificates while rotating, then remove old trust. Tenant uploads accept at most eight currently active CA certificates and reject leaf certificates, keys and malformed bundles.
+
+Forwarded certificates default off. `MTLS_TRUSTED_PROXY_CIDRS` explicitly trusts only the actual socket peer; it is separate from IP forwarding trust. Your trusted TLS terminator must verify client private-key possession and overwrite `ssl_client_cert` plus `ssl_client_verify: SUCCESS` (or the corresponding `x-ssl-client-cert`/`x-ssl-client-verify` pair). For intermediate chains, include the validated client chain in the URL-encoded PEM assertion. Duplicate/ambiguous assertions are rejected. Restrict access to that gateway connection to the trusted proxy; forwarded client IPs cannot grant certificate trust. The gateway rechecks current tenant anchors and clientAuth usage; full path/revocation verification belongs to the trusted terminator.
+
+Verified identity uses a certificate fingerprint, with a bounded safe subject header. The Docker health probe checks loopback HTTPS when enabled and skips certificate/hostname verification only for that local liveness request; client/provider/upstream TLS verification remains enabled. Native listener behavior follows the [Node TLS documentation](https://nodejs.org/download/release/v26.11.1/docs/api/tls.html).
+
+### Webhook signatures
+
+Use `hmac-auth` with `mode: generic` (the default) for GitHub/raw-body SHA-256 or SHA-512 signatures. Use `mode: stripe`, `header: stripe-signature`, `algorithm: sha256` for Stripe's `t=<seconds>,v1=<hex>` format: the signed bytes are `timestamp.body`. Multiple v1 signatures and up to eight overlapping secrets support rotation. Original wire headers and bytes are captured before body-aware hooks; policy hooks retain their saved order. Duplicate signature headers, partial hex, invalid/absent signed timestamps and stale/future timestamps fail closed.
+
+For custom generic timestamp signatures, configuring `timestampHeader` **requires signing `timestamp.body`**. This corrects the old unsigned timestamp check: senders using that option must update their signing format. Freshness defaults to 300 seconds and may be configured from 1–3600 seconds. A timestamp-free GitHub signature proves body authenticity but does not prevent replay. Keep durable event-ID deduplication in your application: valid provider retries are intentionally accepted. Use HTTPS and high-entropy private signing secrets; never put secrets in logs or source control. These are HTTP webhook policies, not gRPC/WebSocket handshake credentials.
+
+| Gateway setting             | Default | Bounds/purpose                                                                      |
+| --------------------------- | ------- | ----------------------------------------------------------------------------------- |
+| `HMAC_MAX_BODY_BYTES`       | 1048576 | 1–16777216 bytes; the smaller explicit route size limit also applies                |
+| `HMAC_BODY_TIMEOUT_MS`      | 5000    | 100–30000 ms absolute upload deadline                                               |
+| `HMAC_MAX_PENDING_REQUESTS` | 32      | 1–256 concurrent prepared requests, retained until response completion/cancellation |
+| `HMAC_MAX_HEADER_BYTES`     | 4096    | 128–16384 bytes per signature/timestamp field                                       |
+
+Each route permits up to eight nonempty secrets, each at most 4096 UTF-8 bytes, and at most eight Stripe v1 signatures. Oversized uploads return 413, upload deadlines 408, admission exhaustion 503 and signature failures 401. Limits apply to cached and chunked bodies; cancelled/aborted uploads release listeners and admission. Preparation never authenticates: verification remains in the ordered HMAC policy hook.
+
+Provider references: [GitHub validation and reference vector](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries), [Stripe webhook verification](https://docs.stripe.com/webhooks), [Stripe's signature implementation](https://github.com/stripe/stripe-node/blob/master/src/Webhooks.ts).
+
+### Bounded GraphQL request policies
+
+Enable `graphql-guard` on a route or set its legacy `graphql` policy. Defaults are depth 10, weighted field complexity 1000 and introspection disabled. Depth is 1–100 and complexity is 1–100000. When both policies exist, their explicit limits intersect; every configured policy must explicitly permit introspection. Null disables the legacy policy. Duplicate plugin names are rejected. The dashboard consolidates both representations into one visible plugin and saves `graphql: null`; disabling every plugin saves `plugins: []`.
+
+The pinned official GraphQL AST parser checks GET query parameters, JSON POST and raw `application/graphql` POST. It selects the requested operation, expands fragment depth and repeated-spread cost without recursively expanding the fragment graph, and checks aliases, inline fragments, cycles, duplicate definitions and introspection. GET mutations return 405. Batches, persisted-query extensions and subscriptions are rejected until dedicated policies exist. Unsupported methods/media/compression fail before forwarding. A final validation hook rechecks transformed queries and headers before dispatch.
+
+Complexity is a conservative schema-free weighted field count, including repeated spreads. It does not estimate resolver execution, pagination cardinality or response size. Schema-aware cost multipliers and persisted-operation manifests remain roadmap requirements.
+
+| Variable                            | Default  | Valid range / purpose                              |
+| ----------------------------------- | -------- | -------------------------------------------------- |
+| `GRAPHQL_MAX_QUERY_BYTES`           | 65536    | 128–1048576 bytes                                  |
+| `GRAPHQL_MAX_TOKENS`                | 10000    | 16–20000 tokens                                    |
+| `GRAPHQL_MAX_LEXICAL_DEPTH`         | 128      | 8–256 nested punctuation groups before parsing     |
+| `GRAPHQL_MAX_BODY_BYTES`            | 1048576  | 128–16777216 bytes                                 |
+| `GRAPHQL_BODY_TIMEOUT_MS`           | 5000     | 100–30000 ms absolute upload deadline              |
+| `GRAPHQL_MAX_PENDING_REQUESTS`      | 32       | 1–256 prepared requests                            |
+| `BODY_CAPTURE_MAX_BODY_BYTES`       | 16777216 | 1–67108864 bytes across body-aware policies        |
+| `BODY_CAPTURE_TIMEOUT_MS`           | 5000     | 100–30000 ms absolute upload deadline              |
+| `BODY_CAPTURE_MAX_PENDING_REQUESTS` | 64       | 1–512 prepared requests across body-aware policies |
+
+HMAC, GraphQL and request-size policies share one bounded capture of original bytes; the smallest applicable byte and deadline limit wins. Shared and mode-specific admission remain held until response finish, close or cancellation. No policy reconstructs signed bytes from parsed JSON. Capacity failures return 503, body overflow 413 and capture timeout 408; GraphQL policy/parse failures return 400, invalid configuration 500. Errors retain the gateway request ID and omit query contents. Native WebSocket/gRPC listeners reject HTTP-only GraphQL policies and cancel affected existing streams after policy changes.
+
+Request telemetry uses matched route patterns (or `unmatched`), excludes raw query strings and user agents, and replaces malformed client request IDs with UUIDs. Broader telemetry/redaction acceptance remains part of phase 4 and the final campaign.
+
+### Bounded HTTP/2 upstream connections
+
+A service with `h2: true` uses verified Node HTTP/2 connections and waits for peer SETTINGS before opening an application stream. No active request queues past the configured pool/peer capacity. Capacity and shutdown admission failures return 503; oversized request metadata returns 431; oversized responses or malformed/reset upstream streams return 502; absolute connection/stream deadlines return 504. Body capture uses the shared original-byte size, deadline and admission limits above and never reconstructs signed JSON.
+
+Idle eviction closes real sockets and deletes empty origins. GOAWAY prevents reuse; active streams retain their capacity until closure. Configuration changes close removed origins and tenant-changed sessions. Shutdown cancels work and stops admission. Buffered response bytes and headers are finite; these settings govern HTTP/2 forwarding, while native gRPC uses its separate transport limits.
+
+| Variable                          | Default | Valid range                                |
+| --------------------------------- | ------- | ------------------------------------------ |
+| `HTTP2_MAX_TARGETS`               | 64      | 1–1024 origins                             |
+| `HTTP2_MAX_SESSIONS`              | 64      | 1–1024 sessions globally                   |
+| `HTTP2_MAX_SESSIONS_PER_TARGET`   | 10      | 1–32 sessions per origin                   |
+| `HTTP2_MAX_STREAMS_PER_SESSION`   | 100     | 1–1024, further limited by peer SETTINGS   |
+| `HTTP2_MAX_ACTIVE_REQUESTS`       | 64      | 1–1024, including connection setup         |
+| `HTTP2_MAX_RESPONSE_BYTES`        | 4194304 | 1–67108864 bytes per buffered response     |
+| `HTTP2_MAX_HEADER_BYTES`          | 16384   | 1024–65536 bytes, including field overhead |
+| `HTTP2_CONNECT_TIMEOUT_MS`        | 5000    | 100–30000 ms absolute SETTINGS deadline    |
+| `HTTP2_IDLE_TIMEOUT_MS`           | 30000   | 100–300000 ms for inactive sessions        |
+| `PROXY_MAX_HANDLER_CACHE_ENTRIES` | 256     | 1–4096 HTTP proxy handlers                 |
+
+Size memory budgets for concurrency times request/response byte limits plus Node session overhead. Admission is bounded rather than an unbounded waiting queue. An idle sweep runs at most one second apart. Origin pooling shares connections, not request credentials; every request retains its own authenticated headers and policy context.
+
+HTTP health probes use the same predispatch negotiation fallback under their existing absolute probe deadline; gRPC health probes never fall back to HTTP/1.
+
+HTTP/1 fallback is allowed only for recognized connection/protocol negotiation failures before dispatch. Certificate/trust failures, capacity exhaustion, deadlines and already-dispatched streams cannot trigger fallback. The fallback retains verified HTTPS, original bytes, ordered response hooks and the remaining absolute upstream deadline. Before response headers, expiry returns 504; after streaming headers, expiry closes the connection because its status is already committed. Pool idle/deadline bookkeeping uses monotonic time. A reset POST is never replayed through HTTP/1; configured retries remain restricted to GET/HEAD/OPTIONS. Upstream response status and headers are passed through HTTP/2 response hooks before committing the buffered body. Private targets and raw upstream error strings are omitted from HTTP/2 error telemetry.
+
+### Circuit breaker
+
+Each service can have a circuit breaker (issue #115). New services created in the dashboard or API get one by default. Services created earlier, and declarative or Terraform definitions that omit it, have none until it is enabled. The gateway keeps a sliding window of the last `windowSize` completed upstream attempts per service; 5xx responses, timeouts and connection failures count as failures, and caller cancellations and 4xx responses do not. Above `failureRatePercent` (default 50%, with at least `minimumRequests`, default 5), the circuit opens: requests get `503 CIRCUIT_OPEN` with `Retry-After` and never reach the upstream, retries stop, and WebSocket upgrades and native gRPC calls are refused (`UNAVAILABLE`). After `openMs` (default 10 s) one probe at a time is let through; `halfOpenSuccesses` consecutive successes (default 2) close it, and a failed probe reopens it.
+
+Circuit state is per gateway process. It is exported as `gateway_circuit_breaker_state` (0 closed, 1 half-open, 2 open) and `gateway_circuit_breaker_rejections_total`, and reported through the control plane to Services in the dashboard, which updates live. `npm exec nx run @api-gateway/api:circuit-e2e` verifies opening at a 60% failure rate, refusal, live reporting and recovery on real processes.
+
+### Load-balancer state limits
+
+Issue #57 adds bounded per-replica balancing state and a persisted service `loadBalancing` policy (`weighted-round-robin` by default, or `least-connections`). Reservations cover HTTP/1 requests, HTTP/2 and native gRPC streams, and WebSocket tunnels. Concurrent protocol tests verify busy-target avoidance and release after cancellation/closure. PostgreSQL integration and dashboard browser checks verify policy persistence.
+
+| Variable                                | Default | Valid range                                          |
+| --------------------------------------- | ------- | ---------------------------------------------------- |
+| `LOAD_BALANCER_MAX_SERVICES`            | 1024    | 1–4096 cached service states                         |
+| `LOAD_BALANCER_MAX_TARGETS_PER_SERVICE` | 256     | 1–1024 target states per service                     |
+| `LOAD_BALANCER_MAX_ACTIVE_RESERVATIONS` | 4096    | 1–65536 reservations, including detached generations |
+
+The admin API accepts at most 256 unique HTTP/HTTPS targets per service, without embedded credentials and with URLs bounded to 2048 UTF-8 bytes. Weights must be integers from 1 to 100. Least-connections compares active work divided by weight; equal load uses weighted rotation. Core reservations release once and retain their original generation, so stale completion cannot decrement new target counters. Capacity exhaustion returns 503; invalid gateway balancing configuration returns 500. Dispatch must retain reservations until actual upstream request/stream/tunnel closure.
+
+## Distributed tracing
+
+Manual tracing uses the pinned OpenTelemetry JavaScript SDK and validated W3C trace context. It does not extract baggage or export raw request targets, queries, credentials, user agents or payloads. Recording admission, SDK attributes/events/links, queue count/bytes, batch count/bytes and WebSocket buffered bytes are finite. Explicit per-request context avoids cross-request global state; old tenant generations cannot export into replacement tenant connections. Export is best effort and never adds a waiting queue to responses. HTTP, native gRPC and WebSocket request/attempt spans reach authenticated tenant storage and the dashboard Traces explorer. Open traces from correlated request logs, or search by time preset, exact trace/request ID, route and error outcome. Timelines show received gateway/attempt spans and explain sampling, missing parents and truncation; external downstream span ingestion is planned with phase 5 OTLP support.
+
+| Variable                     | Default | Accepted range                                                             |
+| ---------------------------- | ------- | -------------------------------------------------------------------------- |
+| `TRACING_ENABLED`            | true    | boolean                                                                    |
+| `TRACING_SAMPLE_RATE`        | 0.1     | 0–1 for new roots; respects valid parent decisions within admission limits |
+| `TRACING_MAX_ACTIVE_SPANS`   | 1024    | 1–16384                                                                    |
+| `TRACING_MAX_QUEUED_SPANS`   | 512     | 1–8192                                                                     |
+| `TRACING_MAX_QUEUE_BYTES`    | 1048576 | 8192–16777216 bytes                                                        |
+| `TRACING_MAX_BATCH_SPANS`    | 32      | 1–128                                                                      |
+| `TRACING_MAX_BATCH_BYTES`    | 65536   | 8192–65536 bytes                                                           |
+| `TRACING_FLUSH_INTERVAL_MS`  | 1000    | 100–30000 ms                                                               |
+| `TRACING_MAX_BUFFERED_BYTES` | 131072  | 8192–1048576 bytes, including the next batch                               |
+
+The shared trace wire contract allows 16 whitelisted scalar attributes, at most 256 UTF-8 bytes each, 8192 bytes per span, and 128 spans/65536 bytes per batch. Capacity and transport drops have bounded reason labels in Prometheus. Logs retain integer milliseconds for existing PostgreSQL schemas; trace spans preserve fractional timing. See the [OpenTelemetry trace SDK](https://github.com/open-telemetry/opentelemetry-js/blob/main/packages/sdk-trace/README.md) for manual instrumentation concepts.
+
+Control-plane and admin query limits are defined by [collector tracing configuration](apps/control-plane/src/config/tracing.configuration.ts) and [admin trace query configuration](apps/admin-api/src/proxy-config/traces.configuration.ts). By default each tenant retains up to 100,000 spans for seven days; ingestion admits eight concurrent transactions with 5-second statement/1-second lock deadlines. Idle cleanup visits up to 64 tenant tables each minute. Admin trace queries admit eight concurrent transactions, use a 3-second statement deadline, allow seven-day ranges, return 50 traces per page and at most 256 detail spans. `TRACE_RETENTION_DAYS` must match across the control plane and admin API. Queries immediately hide expired spans; background physical deletion can take multiple ticks. Trace delivery is best effort, so use durable audit facilities for audit requirements.
+
+## Live HTTP metrics
+
+The Overview streams completed HTTP request rates, error rates (final status 400
+or above, including cancellation), and latency percentiles. Percentiles are fixed
+histogram bucket upper estimates. Native gRPC/WebSocket counters remain available
+through Prometheus. A single gateway timer reports every second using bounded
+transient transport; disconnected snapshots are dropped, counted by
+`gateway_metric_snapshots_dropped_total`, and never queued for replay.
+
+The control plane validates and stores each report before publishing it to Redis.
+`GET /api/tenants/:tenantId/metrics/stream` requires the workspace's bearer session
+in the Authorization header. Tokens in URLs are rejected. The dashboard uses
+authenticated fetch streaming, loads history on connection, retains up to 600
+latest samples within one hour, and supports automatic/manual reconnect with
+stale-data feedback. Switching workspaces cancels the previous requests and clears
+their samples. Other dashboard lists refresh every 30 seconds.
+
+Streaming replicas each use one Redis subscriber. Defaults allow 256 connections,
+eight per tenant, eight simultaneous history reads and 64 KiB write buffers.
+Heartbeats run every 15 seconds; streams close at session expiry or five minutes,
+on subscription loss, shutdown or backpressure. The admin HTTP adapter closes remaining transport sockets after service cleanup so abandoned preconnections cannot prevent shutdown. Reconnecting reads the latest
+persisted sample; Redis notifications are best effort. The reverse proxy must
+preserve streaming and honor `Cache-Control: no-cache, no-transform` and
+`X-Accel-Buffering: no`.
+
+Metric ingestion admits 32 concurrent transactions with 3-second statement and
+1-second lock deadlines. Each tenant keeps at most 100,000 samples for seven days;
+the row cap can shorten that history. Idle expiry visits at most 64 tenant tables
+per minute. Queries immediately filter expired data. Keep `METRICS_RETENTION_DAYS`
+consistent between admin and control plane. Gateway budgets are listed above; ingestion, stream and
+history budgets are documented in [the analytics guide](apps/admin-api/src/proxy-config/README.md).
+
+After building the three production images locally with OrbStack, run the complete
+pipeline verifier:
+
+```sh
+docker build -f docker/Dockerfile.api -t novagate-api:verification .
+docker build -f docker/Dockerfile.admin-api -t novagate-admin:verification .
+docker build -f docker/Dockerfile.control-plane -t novagate-control-plane:verification .
+NX_DAEMON=false NX_NO_CLOUD=true npm exec -- nx run @api-gateway/api:metrics-container-smoke
+```
+
+This fixture creates its own database, Redis, network and containers, checks actual
+gateway traffic through persistence and authenticated SSE within two seconds,
+verifies stored history and reconnect, then evaluates actual gateway windows and
+delivers firing/recovery alerts to disposable webhook, Slack-format and Mailtr-format
+receivers. It checks webhook signatures, a durable five-second retry with a stable ID,
+credential redaction, revision conflicts and retained history before removing its
+resources. Evidence is
+written inside `.local-work/metrics-container-evidence.json`. Run the retained
+`@api-gateway/api:grpc-container-smoke` transport checks and `dashboard:ui-smoke`
+browser/accessibility checks as well.
+
+### Tenant alerts
+
+Open **Observability → Alerts** to create error-rate, downstream-timeout, p95-latency
+or RPS rules, choose notification channels and follow delivery history. The interface
+shows missing evidence, paused rules/channels, firing cooldowns and verified recovery.
+Rule/channel changes use revision checks; saved secrets remain hidden and rotation
+requires explicit replacement. Empty channel selection records history only.
+
+Operators configure dedicated encryption keys and optional Mailtr credentials using
+[the alerting configuration guide](apps/admin-api/src/alerts/README.md). Default notification egress
+uses validated public HTTPS; intentional private receivers require exact trusted
+origins. Read the [alerting guide](apps/admin-api/src/alerts/README.md) for key rotation,
+webhook signature verification, finite retries and at-least-once delivery semantics.
+API acceptance does not prove final email inbox receipt. Formal provider/phase
+acceptance remains separate from local development checks.
+
+### Anomaly detection
+
+Every route is compared with its own last 7 days, without rules to write. Each minute, the latest 5 minutes of 5xx rate, p95 latency and traffic are scored as a z-score against the route's 15-minute windows (issue #117). The dashboard overview lists anomalies such as "Unusual 800% rise in p95 latency on GET /api/orders: baseline 42 ms, current 380 ms", with links to that route's logs and traces. **Alerts → Anomaly detection** sets the sensitivity (z-score, default 3), the minimum request count (default 20) and up to five notification channels. Anomalies use the same alert history, delivery retries and signed webhooks as alert rules; webhook payloads carry an `anomaly` description. Operators can change the evaluation interval with `ANOMALY_EVALUATION_INTERVAL_MS` on the admin API (default 60000). See [the anomaly guide](apps/admin-api/src/anomalies/README.md). `npm exec nx run admin-api:anomaly-e2e` verifies that an injected latency spike delivers a webhook alert.
+
+### Kubernetes controller
+
+`integrations/k8s-controller` (Go, controller-runtime) manages routes and services as `GatewayRoute` and `GatewayService` resources in `novagate.dev/v1alpha1` (issue #125).
+
+- `kubectl apply -f route.yaml` creates the route in NovaGate and the gateways receive it.
+- Edits update the route in place.
+- `kubectl delete` soft-deletes it.
+- Status conditions explain refusals and conflicts.
+- A periodic resync repairs dashboard edits without needless configuration pushes.
+
+The controller uses a scoped automation token (`routes:write`, `services:write`). See the [controller guide](integrations/k8s-controller/README.md). `npm exec nx run k8s-controller:e2e` verifies it with a real kube-apiserver, admin API, control plane and gateway.
+
+### GraphQL federation
+
+One GraphQL endpoint on your gateway can serve a graph combined from several services' schemas (issue #127). This replaces a separate Apollo Router or GraphQL Mesh deployment.
+
+- **Registering subgraphs:** on the dashboard's **GraphQL federation** page, register each subgraph: a name, its NovaGate service, a path and its schema (Apollo Federation directives such as `@key`).
+- **Composition:** NovaGate composes the supergraph when you save and refuses graphs that do not compose, listing the composition errors. **Check composition** runs the same check without saving.
+- **Serving:** add the **GraphQL federation** plugin to a route, such as `ANY /graphql`. The gateway plans each query and sends sub-queries to the right subgraph services, including entity lookups (`_entities`). It then merges the results into one response.
+- **Auth, metering and limits:** route authentication, plugins and metering apply before any subgraph is called. Add the GraphQL guard to the same route for depth, complexity and introspection limits.
+- **Failures:** if a subgraph is down or slow, the response carries partial data and a coded error, such as `SUBGRAPH_UNAVAILABLE` or `SUBGRAPH_TIMEOUT`. Subgraph addresses are never exposed.
+- **Bounds:** `GRAPHQL_FEDERATION_MAX_SUBGRAPH_REQUESTS` (default 50 per operation), `GRAPHQL_FEDERATION_MAX_SUBGRAPH_RESPONSE_BYTES` (default 8 MiB) and `GRAPHQL_FEDERATION_MAX_CONCURRENT_OPERATIONS` (default 64).
+
+The [federation guide](apps/admin-api/src/graphql-federation/README.md) documents the API. `npm exec nx run @api-gateway/api:graphql-federation-e2e` verifies a query hitting two subgraphs through a real gateway.
+
+### WebAssembly plugins and the Plugin marketplace
+
+Workspaces can run their own plugins on their gateways without operator involvement (issue #123).
+
+- **Installing:** the dashboard's **Plugin marketplace** installs curated WebAssembly plugins (header stamp, required header, header blocklist) or uploads your own `.wasm` module. A route uses it as `wasm:<name>` with a JSON configuration.
+- **Sandbox:**
+  - each module runs in a gateway worker thread with only NovaGate host functions;
+  - there is no WASI, filesystem or general network access; `http_get` reaches only the plugin's allowlisted HTTPS hosts;
+  - memory is capped at 10 MiB;
+  - each call has 50 ms (`WASM_PLUGIN_TIMEOUT_MS`).
+- **Failures:** a runaway module is terminated and its route fails closed (`502 PLUGIN_FAILED`), and repeated failures pause it. Other routes are unaffected.
+- **Distribution:** gateways fetch modules by SHA-256 through the control plane, verify them, and cache them in local Redis.
+
+The [WebAssembly plugin guide](libs/plugin-sdk/wasm/README.md) documents the ABI and the C SDK header. `npm exec nx run @api-gateway/api:wasm-e2e` verifies installation, live effect, sub-millisecond execution, a refused filesystem import and containment of a runaway module.
+
+### Multi-region control planes
+
+Gateways can list several control plane endpoints in priority order (issue #121), for example `CONTROL_PLANE_URLS=us-east=wss://us.example/ws,eu-west=wss://eu.example/ws`.
+
+- **Failover:** if the connected region becomes unreachable, the gateway moves to the next endpoint. Traffic keeps flowing throughout from in-memory configuration, and buffered telemetry drains, paced, after reconnecting.
+- **Failback:** after `CONTROL_PLANE_FAILBACK_MS` the gateway returns to the first endpoint, backing off while it stays down.
+- **Region label:** each control plane sets `CONTROL_PLANE_REGION`.
+- **Configuration delivery:** every region delivers the configuration version stored in the shared database every `CONTROL_PLANE_CONFIG_SYNC_INTERVAL_MS` (default 5000). An update published in one region's Redis therefore still reaches gateways connected to another.
+- **Settings → Control plane regions:** with `CONTROL_PLANE_REGIONS` set on the admin API, this page lists every gateway with its region, status and configuration version, and sets the workspace's preferred region. Gateways that know that region's endpoint move there.
+- **Operator responsibilities:** database replication and failover, and DNS, remain the operator's. Every region's control plane must reach the current writable database.
+
+`npm exec nx run @api-gateway/api:regions-e2e` kills the primary region under traffic and verifies failover, delivery of a change made during the outage, failback, the preferred-region move and complete request logs.
+
+### Quotas, plans and billing
+
+Gateways meter every proxied request in their own Redis and report cumulative monthly totals through the control plane (issue #119), so request traffic never reaches the SaaS servers.
+
+- **Consumer quotas:** a consumer can have a monthly request quota (Consumers page, API or declarative `monthlyQuota`). At the quota, that key gets `429 QUOTA_EXCEEDED` with `Retry-After` and `X-Quota-*` headers until the 1st (UTC).
+- **Plan limits:** plans (`public.plans`: Free, Pro and Enterprise seeded) set monthly requests, consumers, routes and log retention. With `BILLING_QUOTAS_ENABLED=true` on the admin API, a workspace that uses its monthly requests is paused until the monthly reset (every route answers 429), and creating consumers or routes past the plan returns `402 PLAN_LIMIT`.
+- **Plan & usage page:** shows the meters, with warnings at 80% and 98%.
+- **Stripe (optional):** with `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `STRIPE_PRICES`, the page offers Stripe Checkout upgrades. A signed webhook at `/api/billing/stripe/webhook` changes the plan and lifts a pause immediately.
+
+See [the billing guide](apps/admin-api/src/billing/README.md). `npm exec nx run @api-gateway/api:billing-e2e` verifies a consumer 429, a workspace pause and an upgrade that resumes traffic on real processes.
+
+### Database request-log retention
+
+Settings → **Log retention** sets a tenant's database request-log lifetime to 1–90
+whole 24-hour days; the default is 30. The lifetime starts at trusted database receipt,
+independently of the original request timestamp. Existing installations assign receipt
+time to legacy rows during the earlier receipt-schema upgrade, so those rows age from
+that upgrade. Logs, consumer usage and new archives immediately exclude expired
+receipts. Deleted or expired records cannot be restored by increasing the lifetime.
+
+The revision-aware tenant-session API is `GET/PUT /api/tenants/:id/log-retention`.
+PUT accepts exactly `{ days, expectedRevision }`. A stale revision returns a conflict;
+unchanged saves preserve the revision and archives. Reads return receipt cutoff,
+cleanup status and last check time. PostgreSQL owns UTC microsecond cutoffs and an
+irreversible floor; the browser never decides which records are expired.
+
+Cleanup runs automatically without object storage: at most eight 500-row transactions
+per non-overlapping two-second sweep, with three-second statement and one-second lock
+deadlines. Idle tenants are revisited once per minute. Progress and retry status survive
+restart. Expired data stays hidden during cleanup failures; deletion retries fairly and
+shutdown waits for actual admitted work. PostgreSQL vacuum, backups, replicated copies,
+gateway output, downloaded files and other telemetry tables remain operator concerns.
+
+A changed lifetime expires existing archives and cancels their workers/downloads.
+Private RustFS cleanup retries through the existing worker during storage failures.
+Archives created under the new policy show their receipt cutoff and retain their
+separate operator-configured download lifetime, default seven days. A completed
+archive can outlive its source database records. Queued work records its actual
+processing cutoff; it cannot promise the coverage available when it was queued.
+Automatic schedules report windows outside retained coverage and skip fully expired
+backlog in one bounded step. Increasing retention does not recreate missing windows.
+
+Upgrade the admin schema/application before using the new settings. Archives with
+unknown legacy retention revision are expired once on upgrade; recreate them from
+retained data if needed. User-agent/IP privacy rules remain independent of age retention.
+
+### Telemetry lifetimes and time zones
+
+A retention day always means 24 elapsed hours. Trace/metric retention, alert history
+and private archive lifetimes use this same rule across database time zones and
+spring/autumn daylight-saving changes. Their lifetimes remain separate from the
+tenant raw-log setting. New manual and scheduled archives receive the exact configured
+download lifetime when queued; existing archive expiry timestamps remain unchanged.

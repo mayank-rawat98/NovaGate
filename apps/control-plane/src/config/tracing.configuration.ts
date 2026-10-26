@@ -1,0 +1,152 @@
+export const DEFAULT_METRIC_INGESTION = {
+  maxConcurrent: 32,
+  maxRowsPerTenant: 100000,
+  retentionDays: 7,
+  statementTimeoutMs: 3000,
+  lockTimeoutMs: 1000,
+};
+export type MetricIngestionSettings = typeof DEFAULT_METRIC_INGESTION;
+export const DEFAULT_TRACE_INGESTION = {
+  maxConcurrent: 8,
+  maxRowsPerTenant: 100000,
+  retentionDays: 7,
+  statementTimeoutMs: 5000,
+  lockTimeoutMs: 1000,
+};
+export type TraceIngestionSettings = typeof DEFAULT_TRACE_INGESTION;
+export const DEFAULT_SOCKET_ADMISSION = {
+  maxMessageBytes: 131072,
+  maxQueuedMessages: 16,
+  maxQueuedBytes: 1048576,
+  maxConnections: 256,
+};
+export type SocketAdmissionSettings = typeof DEFAULT_SOCKET_ADMISSION;
+/** Multi-region identity and database-driven configuration delivery (#121). */
+export const DEFAULT_REGION_SETTINGS = {
+  region: null as string | null,
+  configSyncIntervalMs: 5000,
+};
+export type RegionSettings = typeof DEFAULT_REGION_SETTINGS;
+const REGION = /^[a-z][a-z0-9-]{0,31}$/;
+
+export function validateTracingConfiguration(env: Record<string, unknown>) {
+  function limit(key: string, fallback: number, min: number, max: number) {
+    const value = env[key] === undefined ? fallback : Number(env[key]);
+    if (!Number.isSafeInteger(value) || value < min || value > max)
+      throw new Error(
+        `Invalid ${key}: expected an integer from ${min} to ${max}`,
+      );
+    return value;
+  }
+  const region = env.CONTROL_PLANE_REGION;
+  if (
+    region !== undefined &&
+    region !== '' &&
+    (typeof region !== 'string' || !REGION.test(region))
+  )
+    throw new Error(
+      'Invalid CONTROL_PLANE_REGION: use lowercase letters, digits and hyphens (for example us-east)',
+    );
+  return {
+    ...env,
+    region: {
+      region: region ? (region as string) : null,
+      configSyncIntervalMs: limit(
+        'CONTROL_PLANE_CONFIG_SYNC_INTERVAL_MS',
+        DEFAULT_REGION_SETTINGS.configSyncIntervalMs,
+        1000,
+        60000,
+      ),
+    } satisfies RegionSettings,
+    traceIngestion: {
+      maxConcurrent: limit(
+        'TRACE_INGESTION_MAX_CONCURRENT',
+        DEFAULT_TRACE_INGESTION.maxConcurrent,
+        1,
+        64,
+      ),
+      maxRowsPerTenant: limit(
+        'TRACE_MAX_ROWS_PER_TENANT',
+        DEFAULT_TRACE_INGESTION.maxRowsPerTenant,
+        128,
+        1000000,
+      ),
+      retentionDays: limit(
+        'TRACE_RETENTION_DAYS',
+        DEFAULT_TRACE_INGESTION.retentionDays,
+        1,
+        30,
+      ),
+      statementTimeoutMs: limit(
+        'TRACE_INGESTION_STATEMENT_TIMEOUT_MS',
+        DEFAULT_TRACE_INGESTION.statementTimeoutMs,
+        100,
+        30000,
+      ),
+      lockTimeoutMs: limit(
+        'TRACE_INGESTION_LOCK_TIMEOUT_MS',
+        DEFAULT_TRACE_INGESTION.lockTimeoutMs,
+        100,
+        10000,
+      ),
+    },
+    metricIngestion: {
+      maxConcurrent: limit(
+        'METRICS_INGESTION_MAX_CONCURRENT',
+        DEFAULT_METRIC_INGESTION.maxConcurrent,
+        1,
+        128,
+      ),
+      maxRowsPerTenant: limit(
+        'METRICS_MAX_ROWS_PER_TENANT',
+        DEFAULT_METRIC_INGESTION.maxRowsPerTenant,
+        128,
+        1000000,
+      ),
+      retentionDays: limit(
+        'METRICS_RETENTION_DAYS',
+        DEFAULT_METRIC_INGESTION.retentionDays,
+        1,
+        30,
+      ),
+      statementTimeoutMs: limit(
+        'METRICS_INGESTION_STATEMENT_TIMEOUT_MS',
+        DEFAULT_METRIC_INGESTION.statementTimeoutMs,
+        100,
+        30000,
+      ),
+      lockTimeoutMs: limit(
+        'METRICS_INGESTION_LOCK_TIMEOUT_MS',
+        DEFAULT_METRIC_INGESTION.lockTimeoutMs,
+        100,
+        10000,
+      ),
+    },
+    socketAdmission: {
+      maxMessageBytes: limit(
+        'CONTROL_PLANE_MAX_MESSAGE_BYTES',
+        DEFAULT_SOCKET_ADMISSION.maxMessageBytes,
+        65536,
+        1048576,
+      ),
+      maxQueuedMessages: limit(
+        'CONTROL_PLANE_MAX_QUEUED_MESSAGES',
+        DEFAULT_SOCKET_ADMISSION.maxQueuedMessages,
+        1,
+        128,
+      ),
+      maxQueuedBytes: limit(
+        'CONTROL_PLANE_MAX_QUEUED_BYTES',
+        DEFAULT_SOCKET_ADMISSION.maxQueuedBytes,
+        65536,
+        16777216,
+      ),
+      maxConnections: limit(
+        'CONTROL_PLANE_MAX_CONNECTIONS',
+        DEFAULT_SOCKET_ADMISSION.maxConnections,
+        1,
+        4096,
+      ),
+    },
+  };
+}

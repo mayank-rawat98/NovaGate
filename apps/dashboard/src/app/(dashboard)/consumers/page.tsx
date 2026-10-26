@@ -2,14 +2,30 @@
 
 import { useState } from 'react';
 import useSWR from 'swr';
-import { Plus, X, Copy, Check, Pencil } from 'lucide-react';
+import { toast } from 'sonner';
+import { WorkspaceDialog } from '../../../components/workspace-dialog';
+import { DataLoadNotice } from '../../../components/data-load-notice';
+import {
+  Plus,
+  X,
+  Copy,
+  Check,
+  Pencil,
+  ChartNoAxesCombined,
+} from 'lucide-react';
 import {
   getConsumers,
+  getConsumerQuotas,
   createConsumer,
   updateConsumer,
   deleteConsumer,
 } from '../../../lib/api-client';
-import { getTenantId } from '../../../lib/auth';
+import {
+  MAX_CONSUMER_MONTHLY_QUOTA,
+  type ConsumerQuotaUsage,
+} from '@api-gateway/shared-types';
+import { ConsumerUsagePanel } from '../../../components/consumer-usage-panel';
+import { useTenantId } from '../../../lib/auth';
 import type { Consumer } from '../../../lib/api-client';
 
 function formatDate(ts: string): string {
@@ -36,20 +52,79 @@ function GroupBadges({ groups }: { groups?: string[] }) {
   );
 }
 
-export default function ConsumersPage() {
-  const tenantId = getTenantId() ?? '';
+/** Counted requests this UTC month against the consumer's own quota. */
+function QuotaCell({ usage }: { usage?: ConsumerQuotaUsage }) {
+  if (!usage) return <span className="text-xs text-gray-500">—</span>;
+  const used = usage.requests.toLocaleString();
+  if (usage.monthlyQuota === null)
+    return <span className="text-xs text-gray-600">{used} · no quota</span>;
+  const percent = usage.percent ?? 0;
+  const tone =
+    percent >= 98
+      ? 'bg-red-600'
+      : percent >= 80
+        ? 'bg-amber-500'
+        : 'bg-indigo-600';
+  return (
+    <div className="min-w-[9rem]">
+      <p className="text-xs text-gray-700">
+        {used} / {usage.monthlyQuota.toLocaleString()}
+      </p>
+      <div
+        role="meter"
+        aria-label={`${usage.name} monthly quota used`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.min(percent, 100)}
+        className="mt-1 h-1.5 w-full rounded-full bg-gray-100"
+      >
+        <div
+          className={`h-1.5 rounded-full ${tone}`}
+          style={{ width: `${Math.min(percent, 100)}%` }}
+        />
+      </div>
+      {percent >= 98 && (
+        <p className="mt-1 text-xs font-medium text-red-700">
+          {percent >= 100
+            ? 'Quota reached: requests get 429 until the 1st'
+            : 'Almost exhausted'}
+        </p>
+      )}
+    </div>
+  );
+}
 
-  const { data: consumers, mutate } = useSWR(
+export default function ConsumersPage() {
+  const tenantId = useTenantId() ?? '';
+  return <ConsumersWorkspace key={tenantId} tenantId={tenantId} />;
+}
+
+function ConsumersWorkspace({ tenantId }: { tenantId: string }) {
+  const {
+    data: consumers,
+    error: loadError,
+    mutate,
+  } = useSWR(
     tenantId ? `consumers-${tenantId}` : null,
     () => getConsumers(tenantId),
     { refreshInterval: 30000 },
   );
 
+  const { data: quotas } = useSWR(
+    tenantId ? `consumer-quotas-${tenantId}` : null,
+    () => getConsumerQuotas(tenantId),
+    { refreshInterval: 30000 },
+  );
+  const quotaById = new Map(
+    (quotas ?? []).map((usage) => [usage.consumerId, usage]),
+  );
+  const [usageId, setUsageId] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelMode, setPanelMode] = useState<'create' | 'edit'>('create');
   const [editId, setEditId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [groupsInput, setGroupsInput] = useState('');
+  const [quotaInput, setQuotaInput] = useState('');
   const [saving, setSaving] = useState(false);
 
   const [newKey, setNewKey] = useState<string | null>(null);
@@ -63,6 +138,7 @@ export default function ConsumersPage() {
     setEditId(null);
     setName('');
     setGroupsInput('');
+    setQuotaInput('');
     setPanelOpen(true);
   }
 
@@ -71,7 +147,13 @@ export default function ConsumersPage() {
     setEditId(consumer.id);
     setName(consumer.name);
     setGroupsInput((consumer.groups ?? []).join(', '));
+    setQuotaInput(consumer.monthlyQuota ? String(consumer.monthlyQuota) : '');
     setPanelOpen(true);
+  }
+
+  /** Blank means no quota; the input's own bounds refuse anything else. */
+  function parseQuota(input: string): number | null {
+    return input.trim() ? Number(input) : null;
   }
 
   function parseGroups(input: string): string[] {
@@ -89,12 +171,21 @@ export default function ConsumersPage() {
       const result = await createConsumer(tenantId, {
         name: name.trim(),
         groups: parseGroups(groupsInput),
+        monthlyQuota: parseQuota(quotaInput),
       });
       setNewKey(result.apiKey);
       setPanelOpen(false);
       setName('');
       setGroupsInput('');
+      setQuotaInput('');
       await mutate();
+    } catch (error) {
+      // Plan limits explain themselves; other failures stay generic.
+      toast.error(
+        error instanceof Error && /plan/i.test(error.message)
+          ? error.message
+          : 'Consumer could not be saved. Please try again.',
+      );
     } finally {
       setSaving(false);
     }
@@ -107,9 +198,12 @@ export default function ConsumersPage() {
     try {
       await updateConsumer(tenantId, editId, {
         groups: parseGroups(groupsInput),
+        monthlyQuota: parseQuota(quotaInput),
       });
       setPanelOpen(false);
       await mutate();
+    } catch {
+      toast.error('Consumer could not be saved. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -117,10 +211,15 @@ export default function ConsumersPage() {
 
   function copyKey() {
     if (!newKey) return;
-    navigator.clipboard.writeText(newKey).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    navigator.clipboard
+      .writeText(newKey)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() =>
+        toast.error('Copy failed. Select and copy the key manually.'),
+      );
   }
 
   async function handleRevoke() {
@@ -130,14 +229,19 @@ export default function ConsumersPage() {
       await deleteConsumer(tenantId, revokeTarget);
       setRevokeTarget(null);
       await mutate();
+    } catch {
+      toast.error('Consumer key could not be revoked. Please try again.');
     } finally {
       setRevoking(false);
     }
   }
 
   return (
-    <div className="p-8">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="p-4 sm:p-8">
+      {loadError && (
+        <DataLoadNotice label="Consumers" onRetry={() => mutate()} />
+      )}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold text-gray-900">Consumers</h1>
         <button
           onClick={openCreate}
@@ -148,7 +252,12 @@ export default function ConsumersPage() {
         </button>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label="Consumers table"
+        className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm"
+      >
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50">
@@ -157,6 +266,9 @@ export default function ConsumersPage() {
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
                 Groups
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                This month
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
                 Created
@@ -171,16 +283,16 @@ export default function ConsumersPage() {
             {!consumers ? (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   className="px-4 py-8 text-center text-sm text-gray-400"
                 >
-                  Loading…
+                  {loadError ? 'Data unavailable' : 'Loading…'}
                 </td>
               </tr>
             ) : consumers.length === 0 ? (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   className="px-4 py-8 text-center text-sm text-gray-400"
                 >
                   No consumers configured
@@ -200,6 +312,9 @@ export default function ConsumersPage() {
                     <td className="px-4 py-3">
                       <GroupBadges groups={consumer.groups} />
                     </td>
+                    <td className="px-4 py-3">
+                      <QuotaCell usage={quotaById.get(consumer.id)} />
+                    </td>
                     <td className="px-4 py-3 text-gray-500">
                       {formatDate(consumer.createdAt)}
                     </td>
@@ -215,12 +330,22 @@ export default function ConsumersPage() {
                       )}
                     </td>
                     <td className="px-4 py-3">
+                      <button
+                        type="button"
+                        onClick={() => setUsageId(consumer.id)}
+                        aria-label={`View usage for ${consumer.name}`}
+                        className="mb-1 flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+                      >
+                        <ChartNoAxesCombined className="h-4 w-4" />
+                        Usage
+                      </button>
                       {!revoked && (
                         <div className="flex items-center justify-end gap-1">
                           <button
                             onClick={() => openEdit(consumer)}
                             className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
-                            title="Edit groups"
+                            title="Edit groups and quota"
+                            aria-label={`Edit ${consumer.name}`}
                           >
                             <Pencil className="h-4 w-4" />
                           </button>
@@ -262,19 +387,28 @@ export default function ConsumersPage() {
         </table>
       </div>
 
+      {usageId && (
+        <ConsumerUsagePanel
+          key={`${tenantId}:${usageId}`}
+          tenantId={tenantId}
+          consumerId={usageId}
+          onClose={() => setUsageId(null)}
+        />
+      )}
+
       {/* Add / Edit Consumer slide-over */}
       {panelOpen && (
-        <div className="fixed inset-0 z-40 flex justify-end">
-          <div
-            className="fixed inset-0 bg-black/20"
-            onClick={() => setPanelOpen(false)}
-          />
-          <div className="relative z-50 flex h-full w-80 flex-col bg-white shadow-xl">
+        <WorkspaceDialog
+          label="Consumer form"
+          onClose={() => setPanelOpen(false)}
+        >
+          <div className="relative z-50 flex h-full w-full max-w-[480px] flex-col bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
               <h2 className="text-base font-semibold text-gray-900">
                 {panelMode === 'create' ? 'Add Consumer' : 'Edit Consumer'}
               </h2>
               <button
+                aria-label="Close form"
                 onClick={() => setPanelOpen(false)}
                 className="rounded p-1 text-gray-400 hover:bg-gray-100"
               >
@@ -287,10 +421,14 @@ export default function ConsumersPage() {
             >
               {panelMode === 'create' && (
                 <div className="flex flex-col gap-1">
-                  <label className="text-sm font-medium text-gray-700">
+                  <label
+                    htmlFor="consumers-field-1"
+                    className="text-sm font-medium text-gray-700"
+                  >
                     Name
                   </label>
                   <input
+                    id="consumers-field-1"
                     type="text"
                     required
                     autoFocus
@@ -302,11 +440,15 @@ export default function ConsumersPage() {
                 </div>
               )}
               <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-gray-700">
+                <label
+                  htmlFor="consumers-field-2"
+                  className="text-sm font-medium text-gray-700"
+                >
                   Groups{' '}
                   <span className="font-normal text-gray-400">(optional)</span>
                 </label>
                 <input
+                  id="consumers-field-2"
                   type="text"
                   placeholder="admin, read-only"
                   value={groupsInput}
@@ -317,9 +459,38 @@ export default function ConsumersPage() {
                   Comma-separated group names — used by ACL plugin
                 </p>
               </div>
+              <div className="flex flex-col gap-1">
+                <label
+                  htmlFor="consumers-field-quota"
+                  className="text-sm font-medium text-gray-700"
+                >
+                  Monthly request quota{' '}
+                  <span className="font-normal text-gray-500">(optional)</span>
+                </label>
+                <input
+                  id="consumers-field-quota"
+                  type="number"
+                  min={1}
+                  max={MAX_CONSUMER_MONTHLY_QUOTA}
+                  step={1}
+                  placeholder="No quota"
+                  value={quotaInput}
+                  onChange={(e) => setQuotaInput(e.target.value)}
+                  aria-describedby="consumers-field-quota-help"
+                  className="rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                />
+                <p
+                  id="consumers-field-quota-help"
+                  className="text-xs text-gray-500"
+                >
+                  Requests per UTC calendar month. When it is used up, this key
+                  gets 429 until the 1st. Leave blank for no quota.
+                </p>
+              </div>
               <div className="mt-auto flex justify-end gap-2 pt-4">
                 <button
                   type="button"
+                  aria-label="Close form"
                   onClick={() => setPanelOpen(false)}
                   className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                 >
@@ -341,19 +512,23 @@ export default function ConsumersPage() {
               </div>
             </form>
           </div>
-        </div>
+        </WorkspaceDialog>
       )}
 
       {/* One-time API key modal */}
       {newKey && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/30" />
+        <WorkspaceDialog
+          label="Consumer API key"
+          centered
+          onClose={() => setNewKey(null)}
+        >
           <div className="relative z-50 w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-base font-semibold text-gray-900">
                 Consumer API Key
               </h2>
               <button
+                aria-label="Close API key"
                 onClick={() => setNewKey(null)}
                 className="rounded p-1 text-gray-400 hover:bg-gray-100"
               >
@@ -393,7 +568,7 @@ export default function ConsumersPage() {
               </button>
             </div>
           </div>
-        </div>
+        </WorkspaceDialog>
       )}
     </div>
   );

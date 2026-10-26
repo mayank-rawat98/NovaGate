@@ -28,6 +28,14 @@ export class RateLimitGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<RequestWithUser>();
     const response = context.switchToHttp().getResponse<ResponseWithLocals>();
+    // Browser preflight is resolved and terminated by the CORS plugin. It
+    // must work even when the caller has exhausted its actual-request budget.
+    if (
+      request.method === 'OPTIONS' &&
+      request.headers.origin &&
+      request.headers['access-control-request-method']
+    )
+      return true;
     const clientIp = this.getClientIp(request);
     const userId = request.user?.id;
     const tier = userId ? 'authenticated' : 'unauthenticated';
@@ -47,31 +55,7 @@ export class RateLimitGuard implements CanActivate {
         if (retryAfterSeconds !== null) {
           response.setHeader('Retry-After', retryAfterSeconds);
         }
-        const start = response.locals?.requestStart ?? Date.now();
-        const pathLabel = this.getPathLabel(request);
         this.metricsService.incrementRateLimitHit(clientIp, tier);
-        this.metricsService.incrementHttpRequests(
-          request.method,
-          pathLabel,
-          429,
-        );
-        this.metricsService.observeRequestDuration(
-          request.method,
-          pathLabel,
-          Date.now() - start,
-        );
-        this.metricsService.incrementActiveConnections();
-        let completed = false;
-        const onComplete = () => {
-          if (completed) {
-            return;
-          }
-          completed = true;
-          this.metricsService.decrementActiveConnections();
-        };
-        response.once('finish', onComplete);
-        response.once('close', onComplete);
-        this.logRequest(request, response, clientIp, userId, 429);
         throw new GatewayError(
           'RATE_LIMIT_EXCEEDED',
           retryAfterSeconds
@@ -104,47 +88,5 @@ export class RateLimitGuard implements CanActivate {
       return request.ips[0];
     }
     return request.ip ?? 'unknown';
-  }
-
-  private getPathLabel(request: Request): string {
-    const rawPath = request.originalUrl ?? request.url ?? 'unknown';
-    const [path] = rawPath.split('?');
-    return path || 'unknown';
-  }
-
-  private logRequest(
-    request: RequestWithUser,
-    response: ResponseWithLocals,
-    clientIp: string,
-    userId: string | undefined,
-    statusCode: number,
-  ): void {
-    const start = response.locals?.requestStart ?? Date.now();
-    const responseTimeMs = Date.now() - start;
-    const logEntry: Record<string, string | number | undefined> = {
-      timestamp: new Date().toISOString(),
-      method: request.method,
-      path: request.originalUrl,
-      statusCode,
-      responseTimeMs,
-    };
-
-    const requestIdHeader = request.headers['x-request-id'];
-    const requestId = Array.isArray(requestIdHeader)
-      ? requestIdHeader[0]
-      : requestIdHeader;
-    if (requestId) {
-      logEntry.requestId = requestId;
-    }
-
-    if (userId) {
-      logEntry.userId = userId;
-    }
-
-    if (clientIp) {
-      logEntry.clientIp = clientIp;
-    }
-
-    this.logger.warn(JSON.stringify(logEntry));
   }
 }

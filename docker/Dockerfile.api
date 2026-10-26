@@ -1,18 +1,30 @@
-FROM node:22-alpine AS builder
+FROM node:26.11.1-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY libs/shared-types/package.json ./libs/shared-types/package.json
-RUN npm install
+COPY apps/api/package.json ./apps/api/package.json
+COPY apps/admin-api/package.json ./apps/admin-api/package.json
+COPY apps/control-plane/package.json ./apps/control-plane/package.json
+COPY apps/dashboard/package.json ./apps/dashboard/package.json
+COPY apps/developer-portal/package.json ./apps/developer-portal/package.json
+COPY tools/gwx/package.json ./tools/gwx/package.json
+COPY tools/npm-verified.mjs ./tools/npm-verified.mjs
+ENV NX_DAEMON=false NX_NO_CLOUD=true
+RUN --mount=type=cache,target=/root/.npm node tools/npm-verified.mjs ci --no-audit --no-fund --ignore-scripts
 COPY . .
-RUN npx nx sync
-RUN npx nx build @api-gateway/api
+RUN npm exec nx build @api-gateway/api
 
-FROM node:22-alpine
+RUN --mount=type=cache,target=/root/.npm node tools/npm-verified.mjs prune --omit=dev --ignore-scripts --no-audit --no-fund --offline
+
+FROM node:26.11.1-alpine
 WORKDIR /app
+ENV NODE_ENV=production
 COPY --from=builder /app/apps/api/dist ./dist/apps/api
 COPY --from=builder /app/node_modules ./node_modules
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s \
-  CMD wget -qO- http://localhost:3000/health || exit 1
+  CMD if [ -n "$HTTP_TLS_CERT_FILE" ]; then \
+        wget --no-check-certificate -qO- "https://localhost:${PORT:-3000}/health"; \
+      else wget -qO- "http://localhost:${PORT:-3000}/health"; fi
 CMD ["node", "dist/apps/api/main.js"]

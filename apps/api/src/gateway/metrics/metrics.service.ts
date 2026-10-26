@@ -1,9 +1,128 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
+import {
+  MAX_METRIC_RATE,
+  MAX_METRIC_LATENCY_MS,
+  MAX_METRIC_WINDOW_MS,
+  METRIC_LATENCY_BUCKETS,
+  metricPercentile,
+  type MetricReportSnapshot,
+} from '@api-gateway/shared-types';
 import { Counter, Gauge, Histogram, Registry } from 'prom-client';
 
 @Injectable()
 export class MetricsService {
+  private windowTenant: string | null = null;
+  private windowStarted = performance.now();
+  private completed = 0;
+  private errors = 0;
+  private timeouts = 0;
+  private readonly latencyCounts = METRIC_LATENCY_BUCKETS.map(() => 0);
+  constructor(
+    @Optional() private readonly configManager?: GatewayConfigManagerService,
+  ) {}
+  private resetWindow(tenant: string | null): void {
+    this.windowTenant = tenant;
+    this.windowStarted = performance.now();
+    this.completed = 0;
+    this.errors = 0;
+    this.timeouts = 0;
+    this.latencyCounts.fill(0);
+  }
+  recordCompletedHttp(
+    status: number,
+    durationMs: number,
+    tenant: string | null,
+    downstreamTimedOut = false,
+  ): void {
+    const current = this.configManager?.getTenantId() ?? null;
+    if (
+      !tenant ||
+      tenant !== current ||
+      !Number.isFinite(durationMs) ||
+      durationMs < 0
+    )
+      return;
+    if (this.windowTenant !== current) this.resetWindow(current);
+    if (this.completed >= MAX_METRIC_RATE) return;
+    this.completed++;
+    if (status >= 400) {
+      this.errors++;
+      if (downstreamTimedOut) this.timeouts++;
+    }
+    const bounded = Math.min(MAX_METRIC_LATENCY_MS, durationMs);
+    const bucket = METRIC_LATENCY_BUCKETS.findIndex(
+      (ceiling) => bounded <= ceiling,
+    );
+    this.latencyCounts[bucket]++;
+  }
+  takeSnapshot(): MetricReportSnapshot {
+    const tenant = this.configManager?.getTenantId() ?? null;
+    if (
+      tenant !== this.windowTenant ||
+      performance.now() - this.windowStarted > MAX_METRIC_WINDOW_MS
+    )
+      this.resetWindow(tenant);
+    const elapsed = Math.max(1, performance.now() - this.windowStarted);
+    const snapshot: MetricReportSnapshot = {
+      rps: Math.min(MAX_METRIC_RATE, (this.completed * 1000) / elapsed),
+      p50Ms: metricPercentile(this.latencyCounts, this.completed, 0.5),
+      p95Ms: metricPercentile(this.latencyCounts, this.completed, 0.95),
+      p99Ms: metricPercentile(this.latencyCounts, this.completed, 0.99),
+      errorRate: this.completed ? this.errors / this.completed : 0,
+      timestamp: new Date().toISOString(),
+      window: {
+        windowMs: elapsed,
+        requestCount: this.completed,
+        errorCount: this.errors,
+        timeoutCount: this.timeouts,
+        latencyCounts: [...this.latencyCounts],
+      },
+    };
+    this.resetWindow(tenant);
+    return snapshot;
+  }
   private readonly registry = new Registry();
+  private readonly metricSnapshotsDropped = new Counter({
+    name: 'gateway_metric_snapshots_dropped_total',
+    help: 'Aggregate HTTP metric snapshots dropped by transient transport limits',
+    registers: [this.registry],
+  });
+  incrementMetricSnapshotDropped(): void {
+    this.metricSnapshotsDropped.inc();
+  }
+  private readonly traceActive = new Gauge({
+    name: 'gateway_trace_active_spans',
+    help: 'Active recording spans',
+    registers: [this.registry],
+  });
+  private readonly traceQueued = new Gauge({
+    name: 'gateway_trace_queued_spans',
+    help: 'Pending trace spans',
+    registers: [this.registry],
+  });
+  private readonly traceDropped = new Counter({
+    name: 'gateway_trace_dropped_spans_total',
+    help: 'Trace spans dropped under finite admission and transport limits',
+    labelNames: ['reason'],
+    registers: [this.registry],
+  });
+  setTraceActiveSpans(count: number): void {
+    this.traceActive.set(count);
+  }
+  setTraceQueuedSpans(count: number): void {
+    this.traceQueued.set(count);
+  }
+  incrementTraceDropped(
+    reason:
+      | 'active-capacity'
+      | 'queue-capacity'
+      | 'tenant-change'
+      | 'transport-backpressure',
+  ): void {
+    this.traceDropped.labels(reason).inc();
+  }
+
   private readonly httpRequestsTotal = new Counter({
     name: 'http_requests_total',
     help: 'Total number of HTTP requests',
@@ -39,6 +158,29 @@ export class MetricsService {
     labelNames: ['service'],
     registers: [this.registry],
   });
+  private readonly quotaRejectionsTotal = new Counter({
+    name: 'gateway_quota_rejections_total',
+    help: 'Requests refused with QUOTA_EXCEEDED',
+    labelNames: ['scope'],
+    registers: [this.registry],
+  });
+  private readonly meteringErrorsTotal = new Counter({
+    name: 'gateway_metering_redis_errors_total',
+    help: 'Requests admitted without metering because Redis failed',
+    registers: [this.registry],
+  });
+  private readonly circuitRejectionsTotal = new Counter({
+    name: 'gateway_circuit_breaker_rejections_total',
+    help: 'Requests refused because the service circuit was open',
+    labelNames: ['service'],
+    registers: [this.registry],
+  });
+  private readonly circuitState = new Gauge({
+    name: 'gateway_circuit_breaker_state',
+    help: 'Circuit state per service: 0 closed, 1 half-open, 2 open',
+    labelNames: ['service'],
+    registers: [this.registry],
+  });
   private readonly proxyRetriesTotal = new Counter({
     name: 'gateway_proxy_retries_total',
     help: 'Total proxy retry attempts',
@@ -56,6 +198,14 @@ export class MetricsService {
     labelNames: ['direction'],
     registers: [this.registry],
   });
+  private readonly grpcActiveCalls = new Gauge({
+    name: 'gateway_grpc_active_calls',
+    help: 'Active gRPC calls including authentication and quota admission',
+    registers: [this.registry],
+  });
+  setGrpcActiveCalls(count: number): void {
+    this.grpcActiveCalls.set(count);
+  }
   private readonly grpcRequestsTotal = new Counter({
     name: 'gateway_grpc_requests_total',
     help: 'Total gRPC requests proxied',
@@ -100,6 +250,29 @@ export class MetricsService {
 
   incrementDownstreamTimeout(service: string): void {
     this.downstreamTimeoutTotal.labels(service).inc();
+  }
+
+  incrementQuotaRejection(scope: 'workspace' | 'consumer'): void {
+    this.quotaRejectionsTotal.labels(scope).inc();
+  }
+
+  incrementMeteringError(): void {
+    this.meteringErrorsTotal.inc();
+  }
+
+  incrementCircuitRejection(service: string): void {
+    this.circuitRejectionsTotal.labels(service).inc();
+  }
+
+  /** Replaces every circuit state, so removed services drop their series. */
+  setCircuitStates(
+    states: Array<{ service: string; state: 'closed' | 'half-open' | 'open' }>,
+  ): void {
+    this.circuitState.reset();
+    for (const { service, state } of states)
+      this.circuitState
+        .labels(service)
+        .set(state === 'open' ? 2 : state === 'half-open' ? 1 : 0);
   }
 
   incrementProxyRetry(route: string, attempt: number): void {

@@ -20,6 +20,7 @@ interface BasicAuthConfig {
 @Injectable()
 export class BasicAuthPlugin implements GatewayPlugin {
   readonly name = 'basic-auth';
+  readonly protocols = ['http', 'grpc', 'websocket'] as const;
 
   async onRequest(ctx: PluginContext): Promise<PluginShortCircuit | void> {
     const entry = ctx.route.plugins?.find((p) => p.name === 'basic-auth');
@@ -50,6 +51,7 @@ export class BasicAuthPlugin implements GatewayPlugin {
     const valid = config.credentials.some(
       (c) =>
         c.username === username &&
+        /^[a-f\d]{64}$/i.test(c.passwordHash) &&
         crypto.timingSafeEqual(
           Buffer.from(c.passwordHash, 'hex'),
           Buffer.from(passwordHash, 'hex'),
@@ -57,6 +59,7 @@ export class BasicAuthPlugin implements GatewayPlugin {
     );
 
     if (!valid) return this.unauthorized(realm, ctx.requestId);
+    ctx.authentication = { method: this.name, subject: username };
   }
 
   private unauthorized(realm: string, requestId: string): PluginShortCircuit {

@@ -1,9 +1,12 @@
 import { Module } from '@nestjs/common';
+import { RequestBodyService } from '../shared/request-body.service';
+import { IdentityProviderService } from './identity-provider/identity-provider.service';
 import { RateLimitService } from '../rate-limit/rate-limit.service';
 import { ConfigManagerModule } from '../config-manager/config-manager.module';
 import { GATEWAY_PLUGIN } from './gateway-plugin.token';
 import { PluginRegistryService } from './plugin-registry.service';
 import { PluginRunnerService } from './plugin-runner.service';
+import { PluginLoaderService } from './third-party/plugin-loader.service';
 import { CorsPlugin } from './cors/cors.plugin';
 import { IpRestrictionPlugin } from './ip-restriction/ip-restriction.plugin';
 import { RequestSizeLimitPlugin } from './request-size-limit/request-size-limit.plugin';
@@ -17,6 +20,7 @@ import { HmacAuthPlugin } from './hmac-auth/hmac-auth.plugin';
 import { AclPlugin } from './acl/acl.plugin';
 import { MtlsPlugin } from './mtls/mtls.plugin';
 import { GraphqlGuardPlugin } from './graphql-guard/graphql-guard.plugin';
+import type { GatewayPlugin } from '@api-gateway/shared-types';
 
 const FIRST_PARTY_PLUGINS = [
   CorsPlugin,
@@ -42,14 +46,22 @@ const FIRST_PARTY_PLUGINS = [
     RateLimitService,
     PluginRegistryService,
     PluginRunnerService,
+    PluginLoaderService,
+    IdentityProviderService,
+    RequestBodyService,
     ...FIRST_PARTY_PLUGINS,
-    // Each plugin is also registered under the multi-provider token so the
-    // registry can collect them all without knowing each class by name.
-    ...FIRST_PARTY_PLUGINS.map((Plugin) => ({
+    // Nest keeps only one provider for a token; explicitly aggregate instances.
+    {
       provide: GATEWAY_PLUGIN,
-      useExisting: Plugin,
-    })),
+      inject: FIRST_PARTY_PLUGINS,
+      useFactory: (...plugins: GatewayPlugin[]) => plugins,
+    },
   ],
-  exports: [PluginRegistryService, PluginRunnerService],
+  exports: [
+    PluginRegistryService,
+    PluginRunnerService,
+    PluginLoaderService,
+    RequestBodyService,
+  ],
 })
 export class PluginsModule {}

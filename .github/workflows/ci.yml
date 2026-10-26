@@ -1,12 +1,50 @@
 name: CI
 
 on:
-  push:
-    branches: ['dev']
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NX_DAEMON: 'false'
+  NX_NO_CLOUD: 'true'
 
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: novagate_test
+          POSTGRES_PASSWORD: local-verification-only
+          POSTGRES_DB: novagate_test
+        ports: ['15432:5432']
+        options: >-
+          --health-cmd "pg_isready -U novagate_test -d novagate_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['16379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      rustfs:
+        image: rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
+        env:
+          RUSTFS_ACCESS_KEY: novagate-verification
+          RUSTFS_SECRET_KEY: local-object-storage-verification-only
+          RUSTFS_CONSOLE_ENABLE: 'false'
+        ports: ['19000:9000']
+        options: >-
+          --health-cmd "curl --fail --silent http://127.0.0.1:9000/health/ready"
+          --health-interval 2s --health-timeout 3s --health-retries 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -14,21 +52,90 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version-file: '.nvmrc'
           cache: 'npm'
 
-      - run: npm ci
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: integrations/terraform-provider/go.mod
+          cache-dependency-path: integrations/terraform-provider/go.sum
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.7
+          terraform_wrapper: false
+
+      - run: node tools/npm-verified.mjs ci --no-audit --no-fund
+
+      - name: Reject failed npm extraction
+        run: npm exec -- nx run admin-api:dependency-install-smoke
 
       - name: Lint
-        run: npx nx run-many -t lint
+        run: npm exec nx run-many -- -t lint
 
       - name: Typecheck
-        run: npx nx run-many -t typecheck
+        run: npm exec nx run-many -- -t typecheck
+
+      - name: Kubernetes API server binaries for the controller
+        run: echo "KUBEBUILDER_ASSETS=$(cd integrations/k8s-controller && go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.19 use 1.31.x -p path --bin-dir ../../.local-work/envtest)" >> "$GITHUB_ENV"
 
       - name: Test
-        run: npx nx run-many -t test
+        run: npm exec nx run-many -- -t test --skipNxCache
         env:
           CI: 'true'
+          TEST_DATABASE_URL: postgres://novagate_test:local-verification-only@127.0.0.1:15432/novagate_test
+          TEST_REDIS_URL: redis://127.0.0.1:16379
+          TEST_OBJECT_STORAGE_ENDPOINT: http://127.0.0.1:19000
 
       - name: Build
-        run: npx nx run-many -t build
+        run: npm exec nx run-many -- -t build
+
+      - name: Install browser for dashboard checks
+        run: npm exec playwright install -- --with-deps chromium
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.local-work/playwright
+
+      - name: Dashboard browser and accessibility checks
+        run: npm exec nx run dashboard:ui-smoke
+        env:
+          NEXT_PUBLIC_ADMIN_API_URL: '/'
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.local-work/playwright
+
+      - name: Developer portal browser and accessibility checks
+        run: npm exec nx run developer-portal:ui-smoke
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.local-work/playwright
+
+      - name: Developer portal to gateway end-to-end
+        run: npm exec nx run developer-portal:gateway-e2e
+        env:
+          E2E_DATABASE_URL: postgres://novagate_test:local-verification-only@127.0.0.1:15432/novagate_test
+          E2E_REDIS_URL: redis://127.0.0.1:16379/7
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.local-work/playwright
+
+      - name: Terraform provider acceptance
+        run: npm exec nx run terraform-provider:acceptance
+        env:
+          E2E_DATABASE_URL: postgres://novagate_test:local-verification-only@127.0.0.1:15432/novagate_test
+          E2E_REDIS_URL: redis://127.0.0.1:16379/8
+
+      - name: Kubernetes controller end-to-end
+        run: npm exec nx run k8s-controller:e2e
+        env:
+          E2E_DATABASE_URL: postgres://novagate_test:local-verification-only@127.0.0.1:15432/novagate_test
+          E2E_REDIS_URL: redis://127.0.0.1:16379/9
+
+      - name: Upload dashboard verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-verification
+          path: |
+            .local-work/dashboard-verification/*.png
+            .local-work/dashboard-verification/*.json
+            .local-work/dashboard-verification/browser-trace.zip
+            .local-work/developer-portal-verification/*.json
+            .local-work/portal-gateway-e2e/*
+            .local-work/terraform-acceptance/*
+            .local-work/k8s-e2e/*
+          if-no-files-found: ignore

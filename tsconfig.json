@@ -17,6 +17,15 @@
     },
     {
       "path": "./libs/shared-types"
+    },
+    {
+      "path": "./tools/gwx"
+    },
+    {
+      "path": "./apps/developer-portal"
+    },
+    {
+      "path": "./libs/plugin-sdk"
     }
   ]
 }

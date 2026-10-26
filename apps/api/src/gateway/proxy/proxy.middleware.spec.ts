@@ -1,8 +1,10 @@
 import * as http from 'http';
+import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { EventEmitter } from 'events';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import type { Options } from 'http-proxy-middleware/dist/types';
+import { RequestBodyService } from '../shared/request-body.service';
 import { ProxyService } from './proxy.service';
 import { ProxyMiddleware } from './proxy.middleware';
 import { MetricsService } from '../metrics/metrics.service';
@@ -107,6 +109,10 @@ const mockMetrics = () => ({
 
 const mockLoadBalancer = () => ({
   selectTarget: jest.fn().mockReturnValue('http://downstream'),
+  acquireTarget: jest.fn().mockImplementation(() => ({
+    url: 'http://downstream',
+    release: jest.fn(),
+  })),
 });
 
 const mockUpstreamHealth = () => ({
@@ -125,6 +131,8 @@ async function buildModule() {
       { provide: PluginRegistryService, useValue: mockPluginRegistry() },
       { provide: PluginRunnerService, useValue: mockPluginRunner() },
       { provide: Http2SessionPool, useValue: {} },
+      { provide: RequestBodyService, useValue: {} },
+      { provide: ConfigService, useValue: new ConfigService() },
     ],
   }).compile();
 
@@ -143,7 +151,10 @@ describe('ProxyService', () => {
     const handler = jest.fn((req, res, _next) => {
       const options = (createProxyMiddleware as jest.Mock).mock
         .calls[0][0] as Options;
-      const proxyReq = { setHeader: jest.fn() };
+      const proxyReq = Object.assign(new EventEmitter(), {
+        setHeader: jest.fn(),
+        destroy: jest.fn(),
+      });
       (
         options.on?.proxyReq as unknown as (
           a: unknown,
@@ -312,6 +323,8 @@ describe('ProxyService', () => {
         { provide: PluginRegistryService, useValue: mockPluginRegistry() },
         { provide: PluginRunnerService, useValue: mockPluginRunner() },
         { provide: Http2SessionPool, useValue: {} },
+        { provide: RequestBodyService, useValue: {} },
+        { provide: ConfigService, useValue: new ConfigService() },
       ],
     }).compile();
 

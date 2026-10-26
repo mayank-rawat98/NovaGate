@@ -80,16 +80,126 @@
         "options": {
           "passWithNoTests": true
         }
+      },
+      "runtime-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/metrics-container-smoke.mjs tools/alerts-container-fixture.mjs tools/log-export-container-fixture.mjs tools/export-destinations-container-fixture.mjs tools/consumer-rollup-container-fixture.mjs tools/gwx-container-fixture.mjs",
+            "node tools/metrics-container-smoke.mjs"
+          ],
+          "parallel": false
+        },
+        "dependsOn": [
+          "gwx:build"
+        ]
+      },
+      "export-capacity-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/build-export-transport-fixture.mjs tools/export-delivery-container-smoke.mjs",
+            "node tools/build-export-transport-fixture.mjs",
+            "node tools/export-delivery-container-smoke.mjs capacity"
+          ],
+          "parallel": false
+        }
+      },
+      "export-transport-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/build-export-transport-fixture.mjs tools/export-transports-container-smoke.mjs",
+            "node tools/build-export-transport-fixture.mjs",
+            "node tools/export-transports-container-smoke.mjs"
+          ],
+          "parallel": false
+        }
+      },
+      "export-scheduler-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/build-export-transport-fixture.mjs tools/export-delivery-container-smoke.mjs",
+            "node tools/build-export-transport-fixture.mjs",
+            "node tools/export-delivery-container-smoke.mjs scheduler"
+          ],
+          "parallel": false
+        }
+      },
+      "consumer-rollup-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/consumer-rollup-container-smoke.mjs tools/consumer-rollup-container-fixture.mjs tools/consumer-rollup-replicas-fixture.mjs",
+            "node tools/consumer-rollup-container-smoke.mjs"
+          ],
+          "parallel": false
+        }
+      },
+      "consumer-rollup-replicas-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/consumer-rollup-container-smoke.mjs tools/consumer-rollup-container-fixture.mjs tools/consumer-rollup-replicas-fixture.mjs",
+            "node tools/consumer-rollup-container-smoke.mjs replicas"
+          ],
+          "parallel": false
+        }
+      },
+      "dependency-install-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/npm-verified.mjs tools/npm-extraction-smoke.mjs tools/npm-extraction-fault.cjs",
+            "node tools/npm-extraction-smoke.mjs"
+          ],
+          "parallel": false
+        }
+      },
+      "anomaly-e2e": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build",
+          {
+            "projects": [
+              "control-plane",
+              "@api-gateway/api"
+            ],
+            "target": "build"
+          }
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/anomaly-e2e.mjs",
+            "node tools/anomaly-e2e.mjs"
+          ],
+          "parallel": false
+        }
       }
     }
   },
   "dependencies": {
+    "@api-gateway/shared-types": "^0.0.1",
+    "@aws-sdk/client-s3": "^3.1146.0",
+    "@aws-sdk/lib-storage": "^3.1146.0",
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
+    "@theguild/federation-composition": "0.27.0",
+    "graphql": "17.0.2",
     "reflect-metadata": "^0.1.13",
     "rxjs": "^7.8.0",
-    "tslib": "^2.3.0"
+    "tslib": "^2.3.0",
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@nestjs/testing": "^11.0.0"

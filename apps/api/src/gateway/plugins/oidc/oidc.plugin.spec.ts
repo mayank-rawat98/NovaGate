@@ -1,3 +1,5 @@
+import { ConfigService } from '@nestjs/config';
+import { IdentityProviderService } from '../identity-provider/identity-provider.service';
 import { Test } from '@nestjs/testing';
 import * as crypto from 'crypto';
 import * as http from 'http';
@@ -58,7 +60,16 @@ describe('OidcPlugin', () => {
 
   beforeEach(async () => {
     const module = await Test.createTestingModule({
-      providers: [OidcPlugin],
+      providers: [
+        OidcPlugin,
+        IdentityProviderService,
+        {
+          provide: ConfigService,
+          useValue: new ConfigService({
+            identityProvider: { allowInsecureHttp: true },
+          }),
+        },
+      ],
     }).compile();
     plugin = module.get(OidcPlugin);
     plugin.clearCache();
@@ -149,7 +160,7 @@ describe('OidcPlugin', () => {
     );
   });
 
-  it('refreshes JWKS cache on kid miss', async () => {
+  it('refreshes a missing key after the configured cooldown', async () => {
     let callCount = 0;
     const server = await new Promise<http.Server>((resolve) => {
       const s = http.createServer((_req, res) => {
@@ -177,10 +188,16 @@ describe('OidcPlugin', () => {
       issuer: 'https://issuer',
     });
 
+    expect((await plugin.onRequest(ctx))?.status).toBe(401);
+    expect((await plugin.onRequest(ctx))?.status).toBe(401);
+    expect(callCount).toBe(1);
+    const now = Date.now();
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(now + 31000);
     const result = await plugin.onRequest(ctx);
+    clock.mockRestore();
     await new Promise<void>((r) => server.close(() => r()));
 
-    // First fetch returns empty (kid miss), second fetch returns key k2
+    // Rotation can refresh after cooldown, while repeated unknown kids cannot flood it.
     expect(result).toBeUndefined();
     expect(callCount).toBe(2);
   });
@@ -210,5 +227,113 @@ describe('OidcPlugin', () => {
     expect(JSON.parse((result as { body: string }).body).error).toBe(
       'OIDC_TOKEN_INVALID',
     );
+  });
+  it.each([
+    { use: 'enc' },
+    { key_ops: ['encrypt'] },
+    { alg: 'HS256' },
+    { alg: 'RS512' },
+  ])(
+    'rejects signing keys outside the declared use or algorithm: %j',
+    async (extra) => {
+      const server = await startMockJwks([
+        { ...rsaPublicJwk, kid: 'k1', ...extra },
+      ]);
+      try {
+        const token = jwt.sign({ sub: 'u1' }, rsaPrivate, {
+          algorithm: 'RS256',
+          issuer: 'issuer',
+          keyid: 'k1',
+          expiresIn: 300,
+        });
+        const ctx = makeCtx(token, {
+          jwksUri: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+          issuer: 'issuer',
+        });
+        expect((await plugin.onRequest(ctx))?.status).toBe(401);
+        expect(ctx.authentication).toBeUndefined();
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    },
+  );
+  it('requires expiration and removes spoofed claim headers even on rejection', async () => {
+    const server = await startMockJwks([{ ...rsaPublicJwk, kid: 'k1' }]);
+    try {
+      const token = jwt.sign({ sub: 'u1' }, rsaPrivate, {
+        algorithm: 'RS256',
+        issuer: 'issuer',
+        keyid: 'k1',
+      });
+      const ctx = makeCtx(token, {
+        jwksUri: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+        issuer: 'issuer',
+      });
+      ctx.req.headers['x-claim-admin'] = 'true';
+      expect((await plugin.onRequest(ctx))?.status).toBe(401);
+      expect(ctx.req.headers['x-claim-admin']).toBeUndefined();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+  it('rejects forwarded claim header injection', async () => {
+    const server = await startMockJwks([{ ...rsaPublicJwk, kid: 'k1' }]);
+    try {
+      const token = jwt.sign(
+        { sub: 'u1', role: 'admin\r\nx-admin: true' },
+        rsaPrivate,
+        { algorithm: 'RS256', issuer: 'issuer', keyid: 'k1', expiresIn: 300 },
+      );
+      const ctx = makeCtx(token, {
+        jwksUri: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+        issuer: 'issuer',
+        claimsToForward: ['role'],
+      });
+      expect((await plugin.onRequest(ctx))?.status).toBe(401);
+      expect(ctx.authentication).toBeUndefined();
+      expect(ctx.req.headers['x-claim-role']).toBeUndefined();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+  it('coalesces concurrent JWKS reads and isolates tenant caches', async () => {
+    let calls = 0;
+    const server = http.createServer((_req, res) => {
+      calls++;
+      setTimeout(
+        () =>
+          res.end(JSON.stringify({ keys: [{ ...rsaPublicJwk, kid: 'k1' }] })),
+        10,
+      );
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    try {
+      const token = jwt.sign({ sub: 'u1' }, rsaPrivate, {
+        algorithm: 'RS256',
+        issuer: 'issuer',
+        keyid: 'k1',
+        expiresIn: 300,
+      });
+      const config = {
+        jwksUri: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+        issuer: 'issuer',
+      };
+      expect(
+        await Promise.all(
+          Array.from({ length: 8 }, () =>
+            plugin.onRequest(makeCtx(token, config)),
+          ),
+        ),
+      ).toEqual(Array(8).fill(undefined));
+      expect(calls).toBe(1);
+      const second = makeCtx(token, config);
+      second.tenantId = 'other';
+      expect(await plugin.onRequest(second)).toBeUndefined();
+      expect(calls).toBe(2);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

@@ -1,3 +1,18 @@
+import { AutomationScope } from '../automation-tokens/automation-scope.decorator';
+import Joi from 'joi';
+import {
+  MAX_GRAPHQL_POLICY_DEPTH,
+  MAX_GRAPHQL_POLICY_COMPLEXITY,
+  MAX_HMAC_SECRETS,
+  MAX_HMAC_SECRET_BYTES,
+  MAX_HMAC_CLOCK_SKEW_SECONDS,
+  MAX_ROUTE_PLUGINS,
+  MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES,
+  GRAPHQL_FEDERATION_PLUGIN,
+  graphqlFederationConfigProblem,
+  isThirdPartyPluginName,
+  wasmPluginOfRouteName,
+} from '@api-gateway/shared-types';
 import {
   Controller,
   Get,
@@ -7,9 +22,14 @@ import {
   Param,
   Body,
   BadRequestException,
+  NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { BillingService } from '../billing/billing.service';
 import { ConfigPushService } from '../config-push/config-push.service';
+import { tenantSchema } from '../tenants/tenant-schema';
+import { validateRoutePortal } from '../portal/portal-catalog';
 
 // Plugin names accepted by the admin-api. Reject unknown names so the
 // gateway never tries to resolve a plugin that doesn't exist.
@@ -26,12 +46,9 @@ const KNOWN_PLUGIN_NAMES = new Set([
   'hmac-auth',
   'acl',
   'mtls',
+  'graphql-guard',
+  GRAPHQL_FEDERATION_PLUGIN,
 ]);
-
-function tenantSchema(tenantId: string): string {
-  if (!/^[0-9a-f-]+$/i.test(tenantId)) throw new Error('Invalid tenantId');
-  return `tenant_${tenantId.replace(/-/g, '_')}`;
-}
 
 interface PluginEntry {
   name: string;
@@ -52,17 +69,157 @@ interface RouteBody {
     maxComplexity?: number;
     introspectionAllowed?: boolean;
   } | null;
+  portal?: unknown;
 }
 
-function validatePlugins(plugins: unknown): void {
-  if (!plugins) return;
+const providerEndpoint = Joi.string()
+  .uri({ scheme: ['http', 'https'] })
+  .custom((value, helpers) => {
+    const url = new URL(value);
+    return url.username || url.password || url.hash
+      ? helpers.error('any.invalid')
+      : value;
+  });
+const oidcConfigSchema = Joi.object({
+  jwksUri: providerEndpoint.required(),
+  issuer: Joi.string().required(),
+  audience: Joi.string(),
+  claimsToForward: Joi.array().items(Joi.string().pattern(/^[a-zA-Z0-9_.-]+$/)),
+});
+const oauthConfigSchema = Joi.object({
+  introspectionEndpoint: providerEndpoint,
+  tokenEndpoint: providerEndpoint,
+  clientId: Joi.string()
+    .pattern(/^\S+$/)
+    .custom((value, helpers) =>
+      [...value].some(
+        (char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127,
+      )
+        ? helpers.error('any.invalid')
+        : value,
+    )
+    .required(),
+  clientSecret: Joi.string().required(),
+  scopes: Joi.array().items(
+    Joi.string()
+      .pattern(/^\S+$/)
+      .custom((value, helpers) =>
+        [...value].some(
+          (char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127,
+        )
+          ? helpers.error('any.invalid')
+          : value,
+      ),
+  ),
+  issuer: Joi.string(),
+  audience: Joi.string(),
+  headerName: Joi.string()
+    .pattern(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/)
+    .custom((value, helpers) => {
+      const name = value.toLowerCase();
+      return [
+        'host',
+        'content-length',
+        'transfer-encoding',
+        'connection',
+        'upgrade',
+        'proxy-authorization',
+      ].includes(name) || name.startsWith('sec-websocket-')
+        ? helpers.error('any.invalid')
+        : value;
+    }),
+}).xor('introspectionEndpoint', 'tokenEndpoint');
+
+const hmacConfigSchema = Joi.object({
+  mode: Joi.string().valid('generic', 'stripe'),
+  header: Joi.string()
+    .max(128)
+    .pattern(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/)
+    .required(),
+  algorithm: Joi.string().valid('sha256', 'sha512').required(),
+  secrets: Joi.array()
+    .min(1)
+    .max(MAX_HMAC_SECRETS)
+    .items(
+      Joi.string().custom((v: string, helpers) =>
+        Buffer.byteLength(v) > MAX_HMAC_SECRET_BYTES
+          ? helpers.error('any.invalid')
+          : v,
+      ),
+    )
+    .required(),
+  timestampHeader: Joi.string()
+    .max(128)
+    .pattern(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/),
+  maxClockSkewSeconds: Joi.number()
+    .strict()
+    .integer()
+    .min(1)
+    .max(MAX_HMAC_CLOCK_SKEW_SECONDS),
+}).custom((v, helpers) => {
+  if (
+    v.mode === 'stripe' &&
+    (v.algorithm !== 'sha256' || v.timestampHeader !== undefined)
+  )
+    return helpers.error('any.invalid');
+  if (v.timestampHeader?.toLowerCase() === v.header.toLowerCase())
+    return helpers.error('any.invalid');
+  if (
+    v.maxClockSkewSeconds !== undefined &&
+    v.mode !== 'stripe' &&
+    !v.timestampHeader
+  )
+    return helpers.error('any.invalid');
+  return v;
+});
+
+const graphqlConfigSchema = Joi.object({
+  maxDepth: Joi.number()
+    .strict()
+    .integer()
+    .min(1)
+    .max(MAX_GRAPHQL_POLICY_DEPTH),
+  maxComplexity: Joi.number()
+    .strict()
+    .integer()
+    .min(1)
+    .max(MAX_GRAPHQL_POLICY_COMPLEXITY),
+  introspectionAllowed: Joi.boolean().strict(),
+});
+export function validateGraphql(value: unknown): void {
+  if (value === null || value === undefined) return;
+  if (graphqlConfigSchema.validate(value).error)
+    throw new BadRequestException(
+      'Invalid GraphQL policy: use a depth from 1–100, complexity from 1–100000 and a boolean introspection setting',
+    );
+}
+
+export function validatePlugins(plugins: unknown): void {
+  if (plugins === null || plugins === undefined) return;
   if (!Array.isArray(plugins))
     throw new BadRequestException('plugins must be an array');
+  if (plugins.length > MAX_ROUTE_PLUGINS)
+    throw new BadRequestException(
+      `A route may list at most ${MAX_ROUTE_PLUGINS} plugins`,
+    );
+  const seen = new Set<string>();
   for (const entry of plugins) {
-    if (typeof entry.name !== 'string')
+    if (!entry || typeof entry !== 'object' || typeof entry.name !== 'string')
       throw new BadRequestException('each plugin must have a string name');
-    if (!KNOWN_PLUGIN_NAMES.has(entry.name)) {
-      throw new BadRequestException(`Unknown plugin: "${entry.name}"`);
+    if (seen.has(entry.name))
+      throw new BadRequestException(
+        `Duplicate plugin: ${entry.name}. Configure each policy once.`,
+      );
+    seen.add(entry.name);
+    // Workspace WASM plugins (wasm:<name>) are bounded like third-party
+    // ones; a route naming one that is not installed fails closed.
+    const thirdParty =
+      isThirdPartyPluginName(entry.name) ||
+      wasmPluginOfRouteName(entry.name) !== null;
+    if (!thirdParty && !KNOWN_PLUGIN_NAMES.has(entry.name)) {
+      throw new BadRequestException(
+        `Unknown plugin: "${String(entry.name).slice(0, 80)}". Third-party plugins use their scoped npm package name; WebAssembly plugins use wasm:<name>.`,
+      );
     }
     if (
       typeof entry.config !== 'object' ||
@@ -73,6 +230,48 @@ function validatePlugins(plugins: unknown): void {
         `plugin "${entry.name}" config must be an object`,
       );
     }
+    // The gateway operator installs and pins third-party packages; the admin
+    // API only bounds the configuration it stores and sends.
+    if (thirdParty) {
+      if (
+        Buffer.byteLength(JSON.stringify(entry.config)) >
+        MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES
+      )
+        throw new BadRequestException(
+          `plugin "${entry.name}" config exceeds ${MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES} bytes`,
+        );
+      continue;
+    }
+    if (entry.name === GRAPHQL_FEDERATION_PLUGIN) {
+      const problem = graphqlFederationConfigProblem(entry.config);
+      if (problem)
+        throw new BadRequestException(
+          `Invalid ${GRAPHQL_FEDERATION_PLUGIN} configuration: ${problem}`,
+        );
+      // The gateway answers from the supergraph instead of forwarding, so
+      // every policy plugin must run before it.
+      if (entry !== plugins[plugins.length - 1])
+        throw new BadRequestException(
+          `${GRAPHQL_FEDERATION_PLUGIN} must be the last plugin on a route`,
+        );
+      continue;
+    }
+    const schema =
+      entry.name === 'oidc'
+        ? oidcConfigSchema
+        : entry.name === 'oauth2-client-credentials'
+          ? oauthConfigSchema
+          : entry.name === 'hmac-auth'
+            ? hmacConfigSchema
+            : entry.name === 'graphql-guard'
+              ? graphqlConfigSchema
+              : entry.name === 'mtls'
+                ? Joi.object({ required: Joi.boolean().strict().required() })
+                : undefined;
+    if (schema?.validate(entry.config).error)
+      throw new BadRequestException(
+        `Invalid ${entry.name} configuration: check credentials and optional fields`,
+      );
   }
 }
 
@@ -81,41 +280,52 @@ export class RoutesController {
   constructor(
     private readonly dataSource: DataSource,
     private readonly configPush: ConfigPushService,
+    @Optional() private readonly billing?: BillingService,
   ) {}
 
+  @AutomationScope('routes:read')
   @Get()
   async findAll(@Param('tenantId') tenantId: string) {
     const schema = tenantSchema(tenantId);
     return this.dataSource.query(
-      `SELECT * FROM ${schema}.routes WHERE "deletedAt" IS NULL ORDER BY "createdAt" ASC`,
+      `SELECT * FROM ${schema}.routes WHERE "deletedAt" IS NULL ORDER BY "configOrder" NULLS LAST,"createdAt",id`,
     );
   }
 
+  @AutomationScope('routes:write')
   @Post()
   async create(@Param('tenantId') tenantId: string, @Body() body: RouteBody) {
     validatePlugins(body.plugins);
+    validateGraphql(body.graphql);
+    const portal = validateRoutePortal(body.portal);
     const schema = tenantSchema(tenantId);
-    const rows = await this.dataSource.query(
-      `INSERT INTO ${schema}.routes
+    const insert = (db: Pick<DataSource, 'query'>) =>
+      db.query(
+        `INSERT INTO ${schema}.routes
          (method, "pathPattern", "serviceId", "authRequired", "rateLimitOverride", enabled,
-          retry, plugins, graphql)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [
-        body.method,
-        body.pathPattern,
-        body.serviceId,
-        body.authRequired ?? false,
-        body.rateLimitOverride ?? null,
-        body.enabled ?? true,
-        body.retry ? JSON.stringify(body.retry) : null,
-        body.plugins ? JSON.stringify(body.plugins) : null,
-        body.graphql ? JSON.stringify(body.graphql) : null,
-      ],
-    );
+          retry, plugins, graphql, portal)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+        [
+          body.method,
+          body.pathPattern,
+          body.serviceId,
+          body.authRequired ?? false,
+          body.rateLimitOverride ?? null,
+          body.enabled ?? true,
+          body.retry ? JSON.stringify(body.retry) : null,
+          body.plugins ? JSON.stringify(body.plugins) : null,
+          body.graphql ? JSON.stringify(body.graphql) : null,
+          portal ? JSON.stringify(portal) : null,
+        ],
+      );
+    const rows = this.billing
+      ? await this.billing.withCapacity(tenantId, ['routes'], insert)
+      : await insert(this.dataSource);
     await this.configPush.triggerUpdate(tenantId);
     return rows[0];
   }
 
+  @AutomationScope('routes:write')
   @Put(':id')
   async update(
     @Param('tenantId') tenantId: string,
@@ -123,19 +333,22 @@ export class RoutesController {
     @Body() body: RouteBody,
   ) {
     validatePlugins(body.plugins);
+    validateGraphql(body.graphql);
+    const portal = validateRoutePortal(body.portal);
     const schema = tenantSchema(tenantId);
     const rows = await this.dataSource.query(
-      `UPDATE ${schema}.routes
+      `WITH updated AS (UPDATE ${schema}.routes
        SET method = COALESCE($2, method),
            "pathPattern" = COALESCE($3, "pathPattern"),
            "serviceId" = COALESCE($4, "serviceId"),
            "authRequired" = COALESCE($5, "authRequired"),
-           "rateLimitOverride" = COALESCE($6, "rateLimitOverride"),
+           "rateLimitOverride" = CASE WHEN $11 THEN $6 ELSE "rateLimitOverride" END,
            enabled = COALESCE($7, enabled),
-           retry = COALESCE($8::jsonb, retry),
-           plugins = COALESCE($9::jsonb, plugins),
-           graphql = COALESCE($10::jsonb, graphql)
-       WHERE id = $1 AND "deletedAt" IS NULL RETURNING *`,
+           retry = CASE WHEN $12 THEN $8::jsonb ELSE retry END,
+           plugins = CASE WHEN $13 THEN $9::jsonb ELSE plugins END,
+           graphql = CASE WHEN $14 THEN $10::jsonb ELSE graphql END,
+           portal = CASE WHEN $16 THEN $15::jsonb ELSE portal END
+       WHERE id = $1 AND "deletedAt" IS NULL RETURNING *) SELECT * FROM updated`,
       [
         id,
         body.method ?? null,
@@ -147,12 +360,21 @@ export class RoutesController {
         body.retry ? JSON.stringify(body.retry) : null,
         body.plugins ? JSON.stringify(body.plugins) : null,
         body.graphql ? JSON.stringify(body.graphql) : null,
+        body.rateLimitOverride !== undefined,
+        body.retry !== undefined,
+        body.plugins !== undefined,
+        body.graphql !== undefined,
+        portal ? JSON.stringify(portal) : null,
+        portal !== undefined,
       ],
     );
+    if (!rows.length)
+      throw new NotFoundException('Configuration entry not found');
     await this.configPush.triggerUpdate(tenantId);
     return rows[0];
   }
 
+  @AutomationScope('routes:write')
   @Delete(':id')
   async remove(@Param('tenantId') tenantId: string, @Param('id') id: string) {
     const schema = tenantSchema(tenantId);

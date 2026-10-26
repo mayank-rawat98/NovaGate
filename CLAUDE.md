@@ -38,6 +38,7 @@ npm exec nx serve apps/api
 npm exec nx serve apps/control-plane
 npm exec nx serve apps/admin-api
 npm exec nx serve apps/dashboard
+npm exec nx serve developer-portal
 
 # Build
 npm exec nx build apps/api
@@ -86,13 +87,17 @@ CUSTOMER'S VPS                         SAAS SERVERS
 
 ### Apps
 
-| App                  | Role                                                                                                                           |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `apps/api`           | Gateway Docker image — deployed on customer VPS, no DB, talks only to control plane via outbound WebSocket                     |
-| `apps/control-plane` | WebSocket server — accepts connections from all gateway instances, delivers config updates, ingests logs/health/errors/metrics |
-| `apps/admin-api`     | REST API consumed only by the dashboard — CRUD for routes/services/consumers/tenants, analytics                                |
-| `apps/dashboard`     | Next.js 14 tenant-facing UI — route management, observability, setup flow                                                      |
-| `libs/shared-types`  | Single source of truth for TypeScript interfaces: WS message types, DB entities, `TenantConfig`                                |
+| App                               | Role                                                                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `apps/api`                        | Gateway Docker image — deployed on customer VPS, no DB, talks only to control plane via outbound WebSocket                     |
+| `apps/control-plane`              | WebSocket server — accepts connections from all gateway instances, delivers config updates, ingests logs/health/errors/metrics |
+| `apps/admin-api`                  | REST API consumed only by the dashboard — CRUD for routes/services/consumers/tenants, analytics                                |
+| `apps/dashboard`                  | Next.js 14 tenant-facing UI — route management, observability, setup flow                                                      |
+| `apps/developer-portal`           | Next.js developer portal for a workspace's API consumers — catalog, self-service keys, usage; shared host or custom domain     |
+| `integrations/terraform-provider` | Go Terraform provider (`novagate_*`) using scoped automation tokens against the admin API                                      |
+| `integrations/k8s-controller`     | Go Kubernetes controller: `GatewayService`/`GatewayRoute` CRDs reconciled through the admin API with a scoped token (#125)     |
+| `libs/shared-types`               | Single source of truth for TypeScript interfaces: WS message types, DB entities, `TenantConfig`                                |
+| `libs/plugin-sdk`                 | `@api-gateway/plugin-sdk`: `definePlugin` and test helpers for operator-pinned third-party gateway plugins                     |
 
 **shared-types change order is non-negotiable:** update `shared-types` first, then the sender, then the receiver.
 
@@ -132,21 +137,27 @@ metrics/        MetricsService (prom-client) + MetricsController (/metrics)
 health/         HealthController (/health) + UpstreamHealthService (polls targets every 10s)
 config-manager/ GatewayConfigManagerService — in-memory config + Redis warm-start
 connector/      ControlPlaneConnectorService — WS lifecycle, reconnect, message buffer
+circuit-breaker/ CircuitBreakerService — per-service circuits for every protocol (#115)
+metering/       MeteringService — monthly usage meters and consumer quotas in local Redis (#119)
 telemetry/      GatewayTelemetryService — batches telemetry to send upstream
 services/       ServicesModule — TypeORM entity + repository for service config
-plugins/        PluginRegistryService + PluginRunnerService + 12 built-in plugins
+plugins/        PluginRegistryService + PluginRunnerService + built-in, WASM and third-party plugins
 shared/         GatewayExceptionFilter, GatewayError, redis.tokens, request-context, route-matcher
 ```
 
 **Middleware pipeline (order is load-bearing — do not reorder):**
 `JwtMiddleware` → `RateLimitGuard` → `LoggingInterceptor` → `ProxyMiddleware` → `PluginRunner.onRequest` → downstream → `PluginRunner.onResponse`
 
-**Plugin system:** Auth, CORS, IP restriction, rate limiting, body size limits, and header transforms are all handled as **plugins** registered on `route.plugins[]`. The 12 built-in plugins are:
+**Plugin system:** Auth, CORS, IP restriction, rate limiting, body size limits, and header transforms are all handled as **plugins** registered on `route.plugins[]`. The built-in plugins are:
 
 - Phase 1: `cors`, `ip-restriction`, `rate-limit`, `request-size-limit`, `request-transform`, `response-transform`, `basic-auth`
 - Phase 2: `oidc` (JWKS-based JWT validation), `oauth2-client-credentials` (introspection or grant injection), `hmac-auth` (Stripe-style HMAC signatures), `acl` (consumer group allow/deny), `mtls` (client cert validation)
+- Phase 3: `graphql-guard` (AST depth/complexity/introspection policy)
+- Phase 6: `graphql-federation` (supergraph execution, registered by `GraphqlFederationService`; must be the route's last plugin, #127) and `wasm:<name>` (sandboxed WebAssembly plugins installed per workspace, #123)
 
 Plugins run in listed order; returning a `PluginShortCircuit` stops the chain.
+
+Third-party plugins (#113) are npm packages the gateway operator installs and pins (`THIRD_PARTY_PLUGIN_DIR`, `THIRD_PARTY_PLUGINS`). Their names are scoped package names; they run behind `GuardedPlugin` (deadlines, fail-closed request hooks, quarantine, crash attribution) and the workspace kill switch `TenantConfig.disabledPlugins`. See [`libs/plugin-sdk/README.md`](libs/plugin-sdk/README.md).
 
 **Import rules:** `proxy`, `rate-limit`, `logging` may import from `metrics`. Nothing else imports from `proxy`, `logging`, or `auth` except `gateway.module.ts`. Shared state between subfolders belongs in `shared/`.
 
@@ -170,7 +181,7 @@ Plugins run in listed order; returning a `PluginShortCircuit` stops the chain.
 1. `npx prettier --write .` — formats all files in place
 2. `npm run check` — runs `nx run-many -t lint build typecheck --all`
 
-**CI** (`.github/workflows/ci.yml`) — triggers on push to `dev` (i.e. when a PR is merged). Runs `lint → typecheck → test → build` for all projects via `npx nx run-many`.
+**CI** (`.github/workflows/ci.yml`) — reusable only, called by deployment on pushes to `main`. Runs local-equivalent lint, typecheck, tests, builds and browser checks before image publication and deployment. Failed verification blocks release. PRs and pushes to `dev` do not run CI; local issue-level gates remain mandatory.
 
 ---
 
@@ -189,14 +200,15 @@ Plugins run in listed order; returning a `PluginShortCircuit` stops the chain.
 
 ## Environment Variables (Gateway)
 
-| Variable                | Default  | Notes               |
-| ----------------------- | -------- | ------------------- |
-| `PORT`                  | `3000`   |                     |
-| `REDIS_URL`             | required |                     |
-| `JWT_SECRET`            | required | min 32 chars        |
-| `CONTROL_PLANE_URL`     | required | `wss://…`           |
-| `GATEWAY_API_KEY`       | required | API key for WS auth |
-| `PROXY_TIMEOUT_MS`      | `10000`  |                     |
-| `RATE_LIMIT_WINDOW_MS`  | `60000`  |                     |
-| `RATE_LIMIT_UNAUTH_MAX` | `100`    |                     |
-| `RATE_LIMIT_AUTH_MAX`   | `500`    |                     |
+| Variable                | Default  | Notes                                         |
+| ----------------------- | -------- | --------------------------------------------- |
+| `PORT`                  | `3000`   |                                               |
+| `REDIS_URL`             | required |                                               |
+| `JWT_SECRET`            | required | min 32 chars                                  |
+| `CONTROL_PLANE_URL`     | required | `wss://…`                                     |
+| `CONTROL_PLANE_URLS`    | optional | ordered `region=wss://…` failover list (#121) |
+| `GATEWAY_API_KEY`       | required | API key for WS auth                           |
+| `PROXY_TIMEOUT_MS`      | `10000`  |                                               |
+| `RATE_LIMIT_WINDOW_MS`  | `60000`  |                                               |
+| `RATE_LIMIT_UNAUTH_MAX` | `100`    |                                               |
+| `RATE_LIMIT_AUTH_MAX`   | `500`    |                                               |

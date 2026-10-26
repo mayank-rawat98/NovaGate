@@ -24,13 +24,32 @@ apps/api/src/
       proxy.middleware.spec.ts
       proxy.controller.ts
       proxy.service.ts              -- forwards requests; retry loop; LB integration
+      proxy.integration.spec.ts     -- real HTTP/HTTP2 upstream regression tests
       load-balancer.service.ts      -- weighted round-robin target selection
-      cors.middleware.ts            -- per-route CORS headers + preflight
-      ip-restriction.middleware.ts  -- CIDR allow/deny per route
-      request-size-limit.middleware.ts -- Content-Length / stream byte cap
+      http2-session-pool.service.ts
+      ws-proxy.service.ts          -- bounded authenticated native upgrades
+      ws-wire.ts                   -- handshake and credential/header validation
+      ws-proxy.integration.spec.ts -- real WebSocket transport/lifecycle checks
+      grpc-proxy.service.ts        -- HTTP/2 listener and authenticated streaming
+      grpc-wire.ts                 -- frame validation, deadlines and metadata
+      grpc-wire.spec.ts
+      grpc-proxy.integration.spec.ts
+    plugins/                        -- registry, ordered runner, first-party plugins
+      identity-provider/
+        identity-provider.service.ts -- bounded provider requests, shared admission and caches
+        identity-provider.service.spec.ts
+      plugins.module.ts
+      plugin-registry.service.ts
+      plugin-runner.service.ts
+      mtls/
+        mtls-fixture.ts              -- real temporary test certificates under .local-work
+        mtls.integration.spec.ts    -- real TLS/proxy certificate trust tests
+      <plugin-name>/
+        <plugin-name>.plugin.ts
+        <plugin-name>.plugin.spec.ts
     logging/
-      logging.interceptor.ts
-      logging.interceptor.spec.ts
+      logging.middleware.ts
+      logging.middleware.spec.ts
     metrics/
       metrics.service.ts
       metrics.service.spec.ts
@@ -39,26 +58,39 @@ apps/api/src/
     health/
       health.controller.ts
       health.controller.spec.ts
-      upstream-health.service.ts    -- active health probing for service targets
+      upstream-health.service.ts    -- bounded per-service probes and eviction/recovery
+      upstream-health.service.spec.ts -- real HTTP/HTTP2/IPv6 lifecycle checks
+      grpc-health-wire.ts           -- bounded standard gRPC health request/response
+      grpc-health-wire.spec.ts
     config-manager/
       gateway-config-manager.service.ts
     connector/
       control-plane-connector.service.ts
     telemetry/
+      otel.service.ts             bounded manual OpenTelemetry tracing and export
+      otel.service.spec.ts        context, sampling, privacy and lifecycle checks
       gateway-telemetry.service.ts
+      gateway-telemetry.service.spec.ts
     shared/
       gateway-error.ts
       gateway-exception.filter.ts
       redis.tokens.ts
       request-context.ts
+      http2-negotiation.ts          -- shared predispatch protocol/connection fallback classification
+      request-body.service.ts       -- shared bounded body capture and request-lifetime admission
+      request-body.service.spec.ts  -- real stream/deadline/admission regression tests
+      tls-client-trust.ts           -- update native listener trust from validated tenant CA changes
       route-matcher.ts              -- shared path+method matching used by middleware
-    services/                       -- legacy local service registry (unused by main flow)
     gateway.module.ts
   config/
     configuration.ts
     configuration.schema.ts
+    tls-options.ts                 -- bounded native listener certificate/trust loading
+    certificate-trust.ts           -- bounded PEM bundles and current tenant anchors
   main.ts
-  app.module.ts
+  app/
+    app.module.ts                  -- configuration and gateway; no database connection
+    app.module.integration.spec.ts -- real startup/admin-boundary checks
 ```
 
 Never create files outside this structure without updating this document first.
@@ -68,6 +100,8 @@ do not dump files in the `gateway/` root.
 ---
 
 ## Module Rules
+
+The data plane uses tenant configuration from the control plane and Redis. It must not connect to PostgreSQL, synchronize schemas, or expose local administrative CRUD. Tenant administration belongs to the authenticated admin API.
 
 - `GatewayModule` is the single NestJS module that imports all gateway concerns
 - Each subfolder (auth, rate-limit, proxy, logging, metrics, health) exports
@@ -82,29 +116,26 @@ do not dump files in the `gateway/` root.
 
 ---
 
-## Middleware Pipeline Order
+## HTTP Pipeline Order
 
-The pipeline order in `GatewayModule.configure()` and global providers must always be:
+The current Nest pipeline is:
 
-```
-1. CorsMiddleware           (handles OPTIONS preflights before auth touches the request)
-2. IpRestrictionMiddleware  (blocks denied IPs early, before rate-limit work)
-3. JwtMiddleware            (attaches req.user, never blocks)
-4. RequestSizeLimitMiddleware (rejects oversized bodies before proxy reads the stream)
-5. RateLimitGuard           (reads req.user for tier — must run after JWT)
-6. LoggingInterceptor       (wraps full request lifecycle including downstream latency)
-7. ProxyMiddleware          (forwards to downstream via ProxyService)
-```
+1. `LoggingMiddleware` attaches exactly-once response finish/close accounting before authentication, with monotonic duration and normalized labels. `JwtMiddleware` verifies gateway consumer JWTs and attaches `req.user`.
+2. `RateLimitGuard` checks the consumer tier. Browser CORS preflights bypass quota consumption.
+3. HTTP observation remains active through actual response finish/close, including guard rejection and streamed responses; guards do not duplicate request accounting.
+4. `ProxyService` matches the route. Bounded `prepareRequest` hooks capture signed raw bytes without authentication or transformations before body-aware policy hooks.
+5. Configured plugin request hooks execute in saved order.
+6. Pure `validateRequest` hooks recheck effective GraphQL queries/headers after ordered transformations. They must not authenticate or mutate requests.
+7. After plugins verify credentials, `authRequired` accepts a verified gateway consumer or `ctx.authentication` set by an authentication plugin.
+8. The upstream proxy runs response hooks before sending headers/body; error hooks run on proxy failures.
 
-This order is load-bearing:
+CORS preflights match the requested method, run only the CORS plugin and terminate before upstream forwarding or route authentication. GraphQL routes automatically include their guard. Other request plugins retain the configured order.
 
-- CORS must be first so `OPTIONS` preflights return 204 without auth or rate-limit processing
-- IP restriction before JWT avoids wasting JWT verification on blocked IPs
-- RequestSizeLimitMiddleware before proxy prevents reading oversized streams
-- RateLimitGuard must run after JwtMiddleware so it can read `req.user`
-- LoggingInterceptor must wrap ProxyMiddleware so downstream latency is captured
-- Never insert a new middleware/guard/interceptor without specifying its position
-  relative to this pipeline in the PR description
+Create Nest with `bodyParser: false`: preserve binary bytes and signatures, and let body-aware plugins buffer under their configured limits. Replaying a buffered request must remove `Transfer-Encoding` before setting `Content-Length`. Never trust forwarding headers directly; Express uses the validated `TRUSTED_PROXY_CIDRS` policy, and raw protocol handlers use the socket peer.
+
+External authentication subjects belong in `ctx.authentication`, not `req.user.id`: the latter is a gateway consumer UUID used in tenant telemetry. A plugin must set authentication only after credential verification.
+
+Changes to pipeline order require runtime regression tests and an explanation in the PR.
 
 ---
 
@@ -162,7 +193,7 @@ Rules:
 - Never read `process.env` directly outside of `configuration.ts`
 - Never hardcode threshold numbers, URLs, or secrets in guard/service/middleware files
 - Adding a new config key requires a corresponding Joi rule in `configuration.schema.ts`
-- Adding a new environment variable requires updating `.env.example` and the README table
+- Adding a new environment variable requires updating the README environment variable table; all env files and env templates stay ignored by Git
 
 ---
 
@@ -187,6 +218,7 @@ Defined error codes:
 | `RATE_LIMIT_EXCEEDED` | 429 | Sliding window limit hit |
 | `DOWNSTREAM_TIMEOUT` | 504 | Proxy upstream did not respond within limit |
 | `DOWNSTREAM_ERROR` | 502 | Proxy upstream returned 5xx |
+| `NO_HEALTHY_TARGETS` | 503 | Every configured upstream target has failed health checks |
 | `SERVICE_NOT_FOUND` | 404 | No downstream service matches the path |
 | `IP_RESTRICTED` | 403 | Request IP is in the route's deny list, or not in allow list |
 | `REQUEST_TOO_LARGE` | 413 | Body exceeds route's `maxBodyBytes` limit |
@@ -207,6 +239,7 @@ Allowed production dependencies (do not add others without discussion):
 - `jsonwebtoken` + `@types/jsonwebtoken` — JWT verification
 - `joi` — config validation
 - `uuid` — request ID generation
+- `graphql` — pinned official GraphQL parser/AST; token and lexical nesting limits required
 
 Allowed test dependencies:
 
@@ -217,3 +250,5 @@ Allowed test dependencies:
 
 If a new dependency is needed, state the package name, version, and
 justification before installing — do not run `npm install` speculatively.
+
+Issue #63 adds `gateway/metrics/metrics-reporter.service.ts` and its lifecycle tests. Aggregate reporting uses finite fixed buckets and transient export; telemetry must not retain unbounded samples or move old-tenant completions into a replacement tenant.

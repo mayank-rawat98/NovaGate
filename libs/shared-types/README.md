@@ -3,6 +3,19 @@
 Single source of truth for all TypeScript interfaces shared across the monorepo.
 **Change order is non-negotiable:** update this library first, then the sender, then the receiver.
 
+This private workspace package exports TypeScript source for both server and browser
+bundlers. Relative imports use the actual `.ts` filenames so Turbopack, Webpack,
+and Jest resolve the same files. The base TypeScript configuration enables
+`allowImportingTsExtensions`; TypeScript emits declarations only (or checks without
+emitting), while application bundlers produce runnable JavaScript.
+
+Issue #65 adds alert rule/channel/event contracts in `src/lib/alerts.ts`. Rule
+limits and metric/operator names are shared between admin and dashboard. Channel
+read responses contain display-safe destinations and secret-presence flags; full
+webhook URLs and signing credentials are write-only. Rule updates carry a revision,
+evaluation distinguishes missing evidence from healthy/violating windows, and
+delivery history retains meaningful terminal/retry/cancellation states.
+
 ## Key types
 
 ### `TenantConfig`

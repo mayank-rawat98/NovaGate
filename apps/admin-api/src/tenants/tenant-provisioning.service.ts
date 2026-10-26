@@ -1,6 +1,15 @@
+import { alertSchemaSql } from '../alerts/alert-schema';
+import { anomalySchemaSql } from '../anomalies/anomaly-schema';
+import { billingTenantSql } from '../billing/billing-schema';
+import { wasmPluginSchemaSql } from '../wasm-plugins/wasm-plugin-schema';
+import { federationSchemaSql } from '../graphql-federation/federation-schema';
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import * as crypto from 'crypto';
+import { traceSchemaSql } from '../database/trace-schema';
+import { tenantSchema } from './tenant-schema';
+import { consumerRollupSchemaSql } from '../proxy-config/consumer-rollup-schema';
+import { portalSchemaSql } from '../portal/portal-schema';
 
 @Injectable()
 export class TenantProvisioningService {
@@ -9,11 +18,13 @@ export class TenantProvisioningService {
   constructor(private readonly dataSource: DataSource) {}
 
   async provisionTenant(tenantId: string): Promise<string> {
-    const schemaName = `tenant_${tenantId.replace(/-/g, '_')}`;
+    const schemaName = tenantSchema(tenantId);
     this.logger.log(`Provisioning schema ${schemaName}`);
 
     await this.dataSource.transaction(async (manager) => {
       await manager.query(`CREATE SCHEMA IF NOT EXISTS ${schemaName}`);
+
+      await manager.query(traceSchemaSql(schemaName));
 
       // Create tables for the tenant
       await manager.query(`
@@ -28,6 +39,7 @@ export class TenantProvisioningService {
           retry JSONB,
           plugins JSONB,
           graphql JSONB,
+          "configOrder" INTEGER,
           "createdAt" TIMESTAMP DEFAULT NOW(),
           "deletedAt" TIMESTAMP
         )
@@ -40,6 +52,12 @@ export class TenantProvisioningService {
           targets JSONB NOT NULL,
           "healthCheckPath" VARCHAR NOT NULL DEFAULT '/health',
           "timeoutMs" INTEGER DEFAULT 10000,
+          "healthCheckIntervalMs" INTEGER NOT NULL DEFAULT 10000,
+          "healthCheckProtocol" VARCHAR NOT NULL DEFAULT 'http',
+          "healthCheckService" VARCHAR NOT NULL DEFAULT '',
+          "unhealthyFallback" BOOLEAN NOT NULL DEFAULT false,
+          "loadBalancing" VARCHAR NOT NULL DEFAULT 'weighted-round-robin' CHECK ("loadBalancing" IN ('weighted-round-robin', 'least-connections')),
+          "circuitBreaker" JSONB,
           h2 BOOLEAN DEFAULT false,
           "supportsWebSocket" BOOLEAN DEFAULT false,
           "createdAt" TIMESTAMP DEFAULT NOW(),
@@ -53,6 +71,7 @@ export class TenantProvisioningService {
           name VARCHAR NOT NULL,
           "keyHash" VARCHAR NOT NULL,
           "rateLimitTier" VARCHAR DEFAULT 'authenticated',
+          groups JSONB NOT NULL DEFAULT '[]'::jsonb,
           "createdAt" TIMESTAMP DEFAULT NOW(),
           "revokedAt" TIMESTAMP
         )
@@ -67,19 +86,36 @@ export class TenantProvisioningService {
           "statusCode" INTEGER,
           "responseTimeMs" INTEGER,
           "requestId" VARCHAR,
+          "traceId" VARCHAR(32),
+          "spanId" VARCHAR(16),
           "downstreamService" VARCHAR,
           "downstreamLatencyMs" INTEGER,
           "clientIp" VARCHAR,
           "userAgent" VARCHAR,
           "errorCode" VARCHAR,
-          timestamp TIMESTAMP
+          timestamp TIMESTAMPTZ,
+          "receivedAt" TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
         )
       `);
+
+      await manager.query(
+        `CREATE INDEX IF NOT EXISTS request_logs_export_cursor ON ${schemaName}.request_logs (timestamp, id)`,
+      );
+      await manager.query(
+        `CREATE INDEX IF NOT EXISTS request_logs_receipt_cursor ON ${schemaName}.request_logs ("receivedAt", id)`,
+      );
+      await manager.query(
+        `CREATE INDEX IF NOT EXISTS request_logs_consumer_time ON ${schemaName}.request_logs ("consumerId", timestamp DESC, id DESC) WHERE "consumerId" IS NOT NULL`,
+      );
+      await manager.query(consumerRollupSchemaSql(tenantId));
+      await manager.query(portalSchemaSql(schemaName));
 
       await manager.query(`
         CREATE TABLE IF NOT EXISTS ${schemaName}.error_events (
           id UUID PRIMARY KEY,
           "requestId" VARCHAR,
+          "traceId" VARCHAR(32),
+          "spanId" VARCHAR(16),
           "errorCode" VARCHAR,
           message TEXT,
           "serviceId" UUID,
@@ -104,14 +140,23 @@ export class TenantProvisioningService {
       await manager.query(`
         CREATE TABLE IF NOT EXISTS ${schemaName}.metrics_snapshots (
           id SERIAL PRIMARY KEY,
-          rps INTEGER,
+          rps DOUBLE PRECISION,
           "p50Ms" INTEGER,
           "p95Ms" INTEGER,
           "p99Ms" INTEGER,
           "errorRate" FLOAT,
-          timestamp TIMESTAMP
+          timestamp TIMESTAMPTZ,
+          "aggregateWindow" JSONB
         )
       `);
+      await manager.query(alertSchemaSql(tenantId));
+      await manager.query(anomalySchemaSql(tenantId));
+      await manager.query(billingTenantSql(tenantId));
+      await manager.query(wasmPluginSchemaSql(tenantId));
+      await manager.query(federationSchemaSql(tenantId));
+      await manager.query(
+        `CREATE INDEX IF NOT EXISTS metrics_snapshots_time ON ${schemaName}.metrics_snapshots (timestamp DESC)`,
+      );
     });
 
     const rawKey = 'gw_' + crypto.randomBytes(32).toString('hex');

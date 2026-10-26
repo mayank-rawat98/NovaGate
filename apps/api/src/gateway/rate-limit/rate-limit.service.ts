@@ -36,9 +36,14 @@ export class RateLimitService implements OnModuleDestroy {
     }
   }
 
-  async check(clientKey: string, limit: number): Promise<RateLimitResult> {
+  /** Sliding window; a route policy may supply its own window length. */
+  async check(
+    clientKey: string,
+    limit: number,
+    windowMs = this.windowMs,
+  ): Promise<RateLimitResult> {
     const now = Date.now();
-    const windowStart = now - this.windowMs;
+    const windowStart = now - windowMs;
     const key = `rl:${clientKey}`;
     const member = `${now}-${Math.random()}`;
 
@@ -47,10 +52,14 @@ export class RateLimitService implements OnModuleDestroy {
     pipeline.zadd(key, now, member);
     pipeline.zcard(key);
     pipeline.zrange(key, 0, 0, 'WITHSCORES');
-    pipeline.expire(key, Math.ceil(this.windowMs / 1000));
+    pipeline.expire(key, Math.ceil(windowMs / 1000));
 
     const results = await pipeline.exec();
-    const count = Number(results?.[2]?.[1] ?? 0);
+    if (!results || results.length !== 5 || results.some(([error]) => error))
+      throw new Error('Quota storage returned an incomplete or failed result');
+    const count = Number(results[2][1]);
+    if (!Number.isSafeInteger(count) || count < 1)
+      throw new Error('Quota storage returned an invalid count');
     const oldest = results?.[3]?.[1] as string[] | undefined;
 
     const allowed = count <= limit;
@@ -59,7 +68,7 @@ export class RateLimitService implements OnModuleDestroy {
     }
 
     const oldestScore = oldest && oldest.length >= 2 ? Number(oldest[1]) : now;
-    const retryAfterMs = Math.max(0, oldestScore + this.windowMs - now);
+    const retryAfterMs = Math.max(0, oldestScore + windowMs - now);
 
     return { allowed: false, retryAfterMs };
   }

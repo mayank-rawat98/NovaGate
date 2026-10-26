@@ -1,8 +1,8 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
-import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { JwtMiddleware } from './auth/jwt.middleware';
 import { HealthController } from './health/health.controller';
-import { LoggingInterceptor } from './logging/logging.interceptor';
+import { LoggingMiddleware } from './logging/logging.middleware';
 import { MetricsController } from './metrics/metrics.controller';
 import { MetricsService } from './metrics/metrics.service';
 import { ProxyController } from './proxy/proxy.controller';
@@ -16,15 +16,20 @@ import { RateLimitGuard } from './rate-limit/rate-limit.guard';
 import { RateLimitService } from './rate-limit/rate-limit.service';
 import { GatewayExceptionFilter } from './shared/gateway-exception.filter';
 import { RedisModule } from './shared/redis.module';
-import { ServicesModule } from './services/services.module';
 import { ConfigManagerModule } from './config-manager/config-manager.module';
 import { ControlPlaneConnectorService } from './connector/control-plane-connector.service';
 import { GatewayTelemetryService } from './telemetry/gateway-telemetry.service';
 import { UpstreamHealthService } from './health/upstream-health.service';
 import { PluginsModule } from './plugins/plugins.module';
+import { OtelService } from './telemetry/otel.service';
+import { MetricsReporterService } from './metrics/metrics-reporter.service';
+import { CircuitBreakerService } from './circuit-breaker/circuit-breaker.service';
+import { MeteringService } from './metering/metering.service';
+import { WasmPluginService } from './plugins/wasm/wasm-plugin.service';
+import { GraphqlFederationService } from './plugins/graphql-federation/graphql-federation.service';
 
 @Module({
-  imports: [ServicesModule, RedisModule, ConfigManagerModule, PluginsModule],
+  imports: [RedisModule, ConfigManagerModule, PluginsModule],
   controllers: [HealthController, MetricsController, ProxyController],
   providers: [
     JwtMiddleware,
@@ -37,7 +42,7 @@ import { PluginsModule } from './plugins/plugins.module';
     Http2SessionPool,
     RateLimitService,
     RateLimitGuard,
-    LoggingInterceptor,
+    LoggingMiddleware,
     ControlPlaneConnectorService,
     GatewayTelemetryService,
     UpstreamHealthService,
@@ -46,18 +51,20 @@ import { PluginsModule } from './plugins/plugins.module';
       useClass: RateLimitGuard,
     },
     {
-      provide: APP_INTERCEPTOR,
-      useClass: LoggingInterceptor,
-    },
-    {
       provide: APP_FILTER,
       useClass: GatewayExceptionFilter,
     },
+    OtelService,
+    MetricsReporterService,
+    CircuitBreakerService,
+    MeteringService,
+    WasmPluginService,
+    GraphqlFederationService,
   ],
   exports: [WsProxyService, GrpcProxyService],
 })
 export class GatewayModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(JwtMiddleware).forRoutes('*');
+    consumer.apply(LoggingMiddleware, JwtMiddleware).forRoutes('*');
   }
 }

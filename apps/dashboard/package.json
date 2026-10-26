@@ -21,7 +21,20 @@
           "production": {
             "outputPath": "dist/apps/dashboard"
           }
-        }
+        },
+        "inputs": [
+          "default",
+          "^default",
+          {
+            "env": "NEXT_PUBLIC_ADMIN_API_URL"
+          },
+          {
+            "env": "ADMIN_API_URL"
+          },
+          {
+            "env": "NEXT_PUBLIC_PORTAL_URL"
+          }
+        ]
       },
       "serve": {
         "executor": "@nx/next:server",
@@ -66,12 +79,40 @@
         "options": {
           "command": "tsc --noEmit",
           "cwd": "apps/dashboard"
+        },
+        "dependsOn": [
+          "^typecheck"
+        ]
+      },
+      "preview": {
+        "executor": "nx:run-commands",
+        "continuous": true,
+        "dependsOn": [
+          "build"
+        ],
+        "options": {
+          "command": "node tools/dashboard-preview.mjs"
+        }
+      },
+      "ui-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "preview"
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/dashboard-smoke.mjs tools/alerts-dashboard-smoke.mjs tools/export-destinations-dashboard-smoke.mjs tools/export-delivery-dashboard-smoke.mjs tools/config-import-dashboard-smoke.mjs tools/automation-tokens-dashboard-smoke.mjs tools/developer-portal-dashboard-smoke.mjs tools/gateway-plugins-dashboard-smoke.mjs tools/circuit-breakers-dashboard-smoke.mjs tools/anomalies-dashboard-smoke.mjs tools/billing-dashboard-smoke.mjs tools/regions-dashboard-smoke.mjs tools/wasm-plugins-dashboard-smoke.mjs tools/graphql-federation-dashboard-smoke.mjs",
+            "node tools/dashboard-smoke.mjs"
+          ],
+          "parallel": false
         }
       }
     }
   },
   "dependencies": {
-    "next": "~16.1.6",
+    "@api-gateway/shared-types": "^0.0.1",
+    "next": "~16.2.12",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "sonner": "^2.0.7"

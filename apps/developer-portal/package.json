@@ -1,0 +1,135 @@
+{
+  "name": "@api-gateway/developer-portal",
+  "version": "0.0.1",
+  "private": true,
+  "nx": {
+    "name": "developer-portal",
+    "targets": {
+      "build": {
+        "executor": "@nx/next:build",
+        "outputs": [
+          "{options.outputPath}"
+        ],
+        "defaultConfiguration": "production",
+        "options": {
+          "outputPath": "dist/apps/developer-portal"
+        },
+        "configurations": {
+          "development": {
+            "outputPath": "dist/apps/developer-portal"
+          },
+          "production": {
+            "outputPath": "dist/apps/developer-portal"
+          }
+        },
+        "inputs": [
+          "default",
+          "^default",
+          {
+            "env": "ADMIN_API_URL"
+          }
+        ]
+      },
+      "serve": {
+        "executor": "@nx/next:server",
+        "defaultConfiguration": "development",
+        "continuous": true,
+        "options": {
+          "buildTarget": "developer-portal:build",
+          "dev": true
+        },
+        "configurations": {
+          "development": {
+            "buildTarget": "developer-portal:build:development",
+            "dev": true,
+            "port": 3004
+          },
+          "production": {
+            "buildTarget": "developer-portal:build:production",
+            "dev": false,
+            "port": 3004
+          }
+        }
+      },
+      "lint": {
+        "executor": "@nx/eslint:lint",
+        "options": {
+          "lintFilePatterns": [
+            "apps/developer-portal/src/**/*.{ts,tsx}",
+            "apps/developer-portal/specs/**/*.{ts,tsx}",
+            "apps/developer-portal/*.{ts,js,mjs,cjs}"
+          ]
+        }
+      },
+      "test": {
+        "executor": "@nx/jest:jest",
+        "options": {
+          "jestConfig": "apps/developer-portal/jest.config.cts",
+          "passWithNoTests": false
+        }
+      },
+      "typecheck": {
+        "executor": "nx:run-commands",
+        "options": {
+          "command": "tsc --noEmit",
+          "cwd": "apps/developer-portal"
+        },
+        "dependsOn": [
+          "^typecheck"
+        ]
+      },
+      "preview": {
+        "executor": "nx:run-commands",
+        "continuous": true,
+        "dependsOn": [
+          "build"
+        ],
+        "options": {
+          "command": "node tools/developer-portal-preview.mjs"
+        }
+      },
+      "gateway-e2e": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build",
+          {
+            "projects": [
+              "admin-api",
+              "control-plane",
+              "@api-gateway/api"
+            ],
+            "target": "build"
+          }
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/portal-gateway-e2e.mjs",
+            "node tools/portal-gateway-e2e.mjs"
+          ],
+          "parallel": false
+        }
+      },
+      "ui-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build"
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/developer-portal-smoke.mjs tools/developer-portal-preview.mjs",
+            "node tools/developer-portal-smoke.mjs"
+          ],
+          "parallel": false
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "@api-gateway/shared-types": "^0.0.1",
+    "next": "~16.2.12",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}

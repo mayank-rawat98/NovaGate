@@ -1,18 +1,35 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useId } from 'react';
 import useSWR from 'swr';
+import { WorkspaceDialog } from '../../../components/workspace-dialog';
+import { DataLoadNotice } from '../../../components/data-load-notice';
 import { toast } from 'sonner';
 import { Pencil, Trash2, Plus, X, Puzzle } from 'lucide-react';
 import {
   getRoutes,
   getServices,
+  getFederatedGraphs,
   createRoute,
   updateRoute,
   deleteRoute,
 } from '../../../lib/api-client';
-import { getTenantId } from '../../../lib/auth';
-import type { Route, Service, CreateRouteDto } from '../../../lib/api-client';
+import {
+  GRAPHQL_FEDERATION_PLUGIN,
+  MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES,
+  graphqlFederationConfigProblem,
+  isThirdPartyPluginName,
+  wasmPluginOfRouteName,
+} from '@api-gateway/shared-types';
+import { useTenantId } from '../../../lib/auth';
+import type {
+  Route,
+  Service,
+  CreateRouteDto,
+  OAuth2PluginConfig,
+  HmacPluginConfig,
+  GraphqlPolicy,
+} from '../../../lib/api-client';
 
 const METHOD_COLORS: Record<string, string> = {
   GET: 'bg-blue-100 text-blue-700',
@@ -85,11 +102,17 @@ interface OidcConfig {
   claimsToForward: string;
 }
 interface HmacAuthConfig {
+  mode: NonNullable<HmacPluginConfig['mode']>;
   header: string;
-  algorithm: string;
+  algorithm: HmacPluginConfig['algorithm'];
   secrets: string;
   maxClockSkewSeconds: string;
   timestampHeader: string;
+}
+interface GraphqlConfig {
+  maxDepth: string;
+  maxComplexity: string;
+  introspectionAllowed: boolean;
 }
 interface AclConfig {
   allow: string;
@@ -99,7 +122,19 @@ interface MtlsConfig {
   required: boolean;
 }
 
+/** A workspace-installed plugin: scoped package name and JSON configuration. */
+interface CustomPlugin {
+  key: number;
+  name: string;
+  config: string;
+}
+
 interface PluginsFormState {
+  custom: CustomPlugin[];
+  federation: boolean;
+  federationConfig: { graph: string; forwardHeaders: string };
+  graphql: boolean;
+  graphqlConfig: GraphqlConfig;
   cors: boolean;
   corsConfig: CorsConfig;
   ipRestriction: boolean;
@@ -116,6 +151,18 @@ interface PluginsFormState {
   requestSizeLimitConfig: RequestSizeLimitConfig;
   oidc: boolean;
   oidcConfig: OidcConfig;
+  oauth: boolean;
+  oauthConfig: {
+    mode: 'introspection' | 'outbound';
+    endpoint: string;
+    clientId: string;
+    clientSecret: string;
+    scopes: string;
+    headerName: string;
+    issuer: string;
+    audience: string;
+  };
+  originalPlugins: PluginEntry[];
   hmacAuth: boolean;
   hmacAuthConfig: HmacAuthConfig;
   acl: boolean;
@@ -125,6 +172,9 @@ interface PluginsFormState {
 }
 
 const EMPTY_PLUGINS_FORM: PluginsFormState = {
+  custom: [],
+  federation: false,
+  federationConfig: { graph: '', forwardHeaders: '' },
   cors: false,
   corsConfig: {
     origins: '',
@@ -157,8 +207,27 @@ const EMPTY_PLUGINS_FORM: PluginsFormState = {
   requestSizeLimitConfig: { maxBodyBytes: '' },
   oidc: false,
   oidcConfig: { jwksUri: '', issuer: '', audience: '', claimsToForward: '' },
+  oauth: false,
+  oauthConfig: {
+    mode: 'introspection',
+    endpoint: '',
+    clientId: '',
+    clientSecret: '',
+    scopes: '',
+    headerName: 'authorization',
+    issuer: '',
+    audience: '',
+  },
+  originalPlugins: [],
+  graphql: false,
+  graphqlConfig: {
+    maxDepth: '10',
+    maxComplexity: '1000',
+    introspectionAllowed: false,
+  },
   hmacAuth: false,
   hmacAuthConfig: {
+    mode: 'generic',
     header: 'x-hub-signature-256',
     algorithm: 'sha256',
     secrets: '',
@@ -184,6 +253,9 @@ interface FormState {
   retryAttempts: string;
   retryOn: string;
   retryMethods: string[];
+  portalVisible: boolean;
+  portalSummary: string;
+  portalDescription: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -197,6 +269,9 @@ const EMPTY_FORM: FormState = {
   retryAttempts: '3',
   retryOn: DEFAULT_RETRY_CODES,
   retryMethods: DEFAULT_RETRY_METHODS,
+  portalVisible: false,
+  portalSummary: '',
+  portalDescription: '',
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -335,8 +410,28 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
     result.push({ name: 'oidc', config: cfg });
   }
 
-  if (pf.hmacAuth && pf.hmacAuthConfig.secrets) {
-    const cfg: Record<string, unknown> = {
+  if (pf.oauth) {
+    const config: OAuth2PluginConfig = {
+      ...(pf.oauthConfig.mode === 'introspection'
+        ? { introspectionEndpoint: pf.oauthConfig.endpoint }
+        : { tokenEndpoint: pf.oauthConfig.endpoint }),
+      clientId: pf.oauthConfig.clientId,
+      clientSecret: pf.oauthConfig.clientSecret,
+      ...(pf.oauthConfig.scopes
+        ? { scopes: pf.oauthConfig.scopes.split(/[,\s]+/).filter(Boolean) }
+        : {}),
+      ...(pf.oauthConfig.headerName
+        ? { headerName: pf.oauthConfig.headerName }
+        : {}),
+      ...(pf.oauthConfig.issuer ? { issuer: pf.oauthConfig.issuer } : {}),
+      ...(pf.oauthConfig.audience ? { audience: pf.oauthConfig.audience } : {}),
+    };
+    result.push({ name: 'oauth2-client-credentials', config: { ...config } });
+  }
+
+  if (pf.hmacAuth) {
+    const cfg: HmacPluginConfig = {
+      mode: pf.hmacAuthConfig.mode,
       header: pf.hmacAuthConfig.header || 'x-hub-signature-256',
       algorithm: pf.hmacAuthConfig.algorithm || 'sha256',
       secrets: pf.hmacAuthConfig.secrets
@@ -346,9 +441,21 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
     };
     if (pf.hmacAuthConfig.maxClockSkewSeconds)
       cfg.maxClockSkewSeconds = Number(pf.hmacAuthConfig.maxClockSkewSeconds);
-    if (pf.hmacAuthConfig.timestampHeader)
+    if (
+      pf.hmacAuthConfig.mode === 'generic' &&
+      pf.hmacAuthConfig.timestampHeader
+    )
       cfg.timestampHeader = pf.hmacAuthConfig.timestampHeader;
-    result.push({ name: 'hmac-auth', config: cfg });
+    result.push({ name: 'hmac-auth', config: { ...cfg } });
+  }
+
+  if (pf.graphql) {
+    const config: GraphqlPolicy = {
+      maxDepth: Number(pf.graphqlConfig.maxDepth),
+      maxComplexity: Number(pf.graphqlConfig.maxComplexity),
+      introspectionAllowed: pf.graphqlConfig.introspectionAllowed,
+    };
+    result.push({ name: 'graphql-guard', config: { ...config } });
   }
 
   if (pf.acl && (pf.aclConfig.allow || pf.aclConfig.deny)) {
@@ -370,14 +477,151 @@ function buildPluginsArray(pf: PluginsFormState): PluginEntry[] {
     result.push({ name: 'mtls', config: { required: pf.mtlsConfig.required } });
   }
 
-  return result;
+  if (pf.federation) {
+    const forwardHeaders = pf.federationConfig.forwardHeaders
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    const config = {
+      graph: pf.federationConfig.graph,
+      ...(forwardHeaders.length ? { forwardHeaders } : {}),
+    };
+    if (!config.graph) throw new Error('Choose the federated graph to serve.');
+    const problem = graphqlFederationConfigProblem(config);
+    if (problem) throw new Error(`GraphQL federation: ${problem}.`);
+    result.push({ name: GRAPHQL_FEDERATION_PLUGIN, config });
+  }
+
+  const modeled: Record<string, string[]> = {
+    cors: ['origins', 'methods', 'headers', 'credentials', 'maxAge'],
+    'ip-restriction': ['allow', 'deny'],
+    'rate-limit': ['max', 'windowMs'],
+    'request-size-limit': ['maxBodyBytes'],
+    'request-transform': [
+      'addHeaders',
+      'removeHeaders',
+      'renameHeaders',
+      'addQueryParams',
+      'removeQueryParams',
+    ],
+    'response-transform': ['addHeaders', 'removeHeaders', 'statusOverride'],
+    'basic-auth': ['credentials', 'realm'],
+    oidc: ['jwksUri', 'issuer', 'audience', 'claimsToForward'],
+    'oauth2-client-credentials': [
+      'introspectionEndpoint',
+      'tokenEndpoint',
+      'clientId',
+      'clientSecret',
+      'scopes',
+      'headerName',
+      'issuer',
+      'audience',
+    ],
+    'hmac-auth': [
+      'mode',
+      'header',
+      'algorithm',
+      'secrets',
+      'maxClockSkewSeconds',
+      'timestampHeader',
+    ],
+    'graphql-guard': ['maxDepth', 'maxComplexity', 'introspectionAllowed'],
+    acl: ['allow', 'deny'],
+    mtls: ['required'],
+    [GRAPHQL_FEDERATION_PLUGIN]: ['graph', 'forwardHeaders'],
+  };
+  const custom = customPluginEntries(pf.custom);
+  const remaining = [...result];
+  const ordered: PluginEntry[] = [];
+  for (const original of pf.originalPlugins) {
+    if (isCustomPluginName(original.name)) {
+      // Edited in place; removed entries are dropped.
+      const index = custom.findIndex((entry) => entry.name === original.name);
+      if (index >= 0) ordered.push(custom.splice(index, 1)[0]);
+      continue;
+    }
+    if (!modeled[original.name]) {
+      ordered.push(original);
+      continue;
+    }
+    const index = remaining.findIndex((entry) => entry.name === original.name);
+    if (index >= 0)
+      ordered.push({
+        name: original.name,
+        config: {
+          ...Object.fromEntries(
+            Object.entries(original.config).filter(
+              ([name]) => !modeled[original.name].includes(name),
+            ),
+          ),
+          ...remaining.splice(index, 1)[0].config,
+        },
+      });
+  }
+  // The gateway answers federated routes itself: every other plugin first.
+  const all = [...ordered, ...remaining, ...custom];
+  const federation = all.filter(
+    (entry) => entry.name === GRAPHQL_FEDERATION_PLUGIN,
+  );
+  return [
+    ...all.filter((entry) => entry.name !== GRAPHQL_FEDERATION_PLUGIN),
+    ...federation,
+  ];
 }
 
-function pluginsToForm(plugins: PluginEntry[] | undefined): PluginsFormState {
-  if (!plugins?.length) return EMPTY_PLUGINS_FORM;
-  const state = { ...EMPTY_PLUGINS_FORM };
+/** Scoped npm packages (operator-installed) or wasm:<name> (marketplace). */
+function isCustomPluginName(name: string): boolean {
+  return isThirdPartyPluginName(name) || wasmPluginOfRouteName(name) !== null;
+}
 
-  for (const p of plugins) {
+function customPluginEntries(custom: CustomPlugin[]): PluginEntry[] {
+  const seen = new Set<string>();
+  return custom.map(({ name: raw, config: text }) => {
+    const name = raw.trim();
+    if (!isCustomPluginName(name))
+      throw new Error(
+        `Plugin "${name || '(empty)'}" must be a scoped npm package name, such as @acme/saml-auth, or wasm:<name> for a WebAssembly plugin.`,
+      );
+    if (seen.has(name)) throw new Error(`${name} is listed more than once.`);
+    seen.add(name);
+    let config: unknown = {};
+    if (text.trim()) {
+      try {
+        config = JSON.parse(text);
+      } catch {
+        throw new Error(`${name} configuration is not valid JSON.`);
+      }
+    }
+    if (!config || typeof config !== 'object' || Array.isArray(config))
+      throw new Error(`${name} configuration must be a JSON object.`);
+    if (
+      new TextEncoder().encode(JSON.stringify(config)).length >
+      MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES
+    )
+      throw new Error(
+        `${name} configuration exceeds ${MAX_THIRD_PARTY_PLUGIN_CONFIG_BYTES} bytes.`,
+      );
+    return { name, config: config as Record<string, unknown> };
+  });
+}
+
+function pluginsToForm(
+  plugins: PluginEntry[] | undefined,
+  routePolicy?: GraphqlPolicy | null,
+): PluginsFormState {
+  const state = {
+    ...EMPTY_PLUGINS_FORM,
+    originalPlugins: plugins ?? [],
+    custom: (plugins ?? [])
+      .filter((p) => isCustomPluginName(p.name))
+      .map((p, key) => ({
+        key,
+        name: p.name,
+        config: JSON.stringify(p.config ?? {}, null, 2),
+      })),
+  };
+
+  for (const p of plugins ?? []) {
     const cfg = p.config;
     if (p.name === 'cors') {
       state.cors = true;
@@ -459,17 +703,40 @@ function pluginsToForm(plugins: PluginEntry[] | undefined): PluginsFormState {
         claimsToForward:
           (cfg.claimsToForward as string[] | undefined)?.join(',') ?? '',
       };
+    } else if (p.name === 'oauth2-client-credentials') {
+      state.oauth = true;
+      const oauth = cfg as unknown as OAuth2PluginConfig;
+      state.oauthConfig = {
+        mode: oauth.introspectionEndpoint ? 'introspection' : 'outbound',
+        endpoint: oauth.introspectionEndpoint ?? oauth.tokenEndpoint ?? '',
+        clientId: oauth.clientId,
+        clientSecret: oauth.clientSecret,
+        scopes: oauth.scopes?.join(', ') ?? '',
+        headerName: oauth.headerName ?? 'authorization',
+        issuer: oauth.issuer ?? '',
+        audience: oauth.audience ?? '',
+      };
     } else if (p.name === 'hmac-auth') {
       state.hmacAuth = true;
+      const hmac = cfg as unknown as HmacPluginConfig;
       state.hmacAuthConfig = {
+        mode: hmac.mode ?? 'generic',
         header: (cfg.header as string | undefined) ?? 'x-hub-signature-256',
-        algorithm: (cfg.algorithm as string | undefined) ?? 'sha256',
+        algorithm: hmac.algorithm ?? 'sha256',
         secrets: (cfg.secrets as string[] | undefined)?.join('\n') ?? '',
         maxClockSkewSeconds:
           cfg.maxClockSkewSeconds != null
             ? String(cfg.maxClockSkewSeconds)
             : '',
         timestampHeader: (cfg.timestampHeader as string | undefined) ?? '',
+      };
+    } else if (p.name === 'graphql-guard') {
+      const policy = cfg as GraphqlPolicy;
+      state.graphql = true;
+      state.graphqlConfig = {
+        maxDepth: String(policy.maxDepth ?? 10),
+        maxComplexity: String(policy.maxComplexity ?? 1000),
+        introspectionAllowed: policy.introspectionAllowed ?? false,
       };
     } else if (p.name === 'acl') {
       state.acl = true;
@@ -482,9 +749,38 @@ function pluginsToForm(plugins: PluginEntry[] | undefined): PluginsFormState {
       state.mtlsConfig = {
         required: (cfg.required as boolean | undefined) ?? true,
       };
+    } else if (p.name === GRAPHQL_FEDERATION_PLUGIN) {
+      state.federation = true;
+      state.federationConfig = {
+        graph: typeof cfg.graph === 'string' ? cfg.graph : '',
+        forwardHeaders: Array.isArray(cfg.forwardHeaders)
+          ? cfg.forwardHeaders.join(', ')
+          : '',
+      };
     }
   }
 
+  if (routePolicy) {
+    const original = plugins?.find((p) => p.name === 'graphql-guard')
+      ?.config as GraphqlPolicy | undefined;
+    const policies = [routePolicy, original].filter(
+      (p) => p != null,
+    ) as GraphqlPolicy[];
+    const depths = policies.flatMap((p) =>
+      p.maxDepth === undefined ? [] : [p.maxDepth],
+    );
+    const costs = policies.flatMap((p) =>
+      p.maxComplexity === undefined ? [] : [p.maxComplexity],
+    );
+    state.graphql = true;
+    state.graphqlConfig = {
+      maxDepth: String(depths.length ? Math.min(...depths) : 10),
+      maxComplexity: String(costs.length ? Math.min(...costs) : 1000),
+      introspectionAllowed: policies.every(
+        (p) => p.introspectionAllowed === true,
+      ),
+    };
+  }
   return state;
 }
 
@@ -500,6 +796,9 @@ function routeToForm(route: Route): FormState {
     retryAttempts: route.retry?.attempts?.toString() ?? '3',
     retryOn: route.retry?.on?.join(',') ?? DEFAULT_RETRY_CODES,
     retryMethods: route.retry?.methods ?? DEFAULT_RETRY_METHODS,
+    portalVisible: route.portal?.visible ?? false,
+    portalSummary: route.portal?.summary ?? '',
+    portalDescription: route.portal?.description ?? '',
   };
 }
 
@@ -513,6 +812,7 @@ function formToDto(
     serviceId: form.serviceId,
     authRequired: form.authRequired,
     enabled: form.enabled,
+    graphql: null, // Dashboard edits consolidate legacy route policy into the plugin.
   };
   if (form.rateLimitOverride)
     dto.rateLimitOverride = Number(form.rateLimitOverride);
@@ -527,22 +827,106 @@ function formToDto(
     };
   }
   const plugins = buildPluginsArray(pluginsForm);
-  if (plugins.length > 0) dto.plugins = plugins;
+  dto.plugins = plugins; // Persist an empty array when all policies are disabled.
+  const summary = form.portalSummary.trim();
+  const description = form.portalDescription.trim();
+  // Keep drafted documentation even while the route is unpublished.
+  dto.portal =
+    form.portalVisible || summary || description
+      ? {
+          visible: form.portalVisible,
+          ...(summary ? { summary } : {}),
+          ...(description ? { description } : {}),
+        }
+      : null;
   return dto;
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
+function PortalSection({
+  form,
+  setF,
+}: {
+  form: FormState;
+  setF: (patch: Partial<FormState>) => void;
+}) {
+  const summaryId = useId();
+  const descriptionId = useId();
+  return (
+    <div className="flex flex-col gap-3 border-t border-gray-100 pt-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <span className="text-sm font-medium text-gray-700">
+            Developer portal
+          </span>
+          <p className="text-xs text-gray-500">
+            Publish this route in your portal catalog. The gateway ignores these
+            fields.
+          </p>
+        </div>
+        <Toggle
+          label="Publish in developer portal"
+          value={form.portalVisible}
+          onChange={(v) => setF({ portalVisible: v })}
+        />
+      </div>
+      <div className="flex flex-col gap-1">
+        <label
+          htmlFor={summaryId}
+          className="text-xs font-medium text-gray-700"
+        >
+          Summary
+        </label>
+        <input
+          id={summaryId}
+          maxLength={160}
+          value={form.portalSummary}
+          onChange={(e) => setF({ portalSummary: e.target.value })}
+          placeholder="List users"
+          className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+        />
+      </div>
+      <div className="flex flex-col gap-1">
+        <label
+          htmlFor={descriptionId}
+          className="text-xs font-medium text-gray-700"
+        >
+          Description (plain text)
+        </label>
+        <textarea
+          id={descriptionId}
+          rows={4}
+          maxLength={4000}
+          value={form.portalDescription}
+          onChange={(e) => setF({ portalDescription: e.target.value })}
+          className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+        />
+        <p className="text-xs text-gray-500">
+          The catalog derives authentication and rate limits from this
+          route&apos;s enforced policies. Upstream services and plugin settings
+          are never published.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function Toggle({
+  label,
   value,
   onChange,
 }: {
+  label: string;
   value: boolean;
   onChange: (v: boolean) => void;
 }) {
   return (
     <button
       type="button"
+      aria-label={label}
+      role="switch"
+      aria-checked={value}
       onClick={() => onChange(!value)}
       className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${value ? 'bg-blue-600' : 'bg-gray-200'}`}
     >
@@ -582,7 +966,7 @@ function PluginSection({
           </div>
           <p className="text-xs text-gray-400">{description}</p>
         </div>
-        <Toggle value={enabled} onChange={onToggle} />
+        <Toggle label={`${title} plugin`} value={enabled} onChange={onToggle} />
       </div>
       {enabled && children && (
         <div className="flex flex-col gap-3 pl-1">{children}</div>
@@ -606,11 +990,15 @@ function Textarea({
   rows?: number;
   hint?: string;
 }) {
+  const id = useId();
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-xs font-medium text-gray-600">{label}</label>
+      <label htmlFor={id} className="text-xs font-medium text-gray-600">
+        {label}
+      </label>
       {hint && <p className="text-xs text-gray-400">{hint}</p>}
       <textarea
+        id={id}
         rows={rows}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -634,10 +1022,14 @@ function TextInput({
   placeholder?: string;
   type?: string;
 }) {
+  const id = useId();
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-xs font-medium text-gray-600">{label}</label>
+      <label htmlFor={id} className="text-xs font-medium text-gray-600">
+        {label}
+      </label>
       <input
+        id={id}
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -653,23 +1045,31 @@ function TextInput({
 function PluginsTab({
   pf,
   setPf,
+  graphs,
 }: {
   pf: PluginsFormState;
   setPf: (patch: Partial<PluginsFormState>) => void;
+  graphs: string[] | undefined;
 }) {
-  const activeCount = [
-    pf.cors,
-    pf.ipRestriction,
-    pf.requestSizeLimit,
-    pf.rateLimit,
-    pf.requestTransform,
-    pf.responseTransform,
-    pf.basicAuth,
-    pf.oidc,
-    pf.hmacAuth,
-    pf.acl,
-    pf.mtls,
-  ].filter(Boolean).length;
+  const oauthModeId = useId();
+  const graphSelectId = useId();
+  const activeCount =
+    [
+      pf.cors,
+      pf.ipRestriction,
+      pf.requestSizeLimit,
+      pf.rateLimit,
+      pf.requestTransform,
+      pf.responseTransform,
+      pf.basicAuth,
+      pf.oidc,
+      pf.oauth,
+      pf.hmacAuth,
+      pf.graphql,
+      pf.acl,
+      pf.mtls,
+      pf.federation,
+    ].filter(Boolean).length + pf.custom.length;
 
   return (
     <div className="flex flex-col gap-5">
@@ -717,6 +1117,7 @@ function PluginsTab({
               Allow Credentials
             </span>
             <Toggle
+              label="Allow credentials"
               value={pf.corsConfig.credentials}
               onChange={(v) =>
                 setPf({ corsConfig: { ...pf.corsConfig, credentials: v } })
@@ -970,7 +1371,6 @@ function PluginsTab({
         description="Validate inbound Bearer tokens using JWKS (Auth0, Cognito, Keycloak)"
         enabled={pf.oidc}
         onToggle={(v) => setPf({ oidc: v })}
-        badge="Phase 2"
       >
         <TextInput
           label="JWKS URI"
@@ -1011,12 +1411,217 @@ function PluginsTab({
       <hr className="border-gray-100" />
 
       <PluginSection
+        title="OAuth 2.0"
+        description="Verify client tokens or obtain credentials for an upstream service"
+        enabled={pf.oauth}
+        onToggle={(v) => setPf({ oauth: v })}
+      >
+        <div className="flex flex-col gap-1 text-sm text-gray-700">
+          <label htmlFor={oauthModeId}>OAuth purpose</label>
+          <select
+            id={oauthModeId}
+            className="rounded-md border border-gray-300 px-3 py-2"
+            value={pf.oauthConfig.mode}
+            onChange={(e) =>
+              setPf({
+                oauthConfig: {
+                  ...pf.oauthConfig,
+                  mode: e.target.value as 'introspection' | 'outbound',
+                  issuer: '',
+                  audience: '',
+                },
+              })
+            }
+          >
+            <option value="introspection">Verify incoming client tokens</option>
+            <option value="outbound">Obtain upstream credentials</option>
+          </select>
+        </div>
+        <p className="rounded-lg bg-blue-50 p-3 text-sm text-blue-800">
+          {pf.oauthConfig.mode === 'introspection'
+            ? 'Checks each client token with your identity provider. Only verified active tokens can satisfy required route authentication.'
+            : 'Adds a service token to upstream requests. This does not authenticate your clients; configure separate incoming authentication for protected routes.'}
+        </p>
+        <TextInput
+          label={
+            pf.oauthConfig.mode === 'introspection'
+              ? 'Introspection endpoint'
+              : 'Token endpoint'
+          }
+          value={pf.oauthConfig.endpoint}
+          onChange={(v) =>
+            setPf({ oauthConfig: { ...pf.oauthConfig, endpoint: v } })
+          }
+          placeholder="https://identity.example.com/oauth"
+        />
+        <TextInput
+          label="OAuth client ID"
+          value={pf.oauthConfig.clientId}
+          onChange={(v) =>
+            setPf({ oauthConfig: { ...pf.oauthConfig, clientId: v } })
+          }
+        />
+        <label className="flex flex-col gap-1 text-sm text-gray-700">
+          OAuth client secret
+          <input
+            type="password"
+            autoComplete="new-password"
+            className="rounded-md border border-gray-300 px-3 py-2"
+            value={pf.oauthConfig.clientSecret}
+            onChange={(e) =>
+              setPf({
+                oauthConfig: {
+                  ...pf.oauthConfig,
+                  clientSecret: e.target.value,
+                },
+              })
+            }
+          />
+        </label>
+        {pf.oauthConfig.mode === 'introspection' ? (
+          <>
+            <TextInput
+              label="OAuth expected issuer (optional)"
+              value={pf.oauthConfig.issuer}
+              onChange={(v) =>
+                setPf({ oauthConfig: { ...pf.oauthConfig, issuer: v } })
+              }
+            />
+            <TextInput
+              label="OAuth expected audience (optional)"
+              value={pf.oauthConfig.audience}
+              onChange={(v) =>
+                setPf({ oauthConfig: { ...pf.oauthConfig, audience: v } })
+              }
+            />
+          </>
+        ) : (
+          <>
+            <TextInput
+              label="OAuth scopes (comma separated)"
+              value={pf.oauthConfig.scopes}
+              onChange={(v) =>
+                setPf({ oauthConfig: { ...pf.oauthConfig, scopes: v } })
+              }
+            />
+            <TextInput
+              label="Upstream token header"
+              value={pf.oauthConfig.headerName}
+              onChange={(v) =>
+                setPf({ oauthConfig: { ...pf.oauthConfig, headerName: v } })
+              }
+              placeholder="authorization"
+            />
+          </>
+        )}
+        <p className="text-xs text-gray-500">
+          Use HTTPS. Private HTTP providers require explicit gateway operator
+          configuration.
+        </p>
+      </PluginSection>
+      <hr className="border-gray-100" />
+
+      <PluginSection
+        title="GraphQL Guard"
+        description="Bound query depth and cost across fragments, aliases and GET/POST requests"
+        enabled={pf.graphql}
+        onToggle={(v) => setPf({ graphql: v })}
+      >
+        <div className="grid grid-cols-2 gap-3">
+          <TextInput
+            label="GraphQL maximum depth"
+            value={pf.graphqlConfig.maxDepth}
+            type="number"
+            onChange={(v) =>
+              setPf({ graphqlConfig: { ...pf.graphqlConfig, maxDepth: v } })
+            }
+            placeholder="10"
+          />
+          <TextInput
+            label="GraphQL maximum complexity"
+            value={pf.graphqlConfig.maxComplexity}
+            type="number"
+            onChange={(v) =>
+              setPf({
+                graphqlConfig: { ...pf.graphqlConfig, maxComplexity: v },
+              })
+            }
+            placeholder="1000"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-gray-600">
+            Allow GraphQL introspection
+          </span>
+          <Toggle
+            label="Allow GraphQL introspection"
+            value={pf.graphqlConfig.introspectionAllowed}
+            onChange={(v) =>
+              setPf({
+                graphqlConfig: { ...pf.graphqlConfig, introspectionAllowed: v },
+              })
+            }
+          />
+        </div>
+        <p className="text-xs text-gray-500">
+          Depth must be 1–100 and complexity 1–100000. Introspection is blocked
+          by default; __typename remains available. Cost counts fields at their
+          expanded depth, including fragments. Resolver and pagination limits
+          belong in your GraphQL server.
+        </p>
+        <p className="text-xs text-gray-500">
+          Supports GraphQL queries over GET and JSON or raw GraphQL over POST.
+          Batches, persisted queries, compressed bodies and subscriptions
+          require dedicated support. Gateway operators control upload size,
+          deadlines and parser limits.
+        </p>
+      </PluginSection>
+      <hr className="border-gray-100" />
+      <PluginSection
         title="HMAC Auth"
         description="Validate HMAC request signatures (Stripe, GitHub webhooks)"
         enabled={pf.hmacAuth}
         onToggle={(v) => setPf({ hmacAuth: v })}
-        badge="Phase 2"
       >
+        <div className="flex flex-col gap-1">
+          <label
+            htmlFor="hmac-format"
+            className="text-xs font-medium text-gray-600"
+          >
+            Webhook signature format
+          </label>
+          <select
+            id="hmac-format"
+            value={pf.hmacAuthConfig.mode}
+            onChange={(e) => {
+              const mode = e.target.value as HmacAuthConfig['mode'];
+              setPf({
+                hmacAuthConfig: {
+                  ...pf.hmacAuthConfig,
+                  mode,
+                  header:
+                    mode === 'stripe'
+                      ? 'stripe-signature'
+                      : 'x-hub-signature-256',
+                  algorithm: 'sha256',
+                  timestampHeader: '',
+                  maxClockSkewSeconds: '',
+                },
+              });
+            }}
+            className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+          >
+            <option value="generic">GitHub / generic raw body</option>
+            <option value="stripe">Stripe timestamp + body</option>
+          </select>
+        </div>
+        <p className="text-xs text-gray-500">
+          {pf.hmacAuthConfig.mode === 'stripe'
+            ? 'Checks Stripe t= and v1= signatures over the original timestamp and body. Freshness defaults to 300 seconds.'
+            : 'GitHub signs the original body. For a custom timestamp header, your sender must sign timestamp.body. Body-only signatures do not prevent replays.'}{' '}
+          Keep event-ID deduplication in your webhook handler; legitimate
+          retries remain supported.
+        </p>
         <div className="grid grid-cols-2 gap-3">
           <TextInput
             label="Signature Header"
@@ -1027,16 +1632,21 @@ function PluginsTab({
             placeholder="x-hub-signature-256"
           />
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-gray-600">
+            <label
+              htmlFor="routes-field-1"
+              className="text-xs font-medium text-gray-600"
+            >
               Algorithm
             </label>
             <select
+              id="routes-field-1"
               value={pf.hmacAuthConfig.algorithm}
+              disabled={pf.hmacAuthConfig.mode === 'stripe'}
               onChange={(e) =>
                 setPf({
                   hmacAuthConfig: {
                     ...pf.hmacAuthConfig,
-                    algorithm: e.target.value,
+                    algorithm: e.target.value as HmacPluginConfig['algorithm'],
                   },
                 })
               }
@@ -1057,16 +1667,18 @@ function PluginsTab({
           rows={3}
         />
         <div className="grid grid-cols-2 gap-3">
-          <TextInput
-            label="Timestamp Header (optional)"
-            value={pf.hmacAuthConfig.timestampHeader}
-            onChange={(v) =>
-              setPf({
-                hmacAuthConfig: { ...pf.hmacAuthConfig, timestampHeader: v },
-              })
-            }
-            placeholder="x-timestamp"
-          />
+          {pf.hmacAuthConfig.mode === 'generic' && (
+            <TextInput
+              label="Timestamp Header (optional)"
+              value={pf.hmacAuthConfig.timestampHeader}
+              onChange={(v) =>
+                setPf({
+                  hmacAuthConfig: { ...pf.hmacAuthConfig, timestampHeader: v },
+                })
+              }
+              placeholder="x-timestamp"
+            />
+          )}
           <TextInput
             label="Max Clock Skew (seconds)"
             value={pf.hmacAuthConfig.maxClockSkewSeconds}
@@ -1091,7 +1703,6 @@ function PluginsTab({
         description="Allow or deny access based on consumer groups"
         enabled={pf.acl}
         onToggle={(v) => setPf({ acl: v })}
-        badge="Phase 2"
       >
         <div className="grid grid-cols-2 gap-3">
           <TextInput
@@ -1119,16 +1730,16 @@ function PluginsTab({
 
       <PluginSection
         title="mTLS"
-        description="Require a client certificate signed by the tenant CA"
+        description="Require a verified TLS client certificate trusted by the CA bundle in Settings"
         enabled={pf.mtls}
         onToggle={(v) => setPf({ mtls: v })}
-        badge="Phase 2"
       >
         <div className="flex items-center justify-between rounded-md border border-gray-200 px-3 py-2">
           <span className="text-xs font-medium text-gray-600">
             Enforce (reject if no cert)
           </span>
           <Toggle
+            label="Require client certificate"
             value={pf.mtlsConfig.required}
             onChange={(v) => setPf({ mtlsConfig: { required: v } })}
           />
@@ -1138,16 +1749,170 @@ function PluginsTab({
           validation.
         </p>
       </PluginSection>
+
+      <hr className="border-gray-100" />
+
+      <PluginSection
+        title="GraphQL federation"
+        description="Answer GraphQL requests from a federated graph, calling its subgraph services"
+        enabled={pf.federation}
+        onToggle={(v) => setPf({ federation: v })}
+      >
+        <div className="flex flex-col gap-1">
+          <label
+            htmlFor={graphSelectId}
+            className="text-xs font-medium text-gray-600"
+          >
+            Federated graph
+          </label>
+          <select
+            id={graphSelectId}
+            value={pf.federationConfig.graph}
+            onChange={(e) =>
+              setPf({
+                federationConfig: {
+                  ...pf.federationConfig,
+                  graph: e.target.value,
+                },
+              })
+            }
+            className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+          >
+            <option value="">Choose a graph</option>
+            {[
+              ...new Set([
+                ...(graphs ?? []),
+                ...(pf.federationConfig.graph
+                  ? [pf.federationConfig.graph]
+                  : []),
+              ]),
+            ].map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <TextInput
+          label="Headers to forward to subgraphs (comma-sep, optional)"
+          value={pf.federationConfig.forwardHeaders}
+          onChange={(v) =>
+            setPf({
+              federationConfig: { ...pf.federationConfig, forwardHeaders: v },
+            })
+          }
+          placeholder="authorization, x-tenant"
+        />
+        <p className="text-xs text-gray-600">
+          Register subgraph schemas on the GraphQL federation page. The gateway
+          runs this plugin after every other one, then answers from the graph;
+          requests are not forwarded to the route&apos;s service. Add the
+          GraphQL guard above to limit depth, complexity and introspection.
+        </p>
+      </PluginSection>
+
+      <hr className="border-gray-100" />
+
+      <CustomPluginsSection
+        custom={pf.custom}
+        onChange={(custom) => setPf({ custom })}
+      />
     </div>
+  );
+}
+
+function CustomPluginsSection({
+  custom,
+  onChange,
+}: {
+  custom: CustomPlugin[];
+  onChange: (custom: CustomPlugin[]) => void;
+}) {
+  const update = (key: number, patch: Partial<CustomPlugin>) =>
+    onChange(
+      custom.map((entry) =>
+        entry.key === key ? { ...entry, ...patch } : entry,
+      ),
+    );
+  return (
+    <section aria-label="Third-party plugins" className="flex flex-col gap-3">
+      <div>
+        <h3 className="text-sm font-medium text-gray-700">
+          Third-party and WebAssembly plugins
+        </h3>
+        <p className="text-xs text-gray-500">
+          Packages your gateway operator installed and pinned, or
+          wasm:&lt;name&gt; for a WebAssembly plugin from the Plugin
+          marketplace. They run after the built-in plugins above. If the gateway
+          has not loaded one, or it is disabled or removed, requests on this
+          route are refused.
+        </p>
+      </div>
+      {custom.map((entry, index) => (
+        <div
+          key={entry.key}
+          className="flex flex-col gap-2 rounded-md border border-gray-200 p-3"
+        >
+          <div className="flex items-end gap-2">
+            <div className="min-w-0 flex-1">
+              <TextInput
+                label={`Plugin name ${index + 1}`}
+                value={entry.name}
+                onChange={(name) => update(entry.key, { name })}
+                placeholder="@acme/saml-auth or wasm:header-stamp"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                onChange(custom.filter((item) => item.key !== entry.key))
+              }
+              aria-label={`Remove ${entry.name || `third-party plugin ${index + 1}`}`}
+              className="rounded-md p-2 text-gray-500 hover:bg-gray-100 hover:text-red-700"
+            >
+              <Trash2 aria-hidden="true" size={16} />
+            </button>
+          </div>
+          <Textarea
+            label={`Configuration (JSON object) ${index + 1}`}
+            value={entry.config}
+            onChange={(config) => update(entry.key, { config })}
+            placeholder={'{\n  "value": "v1"\n}'}
+            rows={4}
+            hint="Stored with the route and exported in configuration files. Keep secrets in the plugin's own gateway settings."
+          />
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() =>
+          onChange([
+            ...custom,
+            {
+              key: Math.max(-1, ...custom.map((entry) => entry.key)) + 1,
+              name: '',
+              config: '{}',
+            },
+          ])
+        }
+        className="flex items-center gap-1 self-start rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+      >
+        <Plus aria-hidden="true" size={14} /> Add third-party plugin
+      </button>
+    </section>
   );
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function RoutesPage() {
-  const tenantId = getTenantId() ?? '';
+  const tenantId = useTenantId() ?? '';
 
-  const { data: routes, mutate } = useSWR(
+  const {
+    data: routes,
+    error: loadError,
+    mutate,
+  } = useSWR(
     tenantId ? `routes-${tenantId}` : null,
     () => getRoutes(tenantId),
     { refreshInterval: 30000 },
@@ -1155,6 +1920,10 @@ export default function RoutesPage() {
   const { data: services } = useSWR(
     tenantId ? `services-${tenantId}` : null,
     () => getServices(tenantId),
+  );
+  const { data: federation } = useSWR(
+    tenantId ? `federated-graphs-${tenantId}` : null,
+    () => getFederatedGraphs(tenantId),
   );
 
   const [panelOpen, setPanelOpen] = useState(false);
@@ -1178,7 +1947,7 @@ export default function RoutesPage() {
   function openEdit(route: Route) {
     setEditId(route.id);
     setForm(routeToForm(route));
-    setPluginsForm(pluginsToForm(route.plugins));
+    setPluginsForm(pluginsToForm(route.plugins, route.graphql));
     setPanelTab('basic');
     setPanelOpen(true);
   }
@@ -1242,23 +2011,28 @@ export default function RoutesPage() {
   const serviceMap = Object.fromEntries(
     (services ?? []).map((s: Service) => [s.id, s.name]),
   );
-  const activePluginCount = [
-    pluginsForm.cors,
-    pluginsForm.ipRestriction,
-    pluginsForm.requestSizeLimit,
-    pluginsForm.rateLimit,
-    pluginsForm.requestTransform,
-    pluginsForm.responseTransform,
-    pluginsForm.basicAuth,
-    pluginsForm.oidc,
-    pluginsForm.hmacAuth,
-    pluginsForm.acl,
-    pluginsForm.mtls,
-  ].filter(Boolean).length;
+  const activePluginCount =
+    [
+      pluginsForm.cors,
+      pluginsForm.ipRestriction,
+      pluginsForm.requestSizeLimit,
+      pluginsForm.rateLimit,
+      pluginsForm.requestTransform,
+      pluginsForm.responseTransform,
+      pluginsForm.basicAuth,
+      pluginsForm.oidc,
+      pluginsForm.oauth,
+      pluginsForm.hmacAuth,
+      pluginsForm.graphql,
+      pluginsForm.acl,
+      pluginsForm.mtls,
+      pluginsForm.federation,
+    ].filter(Boolean).length + pluginsForm.custom.length;
 
   return (
-    <div className="p-8">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="p-4 sm:p-8">
+      {loadError && <DataLoadNotice label="Routes" onRetry={() => mutate()} />}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold text-gray-900">Routes</h1>
         <button
           onClick={openCreate}
@@ -1269,7 +2043,12 @@ export default function RoutesPage() {
         </button>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label="Routes table"
+        className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm"
+      >
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50">
@@ -1301,7 +2080,7 @@ export default function RoutesPage() {
                   colSpan={7}
                   className="px-4 py-8 text-center text-sm text-gray-400"
                 >
-                  Loading…
+                  {loadError ? 'Data unavailable' : 'Loading…'}
                 </td>
               </tr>
             ) : routes.length === 0 ? (
@@ -1317,7 +2096,7 @@ export default function RoutesPage() {
               routes.map((route) => (
                 <tr
                   key={route.id}
-                  className={`border-b border-gray-100 last:border-0 ${!route.enabled ? 'opacity-50' : ''}`}
+                  className={`border-b border-gray-100 last:border-0 ${!route.enabled ? 'bg-slate-50' : ''}`}
                 >
                   <td className="px-4 py-3">
                     <span
@@ -1394,12 +2173,14 @@ export default function RoutesPage() {
                       ) : (
                         <>
                           <button
+                            aria-label={`Edit ${route.method} ${route.pathPattern}`}
                             onClick={() => openEdit(route)}
                             className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
                           >
                             <Pencil className="h-4 w-4" />
                           </button>
                           <button
+                            aria-label={`Delete ${route.method} ${route.pathPattern}`}
                             onClick={() => setDeleteTarget(route.id)}
                             className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-red-600"
                           >
@@ -1418,17 +2199,17 @@ export default function RoutesPage() {
 
       {/* Slide-over panel */}
       {panelOpen && (
-        <div className="fixed inset-0 z-40 flex justify-end">
-          <div
-            className="fixed inset-0 bg-black/20"
-            onClick={() => setPanelOpen(false)}
-          />
-          <div className="relative z-50 flex h-full w-[600px] flex-col bg-white shadow-xl">
+        <WorkspaceDialog
+          label="Routes form"
+          onClose={() => setPanelOpen(false)}
+        >
+          <div className="relative z-50 flex h-full w-full max-w-[600px] flex-col bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
               <h2 className="text-base font-semibold text-gray-900">
                 {editId ? 'Edit Route' : 'Add Route'}
               </h2>
               <button
+                aria-label="Close form"
                 onClick={() => setPanelOpen(false)}
                 className="rounded p-1 text-gray-400 hover:bg-gray-100"
               >
@@ -1468,10 +2249,15 @@ export default function RoutesPage() {
                   <div className="flex flex-col gap-5">
                     {/* Method */}
                     <div className="flex flex-col gap-1">
-                      <label className="text-sm font-medium text-gray-700">
+                      <label
+                        htmlFor="routes-field-2"
+                        className="text-sm font-medium text-gray-700"
+                      >
                         Method
                       </label>
                       <select
+                        id="routes-field-2"
+                        aria-label="HTTP method"
                         value={form.method}
                         onChange={(e) => setF({ method: e.target.value })}
                         className="rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
@@ -1486,13 +2272,18 @@ export default function RoutesPage() {
 
                     {/* Path Pattern */}
                     <div className="flex flex-col gap-1">
-                      <label className="text-sm font-medium text-gray-700">
+                      <label
+                        htmlFor="routes-field-3"
+                        className="text-sm font-medium text-gray-700"
+                      >
                         Path Pattern
                       </label>
                       <input
+                        id="routes-field-3"
                         type="text"
                         required
                         placeholder="/api/users"
+                        aria-label="Path pattern"
                         value={form.pathPattern}
                         onChange={(e) => setF({ pathPattern: e.target.value })}
                         className="rounded-md border border-gray-300 px-3 py-2 font-mono text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
@@ -1504,11 +2295,16 @@ export default function RoutesPage() {
 
                     {/* Service */}
                     <div className="flex flex-col gap-1">
-                      <label className="text-sm font-medium text-gray-700">
+                      <label
+                        htmlFor="routes-field-4"
+                        className="text-sm font-medium text-gray-700"
+                      >
                         Service
                       </label>
                       <select
+                        id="routes-field-4"
                         required
+                        aria-label="Service"
                         value={form.serviceId}
                         onChange={(e) => setF({ serviceId: e.target.value })}
                         className="rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
@@ -1529,6 +2325,7 @@ export default function RoutesPage() {
                           Auth Required
                         </span>
                         <Toggle
+                          label="Authentication required"
                           value={form.authRequired}
                           onChange={(v) => setF({ authRequired: v })}
                         />
@@ -1538,6 +2335,7 @@ export default function RoutesPage() {
                           Enabled
                         </span>
                         <Toggle
+                          label="Route enabled"
                           value={form.enabled}
                           onChange={(v) => setF({ enabled: v })}
                         />
@@ -1546,16 +2344,21 @@ export default function RoutesPage() {
 
                     {/* Rate Limit Override */}
                     <div className="flex flex-col gap-1">
-                      <label className="text-sm font-medium text-gray-700">
+                      <label
+                        htmlFor="routes-field-5"
+                        className="text-sm font-medium text-gray-700"
+                      >
                         Rate Limit Override{' '}
                         <span className="font-normal text-gray-400">
                           (req/min, optional)
                         </span>
                       </label>
                       <input
+                        id="routes-field-5"
                         type="number"
                         min={1}
                         placeholder="Leave blank to use global limit"
+                        aria-label="Rate limit override"
                         value={form.rateLimitOverride}
                         onChange={(e) =>
                           setF({ rateLimitOverride: e.target.value })
@@ -1580,6 +2383,7 @@ export default function RoutesPage() {
                           </p>
                         </div>
                         <Toggle
+                          label="Retry policy"
                           value={form.retryEnabled}
                           onChange={(v) => setF({ retryEnabled: v })}
                         />
@@ -1588,13 +2392,18 @@ export default function RoutesPage() {
                         <div className="flex flex-col gap-3 pl-1">
                           <div className="grid grid-cols-2 gap-3">
                             <div className="flex flex-col gap-1">
-                              <label className="text-xs font-medium text-gray-600">
+                              <label
+                                htmlFor="routes-field-6"
+                                className="text-xs font-medium text-gray-600"
+                              >
                                 Max Attempts
                               </label>
                               <input
+                                id="routes-field-6"
                                 type="number"
                                 min={1}
                                 max={10}
+                                aria-label="Retry attempts"
                                 value={form.retryAttempts}
                                 onChange={(e) =>
                                   setF({ retryAttempts: e.target.value })
@@ -1603,12 +2412,17 @@ export default function RoutesPage() {
                               />
                             </div>
                             <div className="flex flex-col gap-1">
-                              <label className="text-xs font-medium text-gray-600">
+                              <label
+                                htmlFor="routes-field-7"
+                                className="text-xs font-medium text-gray-600"
+                              >
                                 Retry on Status Codes
                               </label>
                               <input
+                                id="routes-field-7"
                                 type="text"
                                 placeholder="502,503,504"
+                                aria-label="Retry status codes"
                                 value={form.retryOn}
                                 onChange={(e) =>
                                   setF({ retryOn: e.target.value })
@@ -1646,17 +2460,23 @@ export default function RoutesPage() {
                         </div>
                       )}
                     </div>
+                    <PortalSection form={form} setF={setF} />
                   </div>
                 )}
 
                 {panelTab === 'plugins' && (
-                  <PluginsTab pf={pluginsForm} setPf={setPf} />
+                  <PluginsTab
+                    pf={pluginsForm}
+                    setPf={setPf}
+                    graphs={federation?.graphs.map((graph) => graph.name)}
+                  />
                 )}
               </div>
 
               <div className="flex justify-end gap-2 border-t border-gray-200 p-6">
                 <button
                   type="button"
+                  aria-label="Close form"
                   onClick={() => setPanelOpen(false)}
                   className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                 >
@@ -1672,7 +2492,7 @@ export default function RoutesPage() {
               </div>
             </form>
           </div>
-        </div>
+        </WorkspaceDialog>
       )}
     </div>
   );

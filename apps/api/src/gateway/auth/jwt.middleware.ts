@@ -1,3 +1,7 @@
+import {
+  canonicalConsumerId,
+  redactRequestLog,
+} from '@api-gateway/shared-types';
 import { Injectable, Logger, NestMiddleware } from '@nestjs/common';
 import type { NextFunction, Request } from 'express';
 import { ConfigService } from '@nestjs/config';
@@ -35,6 +39,11 @@ export class JwtMiddleware implements NestMiddleware {
     }
 
     const [scheme, token] = authHeader.split(' ');
+    if (scheme?.toLowerCase() === 'basic') {
+      // Basic credentials are verified by the configured route plugin.
+      next();
+      return;
+    }
     if (scheme?.toLowerCase() !== 'bearer' || !token) {
       this.respondUnauthorized(
         req,
@@ -51,7 +60,17 @@ export class JwtMiddleware implements NestMiddleware {
       const payload = jwt.verify(token, secret) as JwtPayload;
       const userId = payload.sub ?? payload.userId ?? payload.id;
       if (userId) {
-        req.user = { id: userId };
+        const candidate = canonicalConsumerId(userId);
+        const consumerId =
+          candidate &&
+          this.configManager
+            .getConfig()
+            ?.consumers?.some(
+              (consumer) => canonicalConsumerId(consumer.id) === candidate,
+            )
+            ? candidate
+            : undefined;
+        req.user = { id: userId, ...(consumerId ? { consumerId } : {}) };
       }
       next();
     } catch (error) {
@@ -71,7 +90,8 @@ export class JwtMiddleware implements NestMiddleware {
           .getConfig()
           ?.consumers.find((c) => c.keyHash === hash);
         if (consumer) {
-          req.user = { id: consumer.id };
+          const consumerId = canonicalConsumerId(consumer.id);
+          req.user = { id: consumer.id, ...(consumerId ? { consumerId } : {}) };
         }
         // Not a platform JWT and not a consumer key — could be a third-party OIDC
         // token. Pass through and let route plugins (oidc, hmac-auth, etc.) enforce auth.
@@ -98,7 +118,13 @@ export class JwtMiddleware implements NestMiddleware {
   private ensureRequestId(req: Request, res: ResponseWithLocals): string {
     const headerValue = req.headers['x-request-id'];
     const existing = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-    const requestId = existing ?? uuidv4();
+    const requestId =
+      typeof existing === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        existing,
+      )
+        ? existing
+        : uuidv4();
     req.headers['x-request-id'] = requestId;
     res.setHeader('X-Request-ID', requestId);
     res.locals.requestId = requestId;
@@ -134,7 +160,7 @@ export class JwtMiddleware implements NestMiddleware {
     const logEntry: Record<string, string | number | undefined> = {
       timestamp: new Date().toISOString(),
       method: req.method,
-      path: req.originalUrl,
+      path: res.locals.routePattern ?? 'unmatched',
       statusCode,
       responseTimeMs,
       requestId,
@@ -144,6 +170,10 @@ export class JwtMiddleware implements NestMiddleware {
       logEntry.clientIp = req.ip;
     }
 
-    this.logger.warn(JSON.stringify(logEntry));
+    this.logger.warn(
+      JSON.stringify(
+        redactRequestLog(logEntry, this.configManager.getConfig()?.logPrivacy),
+      ),
+    );
   }
 }

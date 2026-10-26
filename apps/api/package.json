@@ -85,15 +85,173 @@
           "build",
           "prune"
         ]
+      },
+      "metrics-container-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/metrics-container-smoke.mjs tools/alerts-container-fixture.mjs tools/log-export-container-fixture.mjs tools/export-destinations-container-fixture.mjs tools/consumer-rollup-container-fixture.mjs tools/gwx-container-fixture.mjs",
+            "node tools/metrics-container-smoke.mjs"
+          ],
+          "parallel": false
+        },
+        "dependsOn": [
+          "gwx:build"
+        ]
+      },
+      "grpc-container-smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "options": {
+          "commands": [
+            "eslint tools/grpc-container-smoke.mjs",
+            "node tools/grpc-container-smoke.mjs"
+          ],
+          "parallel": false
+        }
+      },
+      "plugins-e2e": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build",
+          {
+            "projects": [
+              "admin-api",
+              "control-plane"
+            ],
+            "target": "build"
+          }
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/third-party-plugins-e2e.mjs",
+            "node tools/third-party-plugins-e2e.mjs"
+          ],
+          "parallel": false
+        }
+      },
+      "circuit-e2e": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build",
+          {
+            "projects": [
+              "admin-api",
+              "control-plane"
+            ],
+            "target": "build"
+          }
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/circuit-breaker-e2e.mjs",
+            "node tools/circuit-breaker-e2e.mjs"
+          ],
+          "parallel": false
+        }
+      },
+      "billing-e2e": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build",
+          {
+            "projects": [
+              "admin-api",
+              "control-plane"
+            ],
+            "target": "build"
+          }
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/billing-e2e.mjs",
+            "node tools/billing-e2e.mjs"
+          ],
+          "parallel": false
+        }
+      },
+      "regions-e2e": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build",
+          {
+            "projects": [
+              "admin-api",
+              "control-plane"
+            ],
+            "target": "build"
+          }
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/multi-region-e2e.mjs",
+            "node tools/multi-region-e2e.mjs"
+          ],
+          "parallel": false
+        }
+      },
+      "graphql-federation-e2e": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build",
+          {
+            "projects": [
+              "admin-api",
+              "control-plane"
+            ],
+            "target": "build"
+          }
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/graphql-federation-e2e.mjs",
+            "node tools/graphql-federation-e2e.mjs"
+          ],
+          "parallel": false
+        }
+      },
+      "wasm-e2e": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build",
+          {
+            "projects": [
+              "admin-api",
+              "control-plane"
+            ],
+            "target": "build"
+          }
+        ],
+        "options": {
+          "commands": [
+            "eslint tools/wasm-e2e.mjs",
+            "node tools/wasm-e2e.mjs"
+          ],
+          "parallel": false
+        }
       }
     }
   },
   "dependencies": {
+    "@api-gateway/shared-types": "^0.0.1",
+    "@graphql-tools/federation": "4.6.0",
+    "@graphql-tools/utils": "12.1.0",
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/mapped-types": "*",
     "@nestjs/platform-express": "^11.0.0",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/core": "2.11.0",
+    "@opentelemetry/sdk-trace": "2.11.0",
+    "graphql": "17.0.2",
     "http-proxy-middleware": "^3.0.3",
     "ioredis": "^5.4.1",
     "joi": "^17.13.3",
@@ -106,6 +264,7 @@
   },
   "devDependencies": {
     "@nestjs/testing": "^11.0.0",
+    "@theguild/federation-composition": "0.27.0",
     "@types/jsonwebtoken": "^9.0.5",
     "@types/supertest": "^2.0.16",
     "ioredis-mock": "^8.13.1",

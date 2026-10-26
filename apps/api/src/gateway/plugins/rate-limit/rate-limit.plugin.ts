@@ -26,6 +26,13 @@ export class RateLimitPlugin implements GatewayPlugin {
     const config = entry.config as unknown as RateLimitPluginConfig;
     const limit = config.max;
     if (!limit || limit <= 0) return;
+    // Saved route policy is validated to 1 ms–1 h; otherwise use the gateway window.
+    const windowMs =
+      Number.isSafeInteger(config.windowMs) &&
+      (config.windowMs as number) >= 1 &&
+      (config.windowMs as number) <= 3600000
+        ? config.windowMs
+        : undefined;
 
     const req = ctx.req as IncomingMessage;
     const ip = this.extractIp(req);
@@ -33,7 +40,11 @@ export class RateLimitPlugin implements GatewayPlugin {
     const clientKey = `route:${ctx.route.id}:${userId ? `${userId}:${ip}` : ip}`;
 
     try {
-      const result = await this.rateLimitService.check(clientKey, limit);
+      const result = await this.rateLimitService.check(
+        clientKey,
+        limit,
+        windowMs,
+      );
       if (!result.allowed) {
         const retryAfter =
           result.retryAfterMs !== null

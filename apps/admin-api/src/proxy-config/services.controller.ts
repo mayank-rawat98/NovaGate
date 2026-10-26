@@ -1,5 +1,7 @@
+import { AutomationScope } from '../automation-tokens/automation-scope.decorator';
 import {
   BadRequestException,
+  NotFoundException,
   Controller,
   Get,
   Post,
@@ -10,26 +12,46 @@ import {
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ConfigPushService } from '../config-push/config-push.service';
-import type { ServiceTarget } from '@api-gateway/shared-types';
+import { tenantSchema } from '../tenants/tenant-schema';
+import {
+  MAX_SERVICE_TARGETS,
+  MAX_SERVICE_TARGET_URL_BYTES,
+  MAX_SERVICE_TARGET_WEIGHT,
+  DEFAULT_CIRCUIT_BREAKER,
+  CIRCUIT_BREAKER_LIMITS,
+  circuitBreakerConfig,
+  type CircuitBreakerConfig,
+  type ServiceTarget,
+  type ServiceConfig,
+} from '@api-gateway/shared-types';
 
-function tenantSchema(tenantId: string): string {
-  if (!/^[0-9a-f-]+$/i.test(tenantId)) throw new Error('Invalid tenantId');
-  return `tenant_${tenantId.replace(/-/g, '_')}`;
-}
-
-interface ServiceBody {
+export interface ServiceBody {
   name?: string;
+  loadBalancing?: ServiceConfig['loadBalancing'];
   targets?: unknown;
   healthCheckPath?: string;
   timeoutMs?: number;
+  healthCheckIntervalMs?: number;
+  healthCheckProtocol?: 'http' | 'grpc';
+  healthCheckService?: string;
+  unhealthyFallback?: boolean;
   h2?: boolean;
   supportsWebSocket?: boolean;
+  /** Omitted: keep (update) or the default breaker (create). Null: none. */
+  circuitBreaker?: CircuitBreakerConfig | null;
 }
 
-function validateTargets(targets: unknown): ServiceTarget[] {
+const CIRCUIT_KEYS = ['enabled', ...Object.keys(CIRCUIT_BREAKER_LIMITS)];
+
+export function validateTargets(targets: unknown): ServiceTarget[] {
   if (!Array.isArray(targets) || targets.length === 0) {
     throw new BadRequestException('Targets must be a non-empty array');
   }
+  if (targets.length > MAX_SERVICE_TARGETS)
+    throw new BadRequestException(
+      `Provide at most ${MAX_SERVICE_TARGETS} targets`,
+    );
+  const seen = new Set<string>();
   return targets.map((target, index) => {
     if (!target || typeof target !== 'object') {
       throw new BadRequestException(`targets[${index}] must be an object`);
@@ -39,15 +61,115 @@ function validateTargets(targets: unknown): ServiceTarget[] {
     if (!url) {
       throw new BadRequestException(`targets[${index}].url is required`);
     }
-    const weight =
-      typeof record.weight === 'number' ? record.weight : Number(record.weight);
-    if (!Number.isFinite(weight) || weight < 1 || weight > 100) {
+    try {
+      const parsed = new URL(url);
+      if (
+        !['http:', 'https:'].includes(parsed.protocol) ||
+        parsed.username ||
+        parsed.password ||
+        Buffer.byteLength(url) > MAX_SERVICE_TARGET_URL_BYTES ||
+        seen.has(parsed.href)
+      )
+        throw new Error();
+      seen.add(parsed.href);
+    } catch {
       throw new BadRequestException(
-        `targets[${index}].weight must be between 1 and 100`,
+        `targets[${index}].url must be a unique HTTP/HTTPS URL without embedded credentials, at most ${MAX_SERVICE_TARGET_URL_BYTES} bytes`,
+      );
+    }
+    const weight = record.weight;
+    if (
+      typeof weight !== 'number' ||
+      !Number.isSafeInteger(weight) ||
+      weight < 1 ||
+      weight > MAX_SERVICE_TARGET_WEIGHT
+    ) {
+      throw new BadRequestException(
+        `targets[${index}].weight must be an integer between 1 and ${MAX_SERVICE_TARGET_WEIGHT}`,
       );
     }
     return { url, weight };
   });
+}
+
+export function validateHealthSettings(body: ServiceBody) {
+  if (
+    body.loadBalancing !== undefined &&
+    !['weighted-round-robin', 'least-connections'].includes(body.loadBalancing)
+  )
+    throw new BadRequestException(
+      'Load balancing must be weighted-round-robin or least-connections',
+    );
+  if (
+    body.healthCheckProtocol !== undefined &&
+    !['http', 'grpc'].includes(body.healthCheckProtocol)
+  )
+    throw new BadRequestException('Health check protocol must be http or grpc');
+  if (
+    body.healthCheckService !== undefined &&
+    (typeof body.healthCheckService !== 'string' ||
+      Buffer.byteLength(body.healthCheckService, 'utf8') > 256 ||
+      [...body.healthCheckService].some(
+        (char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127,
+      ))
+  )
+    throw new BadRequestException(
+      'gRPC health service name must be at most 256 UTF-8 bytes without control characters',
+    );
+  if (body.circuitBreaker !== undefined && body.circuitBreaker !== null) {
+    const keys = Object.keys(body.circuitBreaker ?? {});
+    if (
+      !circuitBreakerConfig(body.circuitBreaker) ||
+      keys.length !== CIRCUIT_KEYS.length ||
+      keys.some((key) => !CIRCUIT_KEYS.includes(key))
+    )
+      throw new BadRequestException(
+        'circuitBreaker needs enabled, windowSize (5-100), failureRatePercent (1-99), minimumRequests (1-windowSize), openMs (1000-300000) and halfOpenSuccesses (1-10)',
+      );
+  }
+  for (const flag of ['h2', 'supportsWebSocket'] as const)
+    if (body[flag] !== undefined && typeof body[flag] !== 'boolean')
+      throw new BadRequestException(`${flag} must be a boolean`);
+  if (
+    body.timeoutMs !== undefined &&
+    (!Number.isSafeInteger(body.timeoutMs) ||
+      body.timeoutMs < 100 ||
+      body.timeoutMs > 3600000)
+  )
+    throw new BadRequestException(
+      'Timeout must be an integer between 100 and 3600000 ms',
+    );
+  if (
+    body.healthCheckIntervalMs !== undefined &&
+    (!Number.isSafeInteger(body.healthCheckIntervalMs) ||
+      body.healthCheckIntervalMs < 1000 ||
+      body.healthCheckIntervalMs > 60000)
+  ) {
+    throw new BadRequestException(
+      'Health check interval must be an integer between 1000 and 60000 ms',
+    );
+  }
+  if (
+    body.unhealthyFallback !== undefined &&
+    typeof body.unhealthyFallback !== 'boolean'
+  ) {
+    throw new BadRequestException('Unhealthy fallback must be a boolean');
+  }
+  if (
+    body.healthCheckPath !== undefined &&
+    (typeof body.healthCheckPath !== 'string' ||
+      !body.healthCheckPath.startsWith('/') ||
+      body.healthCheckPath.startsWith('//') ||
+      /[\\#]/.test(body.healthCheckPath) ||
+      [...body.healthCheckPath].some(
+        (char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127,
+      ) ||
+      body.healthCheckPath.length > 1024)
+  ) {
+    throw new BadRequestException(
+      'Health check path must be a relative absolute path, such as /health',
+    );
+  }
 }
 
 @Controller('tenants/:tenantId/services')
@@ -57,6 +179,7 @@ export class ServicesController {
     private readonly configPush: ConfigPushService,
   ) {}
 
+  @AutomationScope('services:read')
   @Get()
   async findAll(@Param('tenantId') tenantId: string) {
     const schema = tenantSchema(tenantId);
@@ -65,13 +188,15 @@ export class ServicesController {
     );
   }
 
+  @AutomationScope('services:write')
   @Post()
   async create(@Param('tenantId') tenantId: string, @Body() body: ServiceBody) {
     const schema = tenantSchema(tenantId);
+    validateHealthSettings(body);
     const targets = validateTargets(body.targets);
     const rows = await this.dataSource.query(
-      `INSERT INTO ${schema}.services (name, targets, "healthCheckPath", "timeoutMs", h2, "supportsWebSocket")
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      `INSERT INTO ${schema}.services (name, targets, "healthCheckPath", "timeoutMs", h2, "supportsWebSocket", "healthCheckIntervalMs", "unhealthyFallback", "healthCheckProtocol", "healthCheckService", "loadBalancing", "circuitBreaker")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb) RETURNING *`,
       [
         body.name,
         JSON.stringify(targets),
@@ -79,12 +204,24 @@ export class ServicesController {
         body.timeoutMs ?? 10000,
         body.h2 ?? false,
         body.supportsWebSocket ?? false,
+        body.healthCheckIntervalMs ?? 10000,
+        body.unhealthyFallback ?? false,
+        body.healthCheckProtocol ?? 'http',
+        body.healthCheckService ?? '',
+        body.loadBalancing ?? 'weighted-round-robin',
+        // New services get the automatic breaker unless they opt out.
+        JSON.stringify(
+          body.circuitBreaker === undefined
+            ? DEFAULT_CIRCUIT_BREAKER
+            : body.circuitBreaker,
+        ),
       ],
     );
     await this.configPush.triggerUpdate(tenantId);
     return rows[0];
   }
 
+  @AutomationScope('services:write')
   @Put(':id')
   async update(
     @Param('tenantId') tenantId: string,
@@ -92,19 +229,26 @@ export class ServicesController {
     @Body() body: ServiceBody,
   ) {
     const schema = tenantSchema(tenantId);
+    validateHealthSettings(body);
     const targets =
       body.targets === undefined
         ? null
         : JSON.stringify(validateTargets(body.targets));
     const rows = await this.dataSource.query(
-      `UPDATE ${schema}.services
+      `WITH updated AS (UPDATE ${schema}.services
        SET name = COALESCE($2, name),
             targets = COALESCE($3::jsonb, targets),
             "healthCheckPath" = COALESCE($4, "healthCheckPath"),
             "timeoutMs" = COALESCE($5, "timeoutMs"),
             h2 = COALESCE($6, h2),
-            "supportsWebSocket" = COALESCE($7, "supportsWebSocket")
-       WHERE id = $1 AND "deletedAt" IS NULL RETURNING *`,
+            "supportsWebSocket" = COALESCE($7, "supportsWebSocket"),
+            "healthCheckIntervalMs" = COALESCE($8, "healthCheckIntervalMs"),
+            "unhealthyFallback" = COALESCE($9, "unhealthyFallback"),
+            "healthCheckProtocol" = COALESCE($10, "healthCheckProtocol"),
+            "healthCheckService" = COALESCE($11, "healthCheckService"),
+            "loadBalancing" = COALESCE($12, "loadBalancing"),
+            "circuitBreaker" = CASE WHEN $14 THEN $13::jsonb ELSE "circuitBreaker" END
+       WHERE id = $1 AND "deletedAt" IS NULL RETURNING *) SELECT * FROM updated`,
       [
         id,
         body.name ?? null,
@@ -113,12 +257,24 @@ export class ServicesController {
         body.timeoutMs ?? null,
         body.h2 ?? null,
         body.supportsWebSocket ?? null,
+        body.healthCheckIntervalMs ?? null,
+        body.unhealthyFallback ?? null,
+        body.healthCheckProtocol ?? null,
+        body.healthCheckService ?? null,
+        body.loadBalancing ?? null,
+        body.circuitBreaker === undefined
+          ? null
+          : JSON.stringify(body.circuitBreaker),
+        body.circuitBreaker !== undefined,
       ],
     );
+    if (!rows.length)
+      throw new NotFoundException('Configuration entry not found');
     await this.configPush.triggerUpdate(tenantId);
     return rows[0];
   }
 
+  @AutomationScope('services:write')
   @Delete(':id')
   async remove(@Param('tenantId') tenantId: string, @Param('id') id: string) {
     const schema = tenantSchema(tenantId);

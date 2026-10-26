@@ -1,27 +1,87 @@
-import { Injectable, Logger } from '@nestjs/common';
-import * as http from 'http';
-import * as net from 'net';
+import { OtelService } from '../telemetry/otel.service';
+import type { GatewayTraceHandle } from '../shared/request-context';
 import {
-  createProxyMiddleware,
-  type RequestHandler,
-} from 'http-proxy-middleware';
+  Injectable,
+  Optional,
+  Logger,
+  type OnModuleInit,
+  type OnModuleDestroy,
+} from '@nestjs/common';
+import * as http from 'node:http';
+import * as https from 'node:https';
+import * as net from 'node:net';
+import { createHash, randomUUID } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
-import jwt, { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
-import type { ServiceConfig } from '@api-gateway/shared-types';
-import type { GatewayConfig } from '../../config/configuration';
+import jwt, { TokenExpiredError } from 'jsonwebtoken';
+import type {
+  GatewayPlugin,
+  PluginContext,
+  RouteConfig,
+  ServiceConfig,
+} from '@api-gateway/shared-types';
+import {
+  DEFAULT_WEBSOCKET,
+  type GatewayConfig,
+  type WebSocketSettings,
+} from '../../config/configuration';
 import { GatewayConfigManagerService } from '../config-manager/gateway-config-manager.service';
 import { MetricsService } from '../metrics/metrics.service';
 import { LoadBalancerService } from './load-balancer.service';
 import { UpstreamHealthService } from '../health/upstream-health.service';
 import { matchRoute } from '../shared/route-matcher';
+import { RateLimitService } from '../rate-limit/rate-limit.service';
+import { PluginRegistryService } from '../plugins/plugin-registry.service';
+import { PluginRunnerService } from '../plugins/plugin-runner.service';
+import {
+  WsFailure,
+  wsHandshake,
+  wsHeaders,
+  wsHeaderBytes,
+  wsSerialize,
+  wsValidateResponse,
+} from './ws-wire';
+import {
+  CircuitBreakerService,
+  type CircuitAdmission,
+} from '../circuit-breaker/circuit-breaker.service';
+import { MeteringService } from '../metering/metering.service';
+
+interface Connection {
+  socket: net.Socket;
+  requestId: string;
+  upstream?: net.Socket;
+  request?: http.ClientRequest;
+  tenantId: string | null;
+  route: RouteConfig;
+  service: ServiceConfig;
+  target?: string;
+  releaseTarget?: () => void;
+  /** Circuit-breaker admission for the upstream handshake. */
+  circuit?: CircuitAdmission;
+  trace?: GatewayTraceHandle;
+  upstreamTrace?: GatewayTraceHandle;
+  traceOutcome?: number;
+  principal?: string;
+  policy: string;
+  opened: boolean;
+  done: boolean;
+  admitting: boolean;
+  abort: AbortController;
+  timer?: NodeJS.Timeout;
+  earlyChunks: Buffer[];
+  earlyBytes: number;
+  collect?: (chunk: Buffer) => void;
+}
 
 @Injectable()
-export class WsProxyService {
+export class WsProxyService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WsProxyService.name);
-  private readonly upgradeHandlers = new Map<
-    string,
-    RequestHandler<http.IncomingMessage, http.ServerResponse>
-  >();
+  private readonly connections = new Set<Connection>();
+  // Disconnected callers cannot free quota/auth capacity while unabortable work is still running.
+  private readonly detachedAdmissions = new Set<Connection>();
+  private readonly settings: WebSocketSettings;
+  private stopping = false;
+  private unsubscribe?: () => void;
 
   constructor(
     private readonly configManager: GatewayConfigManagerService,
@@ -29,196 +89,742 @@ export class WsProxyService {
     private readonly loadBalancer: LoadBalancerService,
     private readonly upstreamHealth: UpstreamHealthService,
     private readonly configService: ConfigService<GatewayConfig, true>,
-  ) {}
-
-  /**
-   * Handle an HTTP upgrade event from the raw HTTP server. Should be wired to
-   * `httpServer.on('upgrade', ...)` at bootstrap time.
-   */
-  handleUpgrade(
+    private readonly rateLimit: RateLimitService,
+    private readonly registry: PluginRegistryService,
+    private readonly runner: PluginRunnerService,
+    @Optional() private readonly tracing?: OtelService,
+    @Optional() private readonly circuits?: CircuitBreakerService,
+    @Optional() private readonly metering?: MeteringService,
+  ) {
+    this.settings = {
+      ...DEFAULT_WEBSOCKET,
+      ...this.configService.get('websocket', { infer: true }),
+    };
+  }
+  /** Workspace suspension and consumer monthly quotas apply to upgrades. */
+  private async meterUpgrade(consumerId: string | undefined) {
+    const config = this.configManager.getConfig();
+    const until = config?.suspended ? Date.parse(config.suspended.until) : NaN;
+    if (until > Date.now()) {
+      this.metricsService.incrementQuotaRejection('workspace');
+      throw new WsFailure(
+        429,
+        'QUOTA_EXCEEDED',
+        'The monthly request quota for this workspace is exhausted',
+        { 'retry-after': String(Math.ceil((until - Date.now()) / 1000)) },
+      );
+    }
+    if (!this.metering) return;
+    const consumer = consumerId
+      ? config?.consumers.find((item) => item.id === consumerId)
+      : undefined;
+    const result = await this.metering.admit(
+      consumer?.id,
+      consumer?.monthlyQuota,
+    );
+    if (result.allowed) {
+      if (result.degraded) this.metricsService.incrementMeteringError();
+      return;
+    }
+    this.metricsService.incrementQuotaRejection('consumer');
+    throw new WsFailure(
+      429,
+      'QUOTA_EXCEEDED',
+      'The monthly request quota for this consumer is exhausted',
+      {
+        'retry-after': String(
+          Math.ceil((result.resetAt.getTime() - Date.now()) / 1000),
+        ),
+      },
+    );
+  }
+  get occupiedConnections() {
+    return this.connections.size + this.detachedAdmissions.size;
+  }
+  onModuleInit() {
+    this.unsubscribe = this.configManager.subscribeConfig(() =>
+      this.reconcile(),
+    );
+  }
+  private policy(
+    route: RouteConfig,
+    service: ServiceConfig,
+    principal?: string,
+  ): string {
+    return createHash('sha256')
+      .update(
+        JSON.stringify({
+          route,
+          certificateTrust: route.plugins?.some(
+            (plugin) =>
+              plugin.name === 'mtls' && plugin.config.required === true,
+          )
+            ? this.configManager.getConfig()?.caCertPem
+            : undefined,
+          supportsWebSocket: service.supportsWebSocket,
+          consumer: principal
+            ? this.configManager
+                .getConfig()
+                ?.consumers.find((item) => item.id === principal)
+            : undefined,
+        }),
+      )
+      .digest('hex');
+  }
+  private current(connection: Connection): boolean {
+    const config = this.configManager.getConfig();
+    const route = config?.routes.find(
+      (item) => item.id === connection.route.id,
+    );
+    const service = config?.services.find(
+      (item) => item.id === connection.service.id,
+    );
+    return !!(
+      this.configManager.getTenantId() === connection.tenantId &&
+      route?.enabled &&
+      service?.supportsWebSocket &&
+      this.policy(route, service, connection.principal) === connection.policy &&
+      (!connection.target ||
+        service.targets.some((item) => item.url === connection.target))
+    );
+  }
+  private reconcile() {
+    for (const connection of this.connections) {
+      if (!this.current(connection))
+        this.fail(
+          connection,
+          new WsFailure(
+            503,
+            'SERVICE_UNAVAILABLE',
+            'WebSocket configuration changed',
+          ),
+        );
+    }
+  }
+  private finish(
+    connection: Connection,
+    destroyClient = true,
+    reason = 'CONNECTION_CLOSED',
+  ) {
+    if (connection.done) return;
+    connection.done = true;
+    clearTimeout(connection.timer);
+    connection.abort.abort();
+    this.connections.delete(connection);
+    if (connection.admitting) this.detachedAdmissions.add(connection);
+    if (connection.collect)
+      connection.socket.removeListener('data', connection.collect);
+    connection.earlyChunks.length = 0;
+    connection.socket.unpipe();
+    connection.upstream?.unpipe();
+    if (!connection.request && !connection.upstream)
+      connection.releaseTarget?.();
+    connection.request?.destroy();
+    connection.upstream?.destroy();
+    if (destroyClient) connection.socket.destroy();
+    if (connection.opened) {
+      this.metricsService.decrementWsConnections();
+      this.logger.log(
+        JSON.stringify({
+          msg: 'WebSocket connection closed',
+          tenantId: connection.tenantId,
+          routeId: connection.route.id,
+          serviceId: connection.service.id,
+          requestId: connection.requestId,
+          reason,
+        }),
+      );
+    }
+  }
+  private fail(connection: Connection, failure: WsFailure) {
+    connection.traceOutcome = failure.status;
+    if (connection.done) return;
+    if (!connection.opened)
+      this.reject(connection.socket, failure, connection.requestId);
+    this.finish(connection, connection.opened, failure.code);
+  }
+  private reject(socket: net.Socket, failure: WsFailure, requestId: string) {
+    if (socket.destroyed || socket.writableEnded) return;
+    const challenge: http.OutgoingHttpHeaders = {};
+    for (const [name, value] of Object.entries(failure.headers)) {
+      if (
+        !['www-authenticate', 'retry-after'].includes(name.toLowerCase()) ||
+        typeof value !== 'string'
+      )
+        continue;
+      try {
+        http.validateHeaderValue(name, value);
+        challenge[name.toLowerCase()] = value;
+      } catch {
+        /* Reject unsafe plugin challenge headers without breaking the error boundary. */
+      }
+    }
+    const body = JSON.stringify({
+      error: failure.code,
+      message: failure.message,
+      requestId,
+    });
+    socket.setTimeout(this.settings.handshakeTimeoutMs, () => socket.destroy());
+    socket.resume();
+    socket.end(
+      wsSerialize(failure.status, {
+        ...challenge,
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+        connection: 'close',
+        'x-request-id': requestId,
+      }) + body,
+      () => socket.destroy(),
+    );
+  }
+  private authenticate(ctx: PluginContext) {
+    const header = ctx.req.headers.authorization;
+    const match =
+      typeof header === 'string' ? /^Bearer ([^\s]+)$/i.exec(header) : null;
+    if (!match) return;
+    const token = match[1];
+    const hash = createHash('sha256').update(token).digest('hex');
+    const consumer = this.configManager
+      .getConfig()
+      ?.consumers.find((item) => item.keyHash === hash);
+    if (consumer) {
+      ctx.req.user = { id: consumer.id, consumerId: consumer.id };
+      return;
+    }
+    try {
+      const payload = jwt.verify(
+        token,
+        this.configService.get('jwt', { infer: true }).secret,
+        { algorithms: ['HS256'] },
+      );
+      if (typeof payload === 'string') return;
+      const subject = payload.sub ?? payload.userId ?? payload.id;
+      if (
+        typeof subject === 'string' &&
+        subject.length > 0 &&
+        subject.length <= 128
+      )
+        ctx.req.user = { id: subject };
+    } catch (error) {
+      if (error instanceof TokenExpiredError)
+        throw new WsFailure(401, 'TOKEN_EXPIRED', 'Access token has expired');
+    }
+  }
+  /** All upgrade errors terminate inside this boundary, never at the raw HTTP server event. */
+  async handleUpgrade(
     req: http.IncomingMessage,
     socket: net.Socket,
     head: Buffer,
-  ): void {
-    const upgrade = req.headers['upgrade'];
-    if (!upgrade || upgrade.toLowerCase() !== 'websocket') {
-      socket.destroy();
-      return;
-    }
-
-    const config = this.configManager.getConfig();
-    if (!config) {
-      this.rejectSocket(socket, 503, 'SERVICE_UNAVAILABLE');
-      return;
-    }
-
-    const url = req.url ?? '/';
-    const path = url.split('?')[0] ?? '/';
-    const method = 'GET'; // WebSocket upgrades are always GET
-    const route = matchRoute(method, path, config.routes);
-
-    if (!route || !route.enabled) {
-      this.rejectSocket(socket, 404, 'SERVICE_NOT_FOUND');
-      return;
-    }
-
-    // Auth check
-    if (route.authRequired) {
-      const userId = this.extractUserId(req);
-      if (!userId) {
-        this.rejectSocket(socket, 401, 'TOKEN_INVALID');
-        return;
-      }
-    }
-
-    const service = config.services.find(
-      (s: ServiceConfig) => s.id === route.serviceId,
+  ): Promise<void> {
+    socket.pause();
+    socket.on('error', () => socket.destroy());
+    const requestId = randomUUID();
+    let connection: Connection | undefined;
+    let traceOutcome = 499;
+    const rootTrace = this.tracing?.startServer(
+      req.headers,
+      requestId,
+      'websocket',
     );
-    if (!service || !service.targets || service.targets.length === 0) {
-      this.rejectSocket(socket, 404, 'SERVICE_NOT_FOUND');
-      return;
-    }
-
-    if (!service.supportsWebSocket) {
-      this.rejectSocket(socket, 400, 'WS_NOT_SUPPORTED');
-      return;
-    }
-
-    const healthyUrls = this.upstreamHealth.getHealthyUrls(service.targets);
-    const targetUrl = this.loadBalancer.selectTarget(
-      service.id,
-      service.targets,
-      healthyUrls,
+    socket.once('close', () =>
+      rootTrace?.end(connection?.traceOutcome ?? traceOutcome),
     );
-
-    const handler = this.getUpgradeHandler(targetUrl, service.timeoutMs);
-
-    this.metricsService.incrementWsConnections();
-
-    socket.once('close', () => {
-      this.metricsService.decrementWsConnections();
-    });
-
-    // Track inbound bytes via the socket data event
-    socket.on('data', (chunk: Buffer) => {
-      this.metricsService.incrementWsBytes('inbound', chunk.length);
-    });
-
-    this.logger.log(
-      JSON.stringify({
-        msg: 'WebSocket connection opened',
-        path,
-        targetUrl,
-        routeId: route.id,
-      }),
-    );
-
-    if (handler.upgrade) {
-      handler.upgrade(req, socket, head);
-    } else {
-      this.rejectSocket(socket, 503, 'WS_UPGRADE_UNAVAILABLE');
-    }
-  }
-
-  private getUpgradeHandler(
-    targetUrl: string,
-    timeoutMs: number,
-  ): RequestHandler<http.IncomingMessage, http.ServerResponse> {
-    const cached = this.upgradeHandlers.get(targetUrl);
-    if (cached) return cached;
-
-    const handler = createProxyMiddleware<
-      http.IncomingMessage,
-      http.ServerResponse
-    >({
-      target: targetUrl,
-      changeOrigin: true,
-      ws: true,
-      xfwd: true,
-      proxyTimeout: timeoutMs,
-      on: {
-        error: (err: Error, _req: http.IncomingMessage, res) => {
-          this.logger.error(
-            JSON.stringify({
-              msg: 'WebSocket proxy error',
-              error: err.message,
-              targetUrl,
-            }),
-          );
-          if (res instanceof net.Socket) {
-            res.destroy();
-          }
-        },
-        open: () => {
-          this.logger.log(
-            JSON.stringify({ msg: 'WebSocket upstream opened', targetUrl }),
-          );
-        },
-        close: () => {
-          this.logger.log(
-            JSON.stringify({ msg: 'WebSocket upstream closed', targetUrl }),
-          );
-        },
-      },
-    });
-
-    this.upgradeHandlers.set(targetUrl, handler);
-    return handler;
-  }
-
-  private extractUserId(req: http.IncomingMessage): string | undefined {
-    const authHeader = req.headers['authorization'];
-    const header = Array.isArray(authHeader) ? authHeader[0] : authHeader;
-    if (!header) {
-      // Also check token query param (common for WebSocket auth)
-      const url = req.url ?? '';
-      const match = url.match(/[?&]token=([^&]+)/);
-      if (!match) return undefined;
-      const token = decodeURIComponent(match[1]);
-      return this.verifyToken(token);
-    }
-    const [scheme, token] = header.split(' ');
-    if (scheme?.toLowerCase() !== 'bearer' || !token) return undefined;
-    return this.verifyToken(token);
-  }
-
-  private verifyToken(token: string): string | undefined {
     try {
-      const secret = this.configService.get('jwt', { infer: true }).secret;
-      const payload = jwt.verify(token, secret) as {
-        sub?: string;
-        userId?: string;
-        id?: string;
+      if (this.stopping)
+        throw new WsFailure(
+          503,
+          'SERVICE_UNAVAILABLE',
+          'Gateway shutting down',
+        );
+      if (this.occupiedConnections >= this.settings.maxConnections)
+        throw new WsFailure(
+          503,
+          'WS_CAPACITY_EXHAUSTED',
+          'WebSocket connection capacity exhausted',
+        );
+      const queryToken = wsHandshake(req, head, this.settings);
+      const key = req.headers['sec-websocket-key'] as string;
+      const protocols = req.headers['sec-websocket-protocol'] as
+        | string
+        | undefined;
+      const extensions = req.headers['sec-websocket-extensions'] as
+        | string
+        | undefined;
+      if (queryToken) req.headers.authorization = `Bearer ${queryToken}`;
+      const config = this.configManager.getConfig();
+      if (!config)
+        throw new WsFailure(503, 'SERVICE_UNAVAILABLE', 'Service unavailable');
+      const route = matchRoute(
+        'GET',
+        (req.url ?? '/').split('?')[0],
+        config.routes,
+      );
+      if (!route)
+        throw new WsFailure(404, 'SERVICE_NOT_FOUND', 'Route not found');
+      const service = config.services.find(
+        (item) => item.id === route.serviceId,
+      );
+      if (!service?.targets.length)
+        throw new WsFailure(404, 'SERVICE_NOT_FOUND', 'Service not found');
+      if (!service.supportsWebSocket)
+        throw new WsFailure(
+          400,
+          'WS_NOT_SUPPORTED',
+          'Service does not support WebSocket',
+        );
+      connection = {
+        socket,
+        requestId,
+        trace: rootTrace,
+        traceOutcome: 499,
+        tenantId: this.configManager.getTenantId(),
+        route,
+        service,
+        policy: this.policy(route, service),
+        opened: false,
+        done: false,
+        admitting: true,
+        abort: new AbortController(),
+        earlyChunks: head.length ? [head] : [],
+        earlyBytes: head.length,
       };
-      return payload.sub ?? payload.userId ?? payload.id;
-    } catch (err) {
-      if (
-        err instanceof TokenExpiredError ||
-        err instanceof JsonWebTokenError
-      ) {
-        return undefined;
+      const active = connection;
+      rootTrace?.set({
+        'http.request.method': 'GET',
+        'http.route': route.pathPattern,
+        'gateway.route.id': route.id,
+        'gateway.service.id': service.id,
+      });
+      this.connections.add(active);
+      socket.once('close', () => this.finish(active));
+      socket.once('end', () => {
+        if (!active.opened) this.finish(active);
+      });
+      active.collect = (chunk: Buffer) => {
+        active.earlyBytes += chunk.length;
+        if (active.earlyBytes > this.settings.maxBufferedHeadBytes) {
+          this.fail(
+            active,
+            new WsFailure(
+              413,
+              'REQUEST_TOO_LARGE',
+              'Buffered upgrade data exceeds configured limit',
+            ),
+          );
+          return;
+        }
+        active.earlyChunks.push(chunk);
+      };
+      socket.on('data', active.collect);
+      // Observe FIN while auth/quota is pending, without unbounded early-frame buffering.
+      socket.resume();
+      const timeout = Math.min(
+        this.settings.handshakeTimeoutMs,
+        service.timeoutMs,
+      );
+      if (!Number.isFinite(timeout) || timeout <= 0)
+        throw new WsFailure(
+          504,
+          'DOWNSTREAM_TIMEOUT',
+          'Invalid WebSocket deadline',
+        );
+      active.timer = setTimeout(
+        () =>
+          this.fail(
+            active,
+            new WsFailure(
+              504,
+              'DOWNSTREAM_TIMEOUT',
+              'WebSocket handshake deadline exceeded',
+            ),
+          ),
+        timeout,
+      );
+      const ctx: PluginContext = {
+        req: Object.assign(req, { requestId }),
+        res: new http.ServerResponse(req),
+        route,
+        service,
+        tenantId: active.tenantId ?? '',
+        requestId,
+        signal: active.abort.signal,
+        logger: {
+          info: (msg) => this.logger.log(msg),
+          warn: (msg) => this.logger.warn(msg),
+          error: (msg) => this.logger.error(msg),
+        },
+      };
+      this.authenticate(ctx);
+      active.principal = ctx.req.user?.id;
+      active.policy = this.policy(route, service, active.principal);
+      const entries =
+        route.graphql && !route.plugins?.some((p) => p.name === 'graphql-guard')
+          ? [...(route.plugins ?? []), { name: 'graphql-guard', config: {} }]
+          : (route.plugins ?? []);
+      const plugins = this.registry.resolve(entries);
+      if (plugins.some((plugin) => !plugin.protocols?.includes('websocket')))
+        throw new WsFailure(
+          500,
+          'WS_PLUGIN_UNSUPPORTED',
+          'A configured plugin does not support WebSocket',
+        );
+      const stopped = await this.runner.runOnRequest(plugins, ctx);
+      if (active.done) return;
+      if (stopped) {
+        let code = 'PLUGIN_REJECTED';
+        let message = 'Request rejected by configured plugin';
+        try {
+          const body = JSON.parse(String(stopped.body));
+          if (typeof body.error === 'string') code = body.error;
+          if (typeof body.message === 'string') message = body.message;
+        } catch {
+          /* Non-JSON plugin bodies are normalized. */
+        }
+        const status =
+          Number.isInteger(stopped.status) &&
+          stopped.status >= 400 &&
+          stopped.status <= 599
+            ? stopped.status
+            : 500;
+        throw new WsFailure(status, code, message, stopped.headers);
       }
-      return undefined;
+      if (route.authRequired && !ctx.req.user && !ctx.authentication)
+        throw new WsFailure(401, 'TOKEN_INVALID', 'Authentication required');
+      const limits = this.configService.get('rateLimit', { infer: true });
+      const identity =
+        ctx.req.user?.id ??
+        (ctx.authentication?.subject
+          ? `${ctx.authentication.method}:${ctx.authentication.subject}`
+          : (socket.remoteAddress ?? 'unknown'));
+      const quota = await this.rateLimit.check(
+        `ws:${ctx.tenantId}:${route.id}:${identity}`,
+        route.rateLimitOverride ??
+          (ctx.req.user || ctx.authentication
+            ? limits.authMax
+            : limits.unauthMax),
+      );
+      if (active.done) return;
+      if (!quota.allowed)
+        throw new WsFailure(429, 'RATE_LIMIT_EXCEEDED', 'Rate limit exceeded');
+      await this.meterUpgrade(ctx.req.user?.consumerId);
+      if (active.done) return;
+      if (!this.current(active))
+        throw new WsFailure(
+          503,
+          'SERVICE_UNAVAILABLE',
+          'WebSocket configuration changed',
+        );
+      const currentService = this.configManager
+        .getConfig()
+        ?.services.find((item) => item.id === service.id);
+      const targets = service.targets.filter((target) =>
+        currentService?.targets.some((current) => current.url === target.url),
+      );
+      const circuit = this.circuits?.admit(service.id);
+      if (circuit && !circuit.allowed) {
+        this.metricsService.incrementCircuitRejection(service.name);
+        throw new WsFailure(
+          503,
+          'CIRCUIT_OPEN',
+          'Upstream service is temporarily unavailable',
+          { 'retry-after': String(circuit.retryAfterSeconds) },
+        );
+      }
+      active.circuit = circuit;
+      try {
+        const lease = this.loadBalancer.acquireTarget(
+          service.id,
+          targets,
+          this.upstreamHealth.getHealthyUrls(targets, service.id),
+          currentService?.unhealthyFallback === true,
+          currentService?.loadBalancing,
+        );
+        active.target = lease.url;
+        active.releaseTarget = lease.release;
+      } catch {
+        throw new WsFailure(
+          503,
+          'NO_HEALTHY_TARGETS',
+          'No healthy upstream targets',
+        );
+      }
+      const url = new URL(active.target);
+      if (
+        !['http:', 'https:'].includes(url.protocol) ||
+        url.username ||
+        url.password ||
+        url.hash
+      )
+        throw new WsFailure(
+          502,
+          'DOWNSTREAM_ERROR',
+          'Invalid WebSocket upstream configuration',
+        );
+      url.pathname =
+        url.pathname.replace(/\/$/, '') + (req.url ?? '/').split('?')[0];
+      url.search = (req.url ?? '/').includes('?')
+        ? (req.url ?? '/').slice((req.url ?? '/').indexOf('?'))
+        : '';
+      const headers: http.OutgoingHttpHeaders = {
+        ...wsHeaders(req.headers),
+        host: url.host,
+        connection: 'Upgrade',
+        upgrade: 'websocket',
+        'sec-websocket-key': key,
+        'sec-websocket-version': '13',
+        'x-request-id': requestId,
+      };
+      active.upstreamTrace = rootTrace?.child('upstream WebSocket tunnel', {
+        'gateway.service.id': service.id,
+        'http.route': route.pathPattern,
+      });
+      if (active.upstreamTrace) {
+        delete headers.traceparent;
+        delete headers.tracestate;
+        delete headers.baggage;
+        Object.assign(headers, active.upstreamTrace.headers());
+      }
+      if (protocols) headers['sec-websocket-protocol'] = protocols;
+      if (extensions) headers['sec-websocket-extensions'] = extensions;
+      if (wsHeaderBytes(headers) > this.settings.maxHeaderBytes)
+        throw new WsFailure(
+          431,
+          'WS_HEADERS_TOO_LARGE',
+          'Upstream headers exceed configured limit',
+        );
+      active.request = (url.protocol === 'https:' ? https : http).request(url, {
+        method: 'GET',
+        headers,
+        agent: false,
+        signal: active.abort.signal,
+        maxHeaderSize: this.settings.maxHeaderBytes,
+      });
+      active.request.once('close', () => {
+        // Closed without a classified outcome (for example cancellation).
+        active.circuit?.settle('neutral');
+        if (!active.upstream) {
+          active.releaseTarget?.();
+          active.upstreamTrace?.end(active.traceOutcome ?? 499);
+        }
+      });
+      active.request.on('error', () => {
+        // Aborts by the gateway (caller left, shutdown) are not upstream faults.
+        if (active.abort.signal.aborted) active.circuit?.settle('neutral');
+        else active.circuit?.record(502);
+        this.fail(
+          active,
+          new WsFailure(
+            502,
+            'DOWNSTREAM_ERROR',
+            'WebSocket upstream unavailable',
+          ),
+        );
+      });
+      active.request.once('response', (response) => {
+        response.destroy();
+        active.circuit?.record(response.statusCode ?? 502);
+        this.fail(
+          active,
+          new WsFailure(
+            502,
+            'DOWNSTREAM_ERROR',
+            'Upstream refused WebSocket upgrade',
+          ),
+        );
+      });
+      active.request.once('upgrade', (response, upstream, upstreamHead) => {
+        active.circuit?.record(101);
+        // Async event callbacks always handle their own rejections.
+        void this.accept(
+          active,
+          ctx,
+          plugins,
+          response,
+          upstream,
+          upstreamHead,
+          key,
+          protocols,
+          extensions,
+        );
+      });
+      active.request.end();
+    } catch (error) {
+      const failure =
+        error instanceof WsFailure
+          ? error
+          : new WsFailure(
+              503,
+              'SERVICE_UNAVAILABLE',
+              'WebSocket admission unavailable',
+            );
+      // Refused before any upstream handshake was sent.
+      if (!connection?.request) connection?.circuit?.settle('neutral');
+      if (connection) this.fail(connection, failure);
+      else {
+        traceOutcome = failure.status;
+        this.reject(socket, failure, requestId);
+      }
+    } finally {
+      if (connection) {
+        connection.admitting = false;
+        this.detachedAdmissions.delete(connection);
+        if (!connection.request && !connection.upstream)
+          connection.upstreamTrace?.end(connection.traceOutcome ?? 499);
+      }
     }
   }
-
-  private rejectSocket(
-    socket: net.Socket,
-    statusCode: number,
-    errorCode: string,
-  ): void {
-    const statusText =
-      statusCode === 404
-        ? 'Not Found'
-        : statusCode === 401
-          ? 'Unauthorized'
-          : statusCode === 400
-            ? 'Bad Request'
-            : 'Service Unavailable';
-    socket.write(
-      `HTTP/1.1 ${statusCode} ${statusText}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n` +
-        JSON.stringify({ error: errorCode }),
+  private async accept(
+    connection: Connection,
+    ctx: PluginContext,
+    plugins: GatewayPlugin[],
+    response: http.IncomingMessage,
+    upstream: net.Socket,
+    upstreamHead: Buffer,
+    key: string,
+    protocols?: string,
+    extensions?: string,
+  ) {
+    if (connection.done) {
+      upstream.destroy();
+      return;
+    }
+    connection.admitting = true;
+    connection.upstream = upstream;
+    upstream.pause();
+    upstream.on('error', () =>
+      this.fail(
+        connection,
+        new WsFailure(
+          502,
+          'DOWNSTREAM_ERROR',
+          'WebSocket upstream unavailable',
+        ),
+      ),
     );
-    socket.destroy();
+    upstream.once('close', () => {
+      connection.releaseTarget?.();
+      connection.upstreamTrace?.end(connection.traceOutcome ?? 499);
+      if (!upstream.readableEnded) this.finish(connection);
+    });
+    try {
+      wsValidateResponse(response, key, protocols, extensions);
+      if (
+        wsHeaderBytes(response.headers) > this.settings.maxHeaderBytes ||
+        upstreamHead.length > this.settings.maxBufferedHeadBytes
+      )
+        throw new WsFailure(
+          502,
+          'DOWNSTREAM_ERROR',
+          'Upstream upgrade exceeds configured limits',
+        );
+      const output = wsHeaders(response.headers);
+      await this.runner.runOnResponse(plugins, {
+        ...ctx,
+        statusCode: 101,
+        headers: output,
+      });
+      if (connection.done) return;
+      if (!this.current(connection))
+        throw new WsFailure(
+          503,
+          'SERVICE_UNAVAILABLE',
+          'WebSocket configuration changed',
+        );
+      Object.assign(output, ctx.res.getHeaders(), {
+        connection: 'Upgrade',
+        upgrade: 'websocket',
+        'sec-websocket-accept': response.headers['sec-websocket-accept'],
+        'x-request-id': ctx.requestId,
+      });
+      // Auth/response plugins cannot replace the negotiated protocol or extensions.
+      for (const name of [
+        'sec-websocket-protocol',
+        'sec-websocket-extensions',
+      ]) {
+        delete output[name];
+        if (response.headers[name]) output[name] = response.headers[name];
+      }
+      if (wsHeaderBytes(output) > this.settings.maxHeaderBytes)
+        throw new WsFailure(
+          502,
+          'DOWNSTREAM_ERROR',
+          'Upgrade headers exceed configured limit',
+        );
+      connection.socket.write(wsSerialize(101, output));
+      connection.opened = true;
+      connection.traceOutcome = 200;
+      connection.trace?.set({ 'http.response.status_code': 101 });
+      connection.upstreamTrace?.set({ 'http.response.status_code': 101 });
+      clearTimeout(connection.timer);
+      this.metricsService.incrementWsConnections();
+      const expired = () => this.finish(connection, true, 'IDLE_TIMEOUT');
+      connection.socket.setTimeout(this.settings.idleTimeoutMs, expired);
+      upstream.setTimeout(this.settings.idleTimeoutMs, expired);
+      connection.socket.on('data', (chunk: Buffer) =>
+        this.metricsService.incrementWsBytes('inbound', chunk.length),
+      );
+      upstream.on('data', (chunk: Buffer) =>
+        this.metricsService.incrementWsBytes('outbound', chunk.length),
+      );
+      // Reinsert upgrade-coalesced bytes so pipe handles them under normal backpressure.
+      connection.socket.pause();
+      if (connection.collect)
+        connection.socket.removeListener('data', connection.collect);
+      if (connection.earlyBytes)
+        connection.socket.unshift(Buffer.concat(connection.earlyChunks));
+      connection.earlyChunks.length = 0;
+      if (upstreamHead.length) upstream.unshift(upstreamHead);
+      connection.socket.pipe(upstream);
+      upstream.pipe(connection.socket);
+      this.logger.log(
+        JSON.stringify({
+          msg: 'WebSocket connection accepted',
+          tenantId: connection.tenantId,
+          routeId: connection.route.id,
+          serviceId: connection.service.id,
+          requestId: ctx.requestId,
+        }),
+      );
+    } catch (error) {
+      this.fail(
+        connection,
+        error instanceof WsFailure
+          ? error
+          : new WsFailure(
+              502,
+              'DOWNSTREAM_ERROR',
+              'Invalid WebSocket upstream response',
+            ),
+      );
+    } finally {
+      connection.admitting = false;
+      this.detachedAdmissions.delete(connection);
+    }
+  }
+  async onModuleDestroy(): Promise<void> {
+    this.stopping = true;
+    this.unsubscribe?.();
+    for (const connection of this.connections)
+      if (!connection.opened)
+        this.fail(
+          connection,
+          new WsFailure(503, 'SERVICE_UNAVAILABLE', 'Gateway shutting down'),
+        );
+    if (this.connections.size && this.settings.shutdownGraceMs) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, this.settings.shutdownGraceMs);
+        const closed = () => {
+          if (!this.connections.size) {
+            clearTimeout(timer);
+            resolve();
+          }
+        };
+        for (const connection of this.connections)
+          connection.socket.once('close', closed);
+      });
+    }
+    // Opaque tunnels drain during grace. Injecting a close frame could interrupt a partial frame.
+    for (const connection of this.connections)
+      this.finish(connection, true, 'GATEWAY_SHUTDOWN');
   }
 }

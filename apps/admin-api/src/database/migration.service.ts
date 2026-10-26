@@ -1,5 +1,31 @@
+import { LOG_RETENTION_SCHEMA } from '../log-retention/log-retention-schema';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { LOG_PRIVACY_SCHEMA } from '../log-privacy/log-privacy-schema';
+import { LOG_EXPORT_SCHEMA } from '../log-export/log-export-schema';
+import { EXPORT_DESTINATION_SCHEMA } from '../log-export/export-destination-schema';
+import { EXPORT_DELIVERY_SCHEMA } from '../log-export/export-delivery-schema';
+import { traceSchemaSql } from './trace-schema';
+import { ALERT_SCHEDULE_SCHEMA, alertSchemaSql } from '../alerts/alert-schema';
+import { tenantSchema } from '../tenants/tenant-schema';
+import { AUTOMATION_TOKEN_SCHEMA } from '../automation-tokens/automation-token-schema';
+import { PORTAL_PUBLIC_SCHEMA, portalSchemaSql } from '../portal/portal-schema';
+import { GATEWAY_PLUGIN_SCHEMA } from '../gateway-plugins/gateway-plugin-schema';
+import {
+  BILLING_PUBLIC_SCHEMA,
+  billingTenantSql,
+} from '../billing/billing-schema';
+import { REGION_SCHEMA } from '../regions/region-schema';
+import { wasmPluginSchemaSql } from '../wasm-plugins/wasm-plugin-schema';
+import { federationSchemaSql } from '../graphql-federation/federation-schema';
+import {
+  ANOMALY_SCHEDULE_SCHEMA,
+  anomalySchemaSql,
+} from '../anomalies/anomaly-schema';
+import {
+  CONSUMER_ROLLUP_PUBLIC_SCHEMA,
+  consumerRollupSchemaSql,
+} from '../proxy-config/consumer-rollup-schema';
 
 @Injectable()
 export class MigrationService implements OnModuleInit {
@@ -12,59 +38,153 @@ export class MigrationService implements OnModuleInit {
   }
 
   private async migrateAllTenants(): Promise<void> {
-    // Public schema migrations
-    try {
-      await this.dataSource.query(
-        `ALTER TABLE IF EXISTS public.tenants ADD COLUMN IF NOT EXISTS "caCertPem" TEXT`,
+    const tenantCount = await this.dataSource.transaction(async (manager) => {
+      // Serialize migrations across admin replicas; release the lock at commit.
+      await manager.query(
+        `SELECT pg_advisory_xact_lock(hashtext('novagate-schema-migrations'))`,
       );
-    } catch (err) {
-      this.logger.warn(
-        `Could not migrate public.tenants: ${(err as Error).message}`,
+      await manager.query(`ALTER TABLE public.tenants
+        ADD COLUMN IF NOT EXISTS "passwordHash" VARCHAR,
+        ADD COLUMN IF NOT EXISTS "resetPasswordToken" VARCHAR,
+        ADD COLUMN IF NOT EXISTS "resetPasswordExpires" TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS "emailVerified" BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS "verifyToken" VARCHAR,
+        ADD COLUMN IF NOT EXISTS "verifyExpires" TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS "caCertPem" TEXT`);
+      await manager.query(`DELETE FROM public.pending_config_updates a USING public.pending_config_updates b
+        WHERE a."tenantId" = b."tenantId" AND (a."createdAt", a.id) < (b."createdAt", b.id)`);
+      await manager.query(`CREATE UNIQUE INDEX IF NOT EXISTS pending_config_updates_tenant_unique
+        ON public.pending_config_updates ("tenantId")`);
+      await manager.query(LOG_EXPORT_SCHEMA);
+      await manager.query(EXPORT_DESTINATION_SCHEMA);
+      await manager.query(LOG_PRIVACY_SCHEMA);
+      await manager.query(LOG_RETENTION_SCHEMA);
+      await manager.query(CONSUMER_ROLLUP_PUBLIC_SCHEMA);
+      await manager.query(EXPORT_DELIVERY_SCHEMA);
+      await manager.query(ALERT_SCHEDULE_SCHEMA);
+      await manager.query(AUTOMATION_TOKEN_SCHEMA);
+      await manager.query(PORTAL_PUBLIC_SCHEMA);
+      await manager.query(GATEWAY_PLUGIN_SCHEMA);
+      await manager.query(ANOMALY_SCHEDULE_SCHEMA);
+      await manager.query(BILLING_PUBLIC_SCHEMA);
+      await manager.query(REGION_SCHEMA);
+      const tenants = await manager.query<Array<{ id: string }>>(
+        `SELECT id FROM public.tenants`,
       );
-    }
-
-    const tenants = await this.dataSource.query<Array<{ id: string }>>(
-      `SELECT id FROM public.tenants`,
-    );
-
-    for (const tenant of tenants) {
-      const schema = `tenant_${tenant.id.replace(/-/g, '_')}`;
-      try {
-        await this.dataSource.query(
+      for (const tenant of tenants) {
+        const schema = tenantSchema(tenant.id);
+        await manager.query(traceSchemaSql(schema));
+        await manager.query(alertSchemaSql(tenant.id));
+        await manager.query(anomalySchemaSql(tenant.id));
+        await manager.query(billingTenantSql(tenant.id));
+        await manager.query(wasmPluginSchemaSql(tenant.id));
+        await manager.query(federationSchemaSql(tenant.id));
+        await manager.query(
+          `ALTER TABLE IF EXISTS ${schema}.metrics_snapshots ALTER COLUMN rps TYPE DOUBLE PRECISION USING rps::double precision`,
+        );
+        await manager.query(
+          `ALTER TABLE IF EXISTS ${schema}.metrics_snapshots ADD COLUMN IF NOT EXISTS "aggregateWindow" JSONB`,
+        );
+        const metricColumns = await manager.query<Array<{ data_type: string }>>(
+          `SELECT data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'metrics_snapshots' AND column_name = 'timestamp'`,
+          [schema],
+        );
+        if (metricColumns[0]?.data_type === 'timestamp without time zone')
+          await manager.query(
+            `ALTER TABLE ${schema}.metrics_snapshots ALTER COLUMN timestamp TYPE TIMESTAMPTZ USING timestamp AT TIME ZONE 'UTC'`,
+          );
+        await manager.query(
+          `CREATE INDEX IF NOT EXISTS metrics_snapshots_time ON ${schema}.metrics_snapshots (timestamp DESC)`,
+        );
+        await manager.query(
+          `ALTER TABLE IF EXISTS ${schema}.request_logs ADD COLUMN IF NOT EXISTS "traceId" VARCHAR(32), ADD COLUMN IF NOT EXISTS "spanId" VARCHAR(16)`,
+        );
+        const logColumns = await manager.query<Array<{ data_type: string }>>(
+          `SELECT data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'request_logs' AND column_name = 'timestamp'`,
+          [schema],
+        );
+        if (logColumns[0]?.data_type === 'timestamp without time zone')
+          await manager.query(
+            `ALTER TABLE ${schema}.request_logs ALTER COLUMN timestamp TYPE TIMESTAMPTZ USING timestamp AT TIME ZONE 'UTC'`,
+          );
+        // Existing rows receive migration time, not a forged request receipt.
+        // Schedules start when saved and never automatically backfill these rows.
+        await manager.query(
+          `ALTER TABLE IF EXISTS ${schema}.request_logs ADD COLUMN IF NOT EXISTS "receivedAt" TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()`,
+        );
+        await manager.query(
+          `CREATE INDEX IF NOT EXISTS request_logs_receipt_cursor ON ${schema}.request_logs ("receivedAt", id)`,
+        );
+        await manager.query(
+          `CREATE INDEX IF NOT EXISTS request_logs_consumer_time ON ${schema}.request_logs ("consumerId", timestamp DESC, id DESC) WHERE "consumerId" IS NOT NULL`,
+        );
+        await manager.query(consumerRollupSchemaSql(tenant.id));
+        await manager.query(
+          `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "loadBalancing" VARCHAR NOT NULL DEFAULT 'weighted-round-robin' CHECK ("loadBalancing" IN ('weighted-round-robin', 'least-connections'))`,
+        );
+        // Existing services keep their behaviour (no breaker) until enabled.
+        await manager.query(
+          `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "circuitBreaker" JSONB`,
+        );
+        await manager.query(
+          `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "healthCheckIntervalMs" INTEGER NOT NULL DEFAULT 10000, ADD COLUMN IF NOT EXISTS "unhealthyFallback" BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS "healthCheckProtocol" VARCHAR NOT NULL DEFAULT 'http', ADD COLUMN IF NOT EXISTS "healthCheckService" VARCHAR NOT NULL DEFAULT ''`,
+        );
+        await manager.query(
+          `CREATE INDEX IF NOT EXISTS request_logs_export_cursor ON ${schema}.request_logs (timestamp, id)`,
+        );
+        await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.routes ADD COLUMN IF NOT EXISTS plugins JSONB`,
         );
-        await this.dataSource.query(
-          `ALTER TABLE IF EXISTS ${schema}.routes DROP COLUMN IF EXISTS "maxBodyBytes"`,
+        await manager.query(
+          `ALTER TABLE IF EXISTS ${schema}.routes ADD COLUMN IF NOT EXISTS "configOrder" INTEGER`,
         );
-        await this.dataSource.query(
-          `ALTER TABLE IF EXISTS ${schema}.routes DROP COLUMN IF EXISTS cors`,
+        const columns = await manager.query<Array<{ column_name: string }>>(
+          `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'routes'`,
+          [schema],
         );
-        await this.dataSource.query(
-          `ALTER TABLE IF EXISTS ${schema}.routes DROP COLUMN IF EXISTS "ipRestriction"`,
-        );
-        // Phase 2: consumer groups
-        await this.dataSource.query(
+        // Convert each legacy policy only when an explicit plugin does not already
+        // own it. Conversion and removal commit together; a failure preserves the
+        // original policy and prevents starting with a partially upgraded schema.
+        for (const [column, plugin, expression] of [
+          [
+            'maxBodyBytes',
+            'request-size-limit',
+            `jsonb_build_object('maxBodyBytes', "maxBodyBytes")`,
+          ],
+          ['cors', 'cors', 'cors::jsonb'],
+          ['ipRestriction', 'ip-restriction', '"ipRestriction"::jsonb'],
+        ]) {
+          if (!columns.some((entry) => entry.column_name === column)) continue;
+          await manager.query(
+            `UPDATE ${schema}.routes
+            SET plugins = COALESCE(plugins, '[]'::jsonb) || jsonb_build_array(jsonb_build_object('name', $1::text, 'config', ${expression}))
+            WHERE "${column}" IS NOT NULL AND NOT EXISTS
+              (SELECT 1 FROM jsonb_array_elements(COALESCE(plugins, '[]'::jsonb)) p WHERE p->>'name' = $1)`,
+            [plugin],
+          );
+          await manager.query(
+            `ALTER TABLE ${schema}.routes DROP COLUMN "${column}"`,
+          );
+        }
+        await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.consumers ADD COLUMN IF NOT EXISTS groups JSONB DEFAULT '[]'::jsonb`,
         );
-        // Protocol expansion: GraphQL guard config + HTTP/2 / WebSocket flags
-        await this.dataSource.query(
+        await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.routes ADD COLUMN IF NOT EXISTS graphql JSONB`,
         );
-        await this.dataSource.query(
+        await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS h2 BOOLEAN DEFAULT false`,
         );
-        await this.dataSource.query(
+        await manager.query(
           `ALTER TABLE IF EXISTS ${schema}.services ADD COLUMN IF NOT EXISTS "supportsWebSocket" BOOLEAN DEFAULT false`,
         );
-      } catch (err) {
-        this.logger.warn(
-          `Could not migrate schema ${schema}: ${(err as Error).message}`,
-        );
+        await manager.query(portalSchemaSql(schema));
       }
-    }
+      return tenants.length;
+    });
 
-    if (tenants.length > 0) {
-      this.logger.log(`Migrated ${tenants.length} tenant schema(s)`);
+    if (tenantCount > 0) {
+      this.logger.log(`Migrated ${tenantCount} tenant schema(s)`);
     }
   }
 }

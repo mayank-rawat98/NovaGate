@@ -11,6 +11,7 @@ services:
       - '5432:5432'
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/001-novagate.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER}']
       interval: 10s
@@ -33,11 +34,25 @@ services:
       - gateway-net
 
   control-plane:
-    image: ghcr.io/mayank-rawat98/control-plane:latest
+    image: ghcr.io/${NOVAGATE_IMAGE_OWNER:-mayank-rawat98}/control-plane:${NOVAGATE_IMAGE_TAG:-latest}
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
       WS_PORT: ${WS_PORT:-8080}
+      METRICS_INGESTION_MAX_CONCURRENT: ${METRICS_INGESTION_MAX_CONCURRENT:-32}
+      METRICS_MAX_ROWS_PER_TENANT: ${METRICS_MAX_ROWS_PER_TENANT:-100000}
+      METRICS_RETENTION_DAYS: ${METRICS_RETENTION_DAYS:-7}
+      METRICS_INGESTION_STATEMENT_TIMEOUT_MS: ${METRICS_INGESTION_STATEMENT_TIMEOUT_MS:-3000}
+      METRICS_INGESTION_LOCK_TIMEOUT_MS: ${METRICS_INGESTION_LOCK_TIMEOUT_MS:-1000}
+      TRACE_INGESTION_MAX_CONCURRENT: ${TRACE_INGESTION_MAX_CONCURRENT:-8}
+      TRACE_MAX_ROWS_PER_TENANT: ${TRACE_MAX_ROWS_PER_TENANT:-100000}
+      TRACE_RETENTION_DAYS: ${TRACE_RETENTION_DAYS:-7}
+      TRACE_INGESTION_STATEMENT_TIMEOUT_MS: ${TRACE_INGESTION_STATEMENT_TIMEOUT_MS:-5000}
+      TRACE_INGESTION_LOCK_TIMEOUT_MS: ${TRACE_INGESTION_LOCK_TIMEOUT_MS:-1000}
+      CONTROL_PLANE_MAX_MESSAGE_BYTES: ${CONTROL_PLANE_MAX_MESSAGE_BYTES:-131072}
+      CONTROL_PLANE_MAX_QUEUED_MESSAGES: ${CONTROL_PLANE_MAX_QUEUED_MESSAGES:-16}
+      CONTROL_PLANE_MAX_QUEUED_BYTES: ${CONTROL_PLANE_MAX_QUEUED_BYTES:-1048576}
+      CONTROL_PLANE_MAX_CONNECTIONS: ${CONTROL_PLANE_MAX_CONNECTIONS:-256}
     depends_on:
       postgres:
         condition: service_healthy
@@ -55,16 +70,45 @@ services:
       - edge # reached by the shared Caddy in the squadup stack
 
   admin-api:
-    image: ghcr.io/mayank-rawat98/admin-api:latest
+    image: ghcr.io/${NOVAGATE_IMAGE_OWNER:-mayank-rawat98}/admin-api:${NOVAGATE_IMAGE_TAG:-latest}
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
       CONTROL_PLANE_INTERNAL_URL: http://control-plane:${WS_PORT:-8080}
+      TRACE_RETENTION_DAYS: ${TRACE_RETENTION_DAYS:-7}
+      METRICS_RETENTION_DAYS: ${METRICS_RETENTION_DAYS:-7}
+      METRICS_STREAM_MAX_CONNECTIONS: ${METRICS_STREAM_MAX_CONNECTIONS:-256}
+      METRICS_STREAM_MAX_PER_TENANT: ${METRICS_STREAM_MAX_PER_TENANT:-8}
+      METRICS_STREAM_MAX_PENDING_READS: ${METRICS_STREAM_MAX_PENDING_READS:-8}
+      METRICS_STREAM_MAX_BUFFERED_BYTES: ${METRICS_STREAM_MAX_BUFFERED_BYTES:-65536}
+      METRICS_STREAM_HEARTBEAT_MS: ${METRICS_STREAM_HEARTBEAT_MS:-15000}
+      METRICS_STREAM_MAX_LIFETIME_MS: ${METRICS_STREAM_MAX_LIFETIME_MS:-300000}
+      METRICS_QUERY_STATEMENT_TIMEOUT_MS: ${METRICS_QUERY_STATEMENT_TIMEOUT_MS:-3000}
+      METRICS_HISTORY_LIMIT: ${METRICS_HISTORY_LIMIT:-600}
+      TRACE_QUERY_MAX_CONCURRENT: ${TRACE_QUERY_MAX_CONCURRENT:-8}
+      TRACE_QUERY_STATEMENT_TIMEOUT_MS: ${TRACE_QUERY_STATEMENT_TIMEOUT_MS:-3000}
+      TRACE_QUERY_MAX_RANGE_DAYS: ${TRACE_QUERY_MAX_RANGE_DAYS:-7}
+      TRACE_QUERY_PAGE_SIZE: ${TRACE_QUERY_PAGE_SIZE:-50}
+      TRACE_QUERY_MAX_DETAIL_SPANS: ${TRACE_QUERY_MAX_DETAIL_SPANS:-256}
       PLATFORM_JWT_SECRET: ${PLATFORM_JWT_SECRET}
       DASHBOARD_URL: ${DASHBOARD_URL}
       SMTP_API_KEY: ${SMTP_API_KEY}
       SMTP_API_BASE_URL: ${SMTP_API_BASE_URL:-https://api.mailtr.co}
       SMTP_FROM: ${SMTP_FROM:-support@novagate.dev}
+      ALERT_CHANNEL_KEYS: ${ALERT_CHANNEL_KEYS:-}
+      ALERT_CHANNEL_ACTIVE_KEY: ${ALERT_CHANNEL_ACTIVE_KEY:-}
+      LOG_EXPORT_DESTINATION_KEYS: ${LOG_EXPORT_DESTINATION_KEYS:-}
+      LOG_EXPORT_HTTP_TRUSTED_ORIGINS: ${LOG_EXPORT_HTTP_TRUSTED_ORIGINS:-[]}
+      LOG_EXPORT_DESTINATION_ACTIVE_KEY: ${LOG_EXPORT_DESTINATION_ACTIVE_KEY:-}
+      ALERT_HTTP_TRUSTED_ORIGINS: ${ALERT_HTTP_TRUSTED_ORIGINS:-[]}
+      OBJECT_STORAGE_ENABLED: ${OBJECT_STORAGE_ENABLED:-false}
+      OBJECT_STORAGE_ENDPOINT: ${OBJECT_STORAGE_ENDPOINT:-http://rustfs:9000}
+      OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-us-east-1}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-novagate-archives}
+      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:-}
+      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:-}
+      OBJECT_STORAGE_CREATE_BUCKET: ${OBJECT_STORAGE_CREATE_BUCKET:-false}
+      LOG_EXPORT_RETENTION_DAYS: ${LOG_EXPORT_RETENTION_DAYS:-7}
       PORT: 3001
     depends_on:
       postgres:
@@ -73,6 +117,9 @@ services:
         condition: service_healthy
       control-plane:
         condition: service_healthy
+      rustfs:
+        condition: service_healthy
+        required: false
     healthcheck:
       test:
         ['CMD-SHELL', 'wget -qO- http://localhost:3001/api/health || exit 1']
@@ -84,8 +131,37 @@ services:
       - gateway-net
       - edge # reached by the shared Caddy in the squadup stack
 
+  rustfs:
+    profiles: ['object-storage']
+    image: rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-}
+      RUSTFS_CONSOLE_ENABLE: 'false'
+      RUSTFS_REGION: ${OBJECT_STORAGE_REGION:-us-east-1}
+      RUSTFS_OBS_LOGGER_LEVEL: warn
+    volumes:
+      - rustfs-data:/data
+      - rustfs-logs:/logs
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'curl',
+          '--fail',
+          '--silent',
+          'http://127.0.0.1:9000/health/ready',
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    networks:
+      - gateway-net
+    restart: unless-stopped
+
   dashboard:
-    image: ghcr.io/mayank-rawat98/dashboard:latest
+    image: ghcr.io/${NOVAGATE_IMAGE_OWNER:-mayank-rawat98}/dashboard:${NOVAGATE_IMAGE_TAG:-latest}
     environment:
       ADMIN_API_URL: http://admin-api:3001
       PORT: 3003
@@ -103,8 +179,31 @@ services:
       - gateway-net
       - edge # reached by the shared Caddy in the squadup stack
 
-networks:
-  gateway-net:
+  # Opt in with `docker compose --profile portal up -d`. Route the shared host
+  # and any workspace custom domains to this service over HTTPS.
+  developer-portal:
+    image: ghcr.io/${NOVAGATE_IMAGE_OWNER:-mayank-rawat98}/developer-portal:${NOVAGATE_IMAGE_TAG:-latest}
+    profiles: ['portal']
+    environment:
+      ADMIN_API_URL: http://admin-api:3001
+      PORT: 3004
+      HOSTNAME: '0.0.0.0'
+      # Hosts that serve every workspace under /w/:tenantId; other hosts are
+      # resolved as workspace custom domains.
+      PORTAL_SHARED_HOSTS: ${PORTAL_SHARED_HOSTS:-localhost,127.0.0.1}
+    depends_on:
+      admin-api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3004/ || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - gateway-net
+      - edge
+
     driver: bridge
 
   # TLS and routing for novagate.dev are handled by the Caddy in the squadup
@@ -120,4 +219,8 @@ volumes:
   postgres-data:
     driver: local
   redis-data:
+    driver: local
+  rustfs-data:
+    driver: local
+  rustfs-logs:
     driver: local

@@ -1,8 +1,576 @@
 import Joi from 'joi';
+import {
+  DEFAULT_UPSTREAM_HEALTH,
+  DEFAULT_GRPC,
+  DEFAULT_WEBSOCKET,
+  DEFAULT_IDENTITY_PROVIDER,
+  DEFAULT_MTLS,
+  DEFAULT_TLS,
+  DEFAULT_HMAC,
+  DEFAULT_GRAPHQL,
+  DEFAULT_BODY_CAPTURE,
+  DEFAULT_HTTP2,
+  DEFAULT_PROXY_HANDLERS,
+  DEFAULT_LOAD_BALANCER,
+  DEFAULT_TRACING,
+  DEFAULT_METRIC_REPORTING,
+  DEFAULT_CONTROL_PLANE,
+  DEFAULT_WASM_PLUGINS,
+  DEFAULT_GRAPHQL_FEDERATION,
+  DEFAULT_THIRD_PARTY_PLUGINS,
+} from './configuration';
+import { BlockList, isIP } from 'net';
+import {
+  MAX_THIRD_PARTY_PLUGINS,
+  THIRD_PARTY_PLUGIN_NAME_PATTERN,
+  THIRD_PARTY_PLUGIN_VERSION_PATTERN,
+  MAX_GATEWAY_INSTANCE_NAME_LENGTH,
+  parseControlPlaneEndpoints,
+} from '@api-gateway/shared-types';
+const controlPlaneEndpoints = Joi.string().custom((value: string, helpers) => {
+  try {
+    parseControlPlaneEndpoints(value);
+    return value;
+  } catch {
+    return helpers.error('any.invalid');
+  }
+}, 'control plane endpoint list');
+const thirdPartyPackages = Joi.string().custom((value: string, helpers) => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return helpers.error('any.invalid');
+  }
+  const valid =
+    Array.isArray(parsed) &&
+    parsed.length <= MAX_THIRD_PARTY_PLUGINS &&
+    new Set(parsed.map((entry) => entry?.package)).size === parsed.length &&
+    parsed.every(
+      (entry) =>
+        entry &&
+        typeof entry === 'object' &&
+        Object.keys(entry).length === 2 &&
+        typeof entry.package === 'string' &&
+        THIRD_PARTY_PLUGIN_NAME_PATTERN.test(entry.package) &&
+        typeof entry.version === 'string' &&
+        THIRD_PARTY_PLUGIN_VERSION_PATTERN.test(entry.version),
+    );
+  return valid ? value : helpers.error('any.invalid');
+}, 'third-party plugin list');
 
 export const configSchema = Joi.object({
+  CONTROL_PLANE_URL: controlPlaneEndpoints,
+  CONTROL_PLANE_URLS: controlPlaneEndpoints,
+  CONTROL_PLANE_FAILBACK_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(86400000)
+    .default(DEFAULT_CONTROL_PLANE.failbackMs),
+  WASM_PLUGIN_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(5)
+    .max(1000)
+    .default(DEFAULT_WASM_PLUGINS.timeoutMs),
+  WASM_PLUGIN_WORKERS: Joi.number()
+    .integer()
+    .min(1)
+    .max(8)
+    .default(DEFAULT_WASM_PLUGINS.workers),
+  WASM_PLUGIN_MAX_QUEUE: Joi.number()
+    .integer()
+    .min(1)
+    .max(1024)
+    .default(DEFAULT_WASM_PLUGINS.maxQueue),
+  WASM_PLUGIN_ALLOW_HTTP: Joi.string().valid('true', 'false').default('false'),
+  WASM_PLUGIN_FAILURE_THRESHOLD: Joi.number()
+    .integer()
+    .min(1)
+    .max(1000)
+    .default(DEFAULT_WASM_PLUGINS.failureThreshold),
+  WASM_PLUGIN_QUARANTINE_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(3600000)
+    .default(DEFAULT_WASM_PLUGINS.quarantineMs),
+  GRAPHQL_FEDERATION_MAX_SUBGRAPH_REQUESTS: Joi.number()
+    .integer()
+    .min(1)
+    .max(1000)
+    .default(DEFAULT_GRAPHQL_FEDERATION.maxSubgraphRequests),
+  GRAPHQL_FEDERATION_MAX_SUBGRAPH_RESPONSE_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(67108864)
+    .default(DEFAULT_GRAPHQL_FEDERATION.maxSubgraphResponseBytes),
+  GRAPHQL_FEDERATION_MAX_CONCURRENT_OPERATIONS: Joi.number()
+    .integer()
+    .min(1)
+    .max(10000)
+    .default(DEFAULT_GRAPHQL_FEDERATION.maxConcurrentOperations),
+  GATEWAY_INSTANCE_NAME: Joi.string()
+    .pattern(/^[\x21-\x7e][\x20-\x7e]*$/)
+    .max(MAX_GATEWAY_INSTANCE_NAME_LENGTH),
+  THIRD_PARTY_PLUGIN_DIR: Joi.string().pattern(/^\//).max(1024),
+  THIRD_PARTY_PLUGINS: thirdPartyPackages.default('[]'),
+  THIRD_PARTY_PLUGIN_HOOK_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(10)
+    .max(60000)
+    .default(DEFAULT_THIRD_PARTY_PLUGINS.hookTimeoutMs),
+  THIRD_PARTY_PLUGIN_FAILURE_THRESHOLD: Joi.number()
+    .integer()
+    .min(1)
+    .max(1000)
+    .default(DEFAULT_THIRD_PARTY_PLUGINS.failureThreshold),
+  THIRD_PARTY_PLUGIN_QUARANTINE_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(3600000)
+    .default(DEFAULT_THIRD_PARTY_PLUGINS.quarantineMs),
+  METRICS_REPORT_INTERVAL_MS: Joi.number()
+    .integer()
+    .min(250)
+    .max(30000)
+    .default(DEFAULT_METRIC_REPORTING.intervalMs),
+  METRICS_REPORT_MAX_BUFFERED_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(1048576)
+    .default(DEFAULT_METRIC_REPORTING.maxBufferedBytes),
+  TRACING_ENABLED: Joi.boolean().default(DEFAULT_TRACING.enabled),
+  TRACING_SAMPLE_RATE: Joi.number()
+    .min(0)
+    .max(1)
+    .default(DEFAULT_TRACING.sampleRate),
+  TRACING_MAX_ACTIVE_SPANS: Joi.number()
+    .integer()
+    .min(1)
+    .max(16384)
+    .default(DEFAULT_TRACING.maxActiveSpans),
+  TRACING_MAX_QUEUED_SPANS: Joi.number()
+    .integer()
+    .min(1)
+    .max(8192)
+    .default(DEFAULT_TRACING.maxQueuedSpans),
+  TRACING_MAX_QUEUE_BYTES: Joi.number()
+    .integer()
+    .min(8192)
+    .max(16777216)
+    .default(DEFAULT_TRACING.maxQueueBytes),
+  TRACING_MAX_BATCH_SPANS: Joi.number()
+    .integer()
+    .min(1)
+    .max(128)
+    .default(DEFAULT_TRACING.maxBatchSpans),
+  TRACING_MAX_BATCH_BYTES: Joi.number()
+    .integer()
+    .min(8192)
+    .max(65536)
+    .default(DEFAULT_TRACING.maxBatchBytes),
+  TRACING_FLUSH_INTERVAL_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(30000)
+    .default(DEFAULT_TRACING.flushIntervalMs),
+  TRACING_MAX_BUFFERED_BYTES: Joi.number()
+    .integer()
+    .min(8192)
+    .max(1048576)
+    .default(DEFAULT_TRACING.maxBufferedBytes),
+
   PORT: Joi.number().default(3000),
-  DATABASE_URL: Joi.string().uri().required(),
+  LOAD_BALANCER_MAX_SERVICES: Joi.number()
+    .integer()
+    .min(1)
+    .max(4096)
+    .default(DEFAULT_LOAD_BALANCER.maxServices),
+  LOAD_BALANCER_MAX_TARGETS_PER_SERVICE: Joi.number()
+    .integer()
+    .min(1)
+    .max(1024)
+    .default(DEFAULT_LOAD_BALANCER.maxTargetsPerService),
+  LOAD_BALANCER_MAX_ACTIVE_RESERVATIONS: Joi.number()
+    .integer()
+    .min(1)
+    .max(65536)
+    .default(DEFAULT_LOAD_BALANCER.maxActiveReservations),
+  PROXY_MAX_HANDLER_CACHE_ENTRIES: Joi.number()
+    .integer()
+    .min(1)
+    .max(4096)
+    .default(DEFAULT_PROXY_HANDLERS.maxCacheEntries),
+  HTTP2_MAX_TARGETS: Joi.number()
+    .integer()
+    .min(1)
+    .max(1024)
+    .default(DEFAULT_HTTP2.maxTargets),
+  HTTP2_MAX_SESSIONS: Joi.number()
+    .integer()
+    .min(1)
+    .max(1024)
+    .default(DEFAULT_HTTP2.maxSessions),
+  HTTP2_MAX_SESSIONS_PER_TARGET: Joi.number()
+    .integer()
+    .min(1)
+    .max(32)
+    .default(DEFAULT_HTTP2.maxSessionsPerTarget),
+  HTTP2_MAX_STREAMS_PER_SESSION: Joi.number()
+    .integer()
+    .min(1)
+    .max(1024)
+    .default(DEFAULT_HTTP2.maxStreamsPerSession),
+  HTTP2_MAX_ACTIVE_REQUESTS: Joi.number()
+    .integer()
+    .min(1)
+    .max(1024)
+    .default(DEFAULT_HTTP2.maxActiveRequests),
+  HTTP2_MAX_RESPONSE_BYTES: Joi.number()
+    .integer()
+    .min(1)
+    .max(67108864)
+    .default(DEFAULT_HTTP2.maxResponseBytes),
+  HTTP2_MAX_HEADER_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(65536)
+    .default(DEFAULT_HTTP2.maxHeaderBytes),
+  HTTP2_CONNECT_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(30000)
+    .default(DEFAULT_HTTP2.connectTimeoutMs),
+  HTTP2_IDLE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(300000)
+    .default(DEFAULT_HTTP2.idleTimeoutMs),
+
+  BODY_CAPTURE_MAX_BODY_BYTES: Joi.number()
+    .integer()
+    .min(1)
+    .max(67108864)
+    .default(DEFAULT_BODY_CAPTURE.maxBodyBytes),
+  BODY_CAPTURE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(30000)
+    .default(DEFAULT_BODY_CAPTURE.timeoutMs),
+  BODY_CAPTURE_MAX_PENDING_REQUESTS: Joi.number()
+    .integer()
+    .min(1)
+    .max(512)
+    .default(DEFAULT_BODY_CAPTURE.maxPendingRequests),
+  GRAPHQL_MAX_QUERY_BYTES: Joi.number()
+    .integer()
+    .min(128)
+    .max(1048576)
+    .default(DEFAULT_GRAPHQL.maxQueryBytes),
+  GRAPHQL_MAX_TOKENS: Joi.number()
+    .integer()
+    .min(16)
+    .max(20000)
+    .default(DEFAULT_GRAPHQL.maxTokens),
+  GRAPHQL_MAX_LEXICAL_DEPTH: Joi.number()
+    .integer()
+    .min(8)
+    .max(256)
+    .default(DEFAULT_GRAPHQL.maxLexicalDepth),
+  GRAPHQL_MAX_BODY_BYTES: Joi.number()
+    .integer()
+    .min(128)
+    .max(16777216)
+    .default(DEFAULT_GRAPHQL.maxBodyBytes),
+  GRAPHQL_BODY_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(30000)
+    .default(DEFAULT_GRAPHQL.bodyTimeoutMs),
+  GRAPHQL_MAX_PENDING_REQUESTS: Joi.number()
+    .integer()
+    .min(1)
+    .max(256)
+    .default(DEFAULT_GRAPHQL.maxPendingRequests),
+  HMAC_MAX_BODY_BYTES: Joi.number()
+    .integer()
+    .min(1)
+    .max(16777216)
+    .default(DEFAULT_HMAC.maxBodyBytes),
+  HMAC_BODY_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(30000)
+    .default(DEFAULT_HMAC.bodyTimeoutMs),
+  HMAC_MAX_PENDING_REQUESTS: Joi.number()
+    .integer()
+    .min(1)
+    .max(256)
+    .default(DEFAULT_HMAC.maxPendingRequests),
+  HMAC_MAX_HEADER_BYTES: Joi.number()
+    .integer()
+    .min(128)
+    .max(16384)
+    .default(DEFAULT_HMAC.maxHeaderBytes),
+  TRUSTED_PROXY_CIDRS: Joi.string()
+    .allow('')
+    .default('')
+    .custom((value: string, helpers) => {
+      try {
+        for (const cidr of value
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter(Boolean)) {
+          const [address, prefix] = cidr.split('/');
+          const version = isIP(address);
+          if (!version || cidr.split('/').length > 2)
+            return helpers.error('any.invalid');
+          const type = version === 4 ? 'ipv4' : 'ipv6';
+          const list = new BlockList();
+          if (prefix === undefined) list.addAddress(address, type);
+          else {
+            if (!/^\d+$/.test(prefix)) return helpers.error('any.invalid');
+            list.addSubnet(address, Number(prefix), type);
+          }
+        }
+        return value;
+      } catch {
+        return helpers.error('any.invalid');
+      }
+    }),
+  MTLS_TRUSTED_PROXY_CIDRS: Joi.string()
+    .allow('')
+    .default('')
+    .custom((value: string, helpers) => {
+      try {
+        for (const cidr of value
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter(Boolean)) {
+          const [address, prefix] = cidr.split('/');
+          const version = isIP(address);
+          if (!version || cidr.split('/').length > 2)
+            return helpers.error('any.invalid');
+          const type = version === 4 ? 'ipv4' : 'ipv6';
+          const list = new BlockList();
+          if (prefix === undefined) list.addAddress(address, type);
+          else {
+            if (Number(prefix) === 0) return helpers.error('any.invalid');
+            if (!/^\d+$/.test(prefix)) return helpers.error('any.invalid');
+            list.addSubnet(address, Number(prefix), type);
+          }
+        }
+        return value;
+      } catch {
+        return helpers.error('any.invalid');
+      }
+    }),
+  HEALTH_DEFAULT_INTERVAL_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(60000)
+    .default(DEFAULT_UPSTREAM_HEALTH.defaultIntervalMs),
+  HEALTH_FAILURE_THRESHOLD: Joi.number()
+    .integer()
+    .min(1)
+    .max(10)
+    .default(DEFAULT_UPSTREAM_HEALTH.failureThreshold),
+  HEALTH_RECOVERY_THRESHOLD: Joi.number()
+    .integer()
+    .min(1)
+    .max(10)
+    .default(DEFAULT_UPSTREAM_HEALTH.recoveryThreshold),
+  HEALTH_PROBE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(10000)
+    .default(DEFAULT_UPSTREAM_HEALTH.probeTimeoutMs),
+  HEALTH_PROBE_CONCURRENCY: Joi.number()
+    .integer()
+    .min(1)
+    .max(64)
+    .default(DEFAULT_UPSTREAM_HEALTH.concurrency),
+  GRPC_ENABLED: Joi.string().valid('true', 'false').default('false'),
+  GRPC_ALLOW_INSECURE: Joi.string().valid('true', 'false').default('false'),
+  GRPC_HOST: Joi.alternatives()
+    .try(Joi.string().ip(), Joi.string().hostname())
+    .default(DEFAULT_GRPC.host),
+  GRPC_PORT: Joi.number()
+    .integer()
+    .min(1)
+    .max(65535)
+    .default(DEFAULT_GRPC.port),
+  GRPC_TLS_CERT_FILE: Joi.string().empty(''),
+  GRPC_TLS_KEY_FILE: Joi.string().empty(''),
+  GRPC_MAX_MESSAGE_BYTES: Joi.number()
+    .integer()
+    .min(1)
+    .max(64 * 1024 * 1024)
+    .default(DEFAULT_GRPC.maxMessageBytes),
+  GRPC_MAX_HEADER_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(65536)
+    .default(DEFAULT_GRPC.maxHeaderBytes),
+  GRPC_MAX_CONCURRENT_STREAMS: Joi.number()
+    .integer()
+    .min(1)
+    .max(1000)
+    .default(DEFAULT_GRPC.maxConcurrentStreams),
+  GRPC_MAX_SESSIONS_PER_TARGET: Joi.number()
+    .integer()
+    .min(1)
+    .max(32)
+    .default(DEFAULT_GRPC.maxSessionsPerTarget),
+  GRPC_MAX_ACTIVE_CALLS: Joi.number()
+    .integer()
+    .min(1)
+    .max(10000)
+    .default(DEFAULT_GRPC.maxActiveCalls),
+  GRPC_DEADLINE_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(3600000)
+    .default(DEFAULT_GRPC.deadlineMs),
+  GRPC_IDLE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(3600000)
+    .default(DEFAULT_GRPC.idleTimeoutMs),
+  GRPC_SHUTDOWN_GRACE_MS: Joi.number()
+    .integer()
+    .min(0)
+    .max(60000)
+    .default(DEFAULT_GRPC.shutdownGraceMs),
+  WS_ALLOW_QUERY_TOKEN: Joi.string().valid('true', 'false').default('false'),
+  WS_HANDSHAKE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(60000)
+    .default(DEFAULT_WEBSOCKET.handshakeTimeoutMs),
+  WS_MAX_CONNECTIONS: Joi.number()
+    .integer()
+    .min(1)
+    .max(10000)
+    .default(DEFAULT_WEBSOCKET.maxConnections),
+  WS_MAX_HEADER_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(65536)
+    .default(DEFAULT_WEBSOCKET.maxHeaderBytes),
+  WS_MAX_BUFFERED_HEAD_BYTES: Joi.number()
+    .integer()
+    .min(0)
+    .max(1048576)
+    .default(DEFAULT_WEBSOCKET.maxBufferedHeadBytes),
+  WS_IDLE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(3600000)
+    .default(DEFAULT_WEBSOCKET.idleTimeoutMs),
+  WS_SHUTDOWN_GRACE_MS: Joi.number()
+    .integer()
+    .min(0)
+    .max(60000)
+    .default(DEFAULT_WEBSOCKET.shutdownGraceMs),
+  IDENTITY_PROVIDER_ALLOW_INSECURE_HTTP: Joi.string()
+    .valid('true', 'false')
+    .default('false'),
+  IDENTITY_PROVIDER_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(60000)
+    .default(DEFAULT_IDENTITY_PROVIDER.timeoutMs),
+  IDENTITY_PROVIDER_MAX_RESPONSE_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(1048576)
+    .default(DEFAULT_IDENTITY_PROVIDER.maxResponseBytes),
+  IDENTITY_PROVIDER_MAX_HEADER_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(65536)
+    .default(DEFAULT_IDENTITY_PROVIDER.maxHeaderBytes),
+  IDENTITY_PROVIDER_MAX_TOKEN_BYTES: Joi.number()
+    .integer()
+    .min(128)
+    .max(65536)
+    .default(DEFAULT_IDENTITY_PROVIDER.maxTokenBytes),
+  IDENTITY_PROVIDER_MAX_PENDING_REQUESTS: Joi.number()
+    .integer()
+    .min(1)
+    .max(10000)
+    .default(DEFAULT_IDENTITY_PROVIDER.maxPendingRequests),
+  IDENTITY_PROVIDER_MAX_CONCURRENT_FETCHES: Joi.number()
+    .integer()
+    .min(1)
+    .max(256)
+    .default(DEFAULT_IDENTITY_PROVIDER.maxConcurrentFetches),
+  IDENTITY_PROVIDER_MAX_CACHE_ENTRIES: Joi.number()
+    .integer()
+    .min(1)
+    .max(4096)
+    .default(DEFAULT_IDENTITY_PROVIDER.maxCacheEntries),
+  IDENTITY_PROVIDER_MAX_JWKS_KEYS: Joi.number()
+    .integer()
+    .min(1)
+    .max(256)
+    .default(DEFAULT_IDENTITY_PROVIDER.maxJwksKeys),
+  IDENTITY_PROVIDER_JWKS_CACHE_TTL_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(86400000)
+    .default(DEFAULT_IDENTITY_PROVIDER.jwksCacheTtlMs),
+  IDENTITY_PROVIDER_JWKS_REFRESH_COOLDOWN_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(60000)
+    .default(DEFAULT_IDENTITY_PROVIDER.jwksRefreshCooldownMs),
+  IDENTITY_PROVIDER_INTROSPECTION_CACHE_TTL_MS: Joi.number()
+    .integer()
+    .min(0)
+    .max(300000)
+    .default(DEFAULT_IDENTITY_PROVIDER.introspectionCacheTtlMs),
+  IDENTITY_PROVIDER_OUTBOUND_CACHE_TTL_MS: Joi.number()
+    .integer()
+    .min(0)
+    .max(86400000)
+    .default(DEFAULT_IDENTITY_PROVIDER.outboundCacheTtlMs),
+  TLS_HANDSHAKE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(100)
+    .max(60000)
+    .default(DEFAULT_TLS.handshakeTimeoutMs),
+  HTTP_TLS_MAX_CONNECTIONS: Joi.number()
+    .integer()
+    .min(1)
+    .max(100000)
+    .default(DEFAULT_TLS.maxConnections),
+  HTTP_TLS_CERT_FILE: Joi.string(),
+  HTTP_TLS_KEY_FILE: Joi.string(),
+  HTTP_TLS_CLIENT_CA_FILE: Joi.string(),
+  HTTP_TLS_CRL_FILE: Joi.string(),
+  GRPC_TLS_CLIENT_CA_FILE: Joi.string(),
+  GRPC_TLS_CRL_FILE: Joi.string(),
+  MTLS_MAX_CERTIFICATE_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(65536)
+    .default(DEFAULT_MTLS.maxCertificateBytes),
+  MTLS_MAX_CA_BUNDLE_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(DEFAULT_MTLS.maxCaBundleBytes)
+    .default(DEFAULT_MTLS.maxCaBundleBytes),
+  MTLS_MAX_CHAIN_DEPTH: Joi.number()
+    .integer()
+    .min(1)
+    .max(16)
+    .default(DEFAULT_MTLS.maxChainDepth),
+  MTLS_MAX_IDENTITY_BYTES: Joi.number()
+    .integer()
+    .min(128)
+    .max(16384)
+    .default(DEFAULT_MTLS.maxIdentityBytes),
   REDIS_URL: Joi.string().uri().required(),
   JWT_SECRET: Joi.string().min(32).required(),
   PROXY_TIMEOUT_MS: Joi.number().default(10000),
@@ -10,4 +578,25 @@ export const configSchema = Joi.object({
   RATE_LIMIT_WINDOW_MS: Joi.number().default(60000),
   RATE_LIMIT_UNAUTH_MAX: Joi.number().default(100),
   RATE_LIMIT_AUTH_MAX: Joi.number().default(500),
-}).required();
+})
+  .and('GRPC_TLS_CERT_FILE', 'GRPC_TLS_KEY_FILE')
+  .and('HTTP_TLS_CERT_FILE', 'HTTP_TLS_KEY_FILE')
+  .with('HTTP_TLS_CLIENT_CA_FILE', ['HTTP_TLS_CERT_FILE', 'HTTP_TLS_KEY_FILE'])
+  .with('HTTP_TLS_CRL_FILE', 'HTTP_TLS_CLIENT_CA_FILE')
+  .with('GRPC_TLS_CLIENT_CA_FILE', ['GRPC_TLS_CERT_FILE', 'GRPC_TLS_KEY_FILE'])
+  .with('GRPC_TLS_CRL_FILE', 'GRPC_TLS_CLIENT_CA_FILE')
+  .custom((value, helpers) => {
+    if (
+      JSON.parse(value.THIRD_PARTY_PLUGINS ?? '[]').length > 0 &&
+      !value.THIRD_PARTY_PLUGIN_DIR
+    )
+      return helpers.error('any.invalid');
+    if (
+      value.GRPC_ENABLED === 'true' &&
+      value.GRPC_ALLOW_INSECURE !== 'true' &&
+      !value.GRPC_TLS_CERT_FILE
+    )
+      return helpers.error('any.invalid');
+    return value;
+  })
+  .required();

@@ -1,0 +1,7 @@
+{
+  "name": "@novagate-examples/header-stamp",
+  "version": "1.0.0",
+  "description": "Example NovaGate third-party plugin: stamps requests and responses",
+  "main": "index.js",
+  "license": "MIT"
+}

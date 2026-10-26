@@ -10,6 +10,13 @@ export type WsMessageType =
   | 'health'
   | 'errors'
   | 'metrics'
+  | 'traces'
+  | 'plugins.status'
+  | 'circuit.state'
+  | 'usage.report'
+  | 'wasm.fetch'
+  | 'wasm.module'
+  | 'wasm.status'
   | 'ack';
 
 export interface BaseWsMessage {
@@ -22,6 +29,12 @@ export interface AuthMessage extends BaseWsMessage {
   type: 'auth';
   payload: {
     apiKey: string;
+    /** Random per gateway process; identifies it across regions. */
+    instanceId?: string;
+    /** Operator label (GATEWAY_INSTANCE_NAME or the host name). */
+    instanceName?: string;
+    /** Configuration version the gateway is serving, if any. */
+    configVersion?: number | null;
   };
 }
 
@@ -31,6 +44,8 @@ export interface AuthOkMessage extends BaseWsMessage {
     tenantId: string;
     config: TenantConfig;
     configVersion: number;
+    /** Region of the control plane that answered, when it has one. */
+    controlPlaneRegion?: string;
   };
 }
 
@@ -62,6 +77,58 @@ export interface LogsMessage extends BaseWsMessage {
   payload: RequestLog[];
 }
 
+export const MAX_TRACE_BATCH_SPANS = 128;
+export const MAX_TRACE_BATCH_BYTES = 65536;
+export const MAX_TRACE_SPAN_BYTES = 8192;
+export const MAX_TRACE_ATTRIBUTES = 16;
+export const MAX_TRACE_ATTRIBUTE_BYTES = 256;
+export const TRACE_ATTRIBUTE_KEYS = [
+  'http.request.method',
+  'http.route',
+  'http.response.status_code',
+  'gateway.route.id',
+  'gateway.service.id',
+  'gateway.retry.count',
+  'gateway.protocol',
+  'gateway.request.id',
+  'gateway.incomplete',
+  'rpc.system.name',
+  'rpc.service',
+  'rpc.method',
+  'rpc.grpc.status_code',
+] as const;
+export interface TraceSpan {
+  traceId: string;
+  spanId: string;
+  parentSpanId?: string;
+  name: string;
+  kind: 'server' | 'client' | 'internal';
+  timestamp: string;
+  durationMs: number;
+  status: 'unset' | 'ok' | 'error';
+  attributes: Record<string, string | number | boolean>;
+}
+export interface TracesMessage extends BaseWsMessage {
+  type: 'traces';
+  payload: TraceSpan[];
+}
+
+/** Third-party plugin inventory; replaces the previous report for the tenant. */
+export interface PluginsStatusMessage extends BaseWsMessage {
+  type: 'plugins.status';
+  payload: import('./third-party-plugins.ts').GatewayPluginReport;
+}
+
+export interface CircuitStateMessage extends BaseWsMessage {
+  type: 'circuit.state';
+  payload: import('./circuit-breaker.ts').CircuitStateReport;
+}
+
+export interface UsageReportMessage extends BaseWsMessage {
+  type: 'usage.report';
+  payload: import('./billing.ts').UsageReport;
+}
+
 export interface HealthMessage extends BaseWsMessage {
   type: 'health';
   payload: HealthSnapshot[];
@@ -73,6 +140,109 @@ export interface ErrorsMessage extends BaseWsMessage {
   payload: ErrorEvent[];
 }
 
+export interface MetricsSnapshot {
+  rps: number;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  errorRate: number;
+  timestamp: string;
+}
+export const MAX_METRIC_RATE = 1000000000;
+export const MAX_METRIC_LATENCY_MS = 3600000;
+export const MAX_METRIC_WINDOW_MS = 60000;
+export const METRIC_LATENCY_BUCKETS = [
+  0, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000,
+  300000, 3600000,
+] as const;
+
+/** Counts for one completed reporting interval; absent on legacy reports. */
+export interface MetricWindow {
+  windowMs: number;
+  requestCount: number;
+  errorCount: number;
+  timeoutCount: number;
+  latencyCounts: number[];
+}
+export interface MetricReportSnapshot extends MetricsSnapshot {
+  window: MetricWindow;
+}
+export function metricPercentile(
+  counts: readonly number[],
+  requestCount: number,
+  percentile: 0.5 | 0.95 | 0.99,
+): number {
+  if (!requestCount) return 0;
+  const rank = Math.ceil(requestCount * percentile);
+  let cumulative = 0;
+  for (let i = 0; i < METRIC_LATENCY_BUCKETS.length; i++) {
+    cumulative += counts[i];
+    if (cumulative >= rank) return METRIC_LATENCY_BUCKETS[i];
+  }
+  return MAX_METRIC_LATENCY_MS;
+}
+export function validateMetricWindow(input: unknown): MetricWindow {
+  if (!input || typeof input !== 'object' || Array.isArray(input))
+    throw new Error('Invalid metric window');
+  const value = input as Record<string, unknown>;
+  const fields = [
+    'windowMs',
+    'requestCount',
+    'errorCount',
+    'timeoutCount',
+    'latencyCounts',
+  ];
+  if (
+    Object.keys(value).length !== fields.length ||
+    Object.keys(value).some((key) => !fields.includes(key))
+  )
+    throw new Error('Invalid metric window');
+  const { windowMs, requestCount, errorCount, timeoutCount, latencyCounts } =
+    value;
+  if (
+    typeof windowMs !== 'number' ||
+    !Number.isFinite(windowMs) ||
+    windowMs < 1 ||
+    windowMs > MAX_METRIC_WINDOW_MS
+  )
+    throw new Error('Invalid metric window duration');
+  if (
+    [requestCount, errorCount, timeoutCount].some(
+      (count) =>
+        typeof count !== 'number' ||
+        !Number.isSafeInteger(count) ||
+        count < 0 ||
+        count > MAX_METRIC_RATE,
+    )
+  )
+    throw new Error('Invalid metric window count');
+  const requests = requestCount as number;
+  const errors = errorCount as number;
+  const timeouts = timeoutCount as number;
+  if (
+    errors > requests ||
+    timeouts > errors ||
+    !Array.isArray(latencyCounts) ||
+    latencyCounts.length !== METRIC_LATENCY_BUCKETS.length ||
+    Array.from(latencyCounts).some(
+      (count) =>
+        typeof count !== 'number' ||
+        !Number.isSafeInteger(count) ||
+        count < 0 ||
+        count > MAX_METRIC_RATE,
+    ) ||
+    latencyCounts.reduce((sum, count) => sum + count, 0) !== requests
+  )
+    throw new Error('Invalid metric window histogram');
+  return {
+    windowMs,
+    requestCount: requests,
+    errorCount: errors,
+    timeoutCount: timeouts,
+    latencyCounts: [...latencyCounts],
+  };
+}
+
 export interface MetricsMessage extends BaseWsMessage {
   type: 'metrics';
   payload: {
@@ -81,6 +251,69 @@ export interface MetricsMessage extends BaseWsMessage {
     p95: number;
     p99: number;
     errorRate: number;
+    window?: MetricWindow;
+  };
+}
+
+export function validateMetricPayload(
+  payload: unknown,
+): MetricsMessage['payload'] {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload))
+    throw new Error('Invalid metric snapshot');
+  const value = payload as Record<string, unknown>;
+  const keys = ['rps', 'p50', 'p95', 'p99', 'errorRate'];
+  if (
+    Object.keys(value).some((key) => ![...keys, 'window'].includes(key)) ||
+    keys.some(
+      (key) =>
+        typeof value[key] !== 'number' ||
+        !Number.isFinite(value[key]) ||
+        (value[key] as number) < 0,
+    )
+  )
+    throw new Error('Invalid metric snapshot');
+  const window = Object.hasOwn(value, 'window')
+    ? validateMetricWindow(value.window)
+    : undefined;
+  if (window) {
+    const expectedRate = Math.min(
+      MAX_METRIC_RATE,
+      (window.requestCount * 1000) / window.windowMs,
+    );
+    const expectedErrors = window.requestCount
+      ? window.errorCount / window.requestCount
+      : 0;
+    if (
+      Math.abs((value.rps as number) - expectedRate) >
+        Number.EPSILON * Math.max(1, expectedRate) * 8 ||
+      Math.abs((value.errorRate as number) - expectedErrors) >
+        Number.EPSILON * 8 ||
+      (value.p50 as number) !==
+        metricPercentile(window.latencyCounts, window.requestCount, 0.5) ||
+      (value.p95 as number) !==
+        metricPercentile(window.latencyCounts, window.requestCount, 0.95) ||
+      (value.p99 as number) !==
+        metricPercentile(window.latencyCounts, window.requestCount, 0.99)
+    )
+      throw new Error('Invalid metric window summary');
+  }
+  if (
+    (value.rps as number) > MAX_METRIC_RATE ||
+    (value.errorRate as number) > 1 ||
+    ['p50', 'p95', 'p99'].some(
+      (key) => (value[key] as number) > MAX_METRIC_LATENCY_MS,
+    ) ||
+    (value.p50 as number) > (value.p95 as number) ||
+    (value.p95 as number) > (value.p99 as number)
+  )
+    throw new Error('Invalid metric snapshot');
+  return {
+    rps: value.rps as number,
+    p50: value.p50 as number,
+    p95: value.p95 as number,
+    p99: value.p99 as number,
+    errorRate: value.errorRate as number,
+    ...(window ? { window } : {}),
   };
 }
 
@@ -90,6 +323,7 @@ export interface AckMessage extends BaseWsMessage {
 }
 
 export interface TenantConfig {
+  logPrivacy?: import('./log-privacy.ts').LogPrivacyPolicy;
   routes: RouteConfig[];
   services: ServiceConfig[];
   consumers: ConsumerConfig[];
@@ -99,6 +333,24 @@ export interface TenantConfig {
     authMax: number;
   };
   caCertPem?: string;
+  /** Third-party plugins the workspace disabled; routes using them fail closed. */
+  disabledPlugins?: string[];
+  /** Set while the workspace's monthly plan quota is exhausted. */
+  suspended?: import('./billing.ts').TenantSuspension | null;
+  /** Control plane region gateways should prefer, when they know its endpoint. */
+  preferredRegion?: string | null;
+  /** Installed WebAssembly plugins; modules are fetched by digest. */
+  wasmPlugins?: import('./wasm-plugins.ts').WasmPluginConfig[];
+  /** Composed GraphQL supergraphs for the graphql-federation plugin. */
+  federatedGraphs?: import('./graphql-federation.ts').FederatedGraphConfig[];
+}
+
+export const MAX_GRAPHQL_POLICY_DEPTH = 100;
+export const MAX_GRAPHQL_POLICY_COMPLEXITY = 100000;
+export interface GraphqlPolicy {
+  maxDepth?: number;
+  maxComplexity?: number;
+  introspectionAllowed?: boolean;
 }
 
 export interface RouteConfig {
@@ -119,12 +371,14 @@ export interface RouteConfig {
     allow?: string[];
     deny?: string[];
   };
-  graphql?: {
-    maxDepth?: number;
-    maxComplexity?: number;
-    introspectionAllowed?: boolean;
-  };
+  graphql?: GraphqlPolicy | null;
+  /** Developer portal publication; administration only, never sent to gateways. */
+  portal?: import('./portal.ts').RoutePortalMetadata | null;
 }
+
+export const MAX_SERVICE_TARGETS = 256;
+export const MAX_SERVICE_TARGET_URL_BYTES = 2048;
+export const MAX_SERVICE_TARGET_WEIGHT = 100;
 
 export interface ServiceTarget {
   url: string;
@@ -136,9 +390,16 @@ export interface ServiceConfig {
   name: string;
   targets: ServiceTarget[];
   healthCheckPath: string;
+  healthCheckIntervalMs?: number;
+  healthCheckProtocol?: 'http' | 'grpc';
+  healthCheckService?: string;
+  unhealthyFallback?: boolean;
   timeoutMs: number;
   supportsWebSocket?: boolean;
+  loadBalancing?: 'weighted-round-robin' | 'least-connections';
   h2?: boolean;
+  /** Absent or null: no breaker (services created before roadmap 6.2). */
+  circuitBreaker?: import('./circuit-breaker.ts').CircuitBreakerConfig | null;
 }
 
 export interface ConsumerConfig {
@@ -147,10 +408,23 @@ export interface ConsumerConfig {
   keyHash: string;
   rateLimitTier: 'unauthenticated' | 'authenticated' | string;
   groups?: string[];
+  /** Requests per UTC calendar month; null or absent is unlimited. */
+  monthlyQuota?: number | null;
+}
+
+/** Registered consumer attribution is UUID-only; unrelated principals have no consumer ID. */
+export function canonicalConsumerId(value: unknown): string | undefined {
+  return typeof value === 'string' &&
+    /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(value)
+    ? value.toLowerCase()
+    : undefined;
 }
 
 export interface RequestLog {
+  traceId?: string;
+  spanId?: string;
   id: string;
+  /** Registered consumer UUID, independent of JWT/provider authentication identity. */
   consumerId?: string;
   method: string;
   path: string;
@@ -167,7 +441,7 @@ export interface RequestLog {
 
 export interface HealthSnapshot {
   serviceId: string;
-  status: 'healthy' | 'unhealthy' | 'unknown';
+  status: 'healthy' | 'degraded' | 'unhealthy' | 'unknown';
   latencyMs?: number;
   checkedAt: string;
   errorMessage?: string;
@@ -182,4 +456,23 @@ export interface ErrorEvent {
   path?: string;
   statusCode?: number;
   timestamp: string;
+}
+
+export interface TraceSummary {
+  traceId: string;
+  timestamp: string;
+  durationMs: number;
+  spanCount: number;
+  status: TraceSpan['status'];
+  route: string;
+  requestId?: string;
+}
+export interface TraceListResponse {
+  traces: TraceSummary[];
+  nextCursor: string | null;
+}
+export interface TraceDetailResponse {
+  traceId: string;
+  spans: TraceSpan[];
+  truncated: boolean;
 }

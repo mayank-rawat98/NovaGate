@@ -541,3 +541,392 @@ summary svg {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* NovaGate workspace: soft clay surfaces with crisp, readable controls. */
+.nova-workspace {
+  --nova-ink: #19313b;
+  --nova-muted: #526773;
+  --nova-accent: #4944b8;
+  --nova-border: #dce4e2;
+  display: grid;
+  grid-template-columns: 252px minmax(0, 1fr);
+  min-height: 100dvh;
+  color: var(--nova-ink);
+  background: #f5f7f4;
+}
+.nova-sidebar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  padding: 25px 18px 16px;
+  border-right: 1px solid var(--nova-border);
+  background: #fdfefd;
+}
+.nova-brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 7px;
+  font-size: 20px;
+  font-weight: 750;
+  letter-spacing: -0.7px;
+}
+.nova-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 43px;
+  height: 43px;
+  flex-shrink: 0;
+  border-radius: 15px;
+  color: #fff;
+  background: linear-gradient(145deg, #6864ce, #4540ab);
+  box-shadow:
+    inset 2px 2px 3px #ffffff55,
+    inset -2px -3px 4px #30297b66,
+    0 5px 10px #4843a823;
+}
+.nova-brand-caption {
+  display: block;
+  margin-top: 1px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  color: var(--nova-muted);
+}
+.nova-workspace-card {
+  margin-top: 26px;
+  padding: 15px;
+  border: 1px solid #dbe8e3;
+  border-radius: 17px;
+  background: linear-gradient(130deg, #f0f8f2, #f9faf6);
+  box-shadow:
+    inset 2px 2px 4px #fff,
+    0 4px 10px #183d2510;
+}
+.nova-eyebrow,
+.nova-nav-group {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.3px;
+  color: var(--nova-muted);
+}
+.nova-navigation {
+  flex: 1;
+  overflow-y: auto;
+  margin-top: 14px;
+}
+.nova-nav-group {
+  margin: 20px 12px 7px;
+}
+.nova-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 43px;
+  margin: 3px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--nova-muted);
+  transition:
+    background 150ms ease,
+    color 150ms ease;
+}
+.nova-nav-link:hover {
+  background: #f0f3f3;
+  color: var(--nova-ink);
+}
+.nova-nav-active {
+  color: #403a9b;
+  background: #eeecfc;
+  box-shadow:
+    inset 1px 1px 2px #fff,
+    0 2px 4px #4b448a0b;
+}
+.nova-nav-active:hover {
+  background: #e6e3fa;
+  color: #403a9b;
+}
+.nova-nav-dot {
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--nova-accent);
+}
+.nova-sidebar-footer {
+  padding-top: 16px;
+  margin-top: 16px;
+  border-top: 1px solid var(--nova-border);
+}
+.nova-docs-link {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 0 12px 10px;
+  font-size: 11px;
+  color: var(--nova-muted);
+}
+.nova-main-column {
+  min-width: 0;
+}
+.nova-main-content {
+  width: 100%;
+  max-width: 1440px;
+  margin-inline: auto;
+  min-height: 100dvh;
+}
+.nova-mobile-header {
+  display: none;
+}
+.nova-menu-button,
+.nova-menu-close {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: #f1f3f3;
+  color: var(--nova-ink);
+}
+.nova-menu-close {
+  position: absolute;
+  right: 13px;
+  top: 21px;
+}
+.nova-mobile-dialog {
+  inset: 0 auto 0 0;
+  width: min(88vw, 320px);
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  padding: 25px 18px 16px;
+  border: 0;
+  border-radius: 0 24px 24px 0;
+  color: var(--nova-ink);
+  background: #fdfefd;
+  box-shadow: 14px 0 60px #172b3640;
+}
+.nova-mobile-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.nova-mobile-dialog::backdrop {
+  background: #16262e66;
+  backdrop-filter: blur(3px);
+}
+.nova-skip-link {
+  position: fixed;
+  left: 16px;
+  top: -100px;
+  z-index: 100;
+  padding: 12px 18px;
+  border-radius: 12px;
+  color: #fff;
+  background: #38318b;
+}
+.nova-skip-link:focus {
+  top: 12px;
+}
+.nova-workspace
+  :is(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid #6557cb;
+  outline-offset: 3px;
+}
+.nova-workspace
+  :is(input:not([type='checkbox']):not([type='radio']), select, textarea) {
+  border-color: var(--nova-border);
+  border-radius: 10px;
+  color: var(--nova-ink);
+  background-color: #fff;
+}
+.nova-workspace input::placeholder,
+.nova-workspace textarea::placeholder {
+  color: #526773;
+}
+.nova-workspace :is(.bg-blue-600, .bg-indigo-600) {
+  background-color: var(--nova-accent);
+  box-shadow:
+    inset 0 1px 1px #ffffff40,
+    0 3px 7px #4944b822;
+}
+.nova-workspace :is(.hover\:bg-blue-700, .hover\:bg-indigo-700):hover {
+  background-color: #38318b;
+}
+.nova-workspace .text-blue-600,
+.nova-workspace .text-blue-700 {
+  color: #4944b8;
+}
+.nova-workspace .text-gray-400,
+.nova-workspace .text-gray-500 {
+  color: #526773;
+}
+.nova-workspace .rounded-xl.border.bg-white {
+  border-color: var(--nova-border);
+  border-radius: 20px;
+  box-shadow:
+    inset 0 1px 2px #fff,
+    0 5px 16px #24463407;
+}
+.nova-workspace table {
+  min-width: 600px;
+}
+.nova-workspace th {
+  color: #526773;
+}
+.nova-workspace thead .bg-gray-50 {
+  background-color: #f8faf8;
+}
+.nova-workspace tbody tr:hover {
+  background-color: #f8faf8;
+}
+.nova-overview-hero {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  overflow: hidden;
+  gap: 24px;
+  padding: 30px;
+  margin-bottom: 24px;
+  border: 1px solid #dfe4ed;
+  border-radius: 26px;
+  background: linear-gradient(112deg, #f1effc, #edf7f1 70%, #f4f6ed);
+  box-shadow:
+    inset 1px 2px 4px #ffffffd9,
+    0 7px 20px #31346508;
+}
+.nova-hero-art {
+  position: relative;
+  width: 160px;
+  height: 120px;
+  flex-shrink: 0;
+}
+.nova-clay-orb {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 74px;
+  height: 74px;
+  border-radius: 25px;
+  color: #fff;
+  background: linear-gradient(135deg, #8078db, #5247ad);
+  box-shadow:
+    inset 5px 5px 9px #b7aff3,
+    inset -5px -6px 10px #3b32796b,
+    9px 14px 18px #584a8a30;
+  transform: rotate(-12deg);
+}
+.nova-clay-orb:nth-child(2) {
+  width: 57px;
+  height: 57px;
+  right: 4px;
+  top: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #8bceb4, #2e8d72);
+  box-shadow:
+    inset 4px 4px 7px #b1e6ca,
+    inset -4px -4px 8px #1b71596b,
+    7px 10px 18px #43846e30;
+  transform: none;
+}
+.nova-clay-orb:nth-child(3) {
+  width: 30px;
+  height: 30px;
+  left: 25px;
+  bottom: 0;
+  border-radius: 11px;
+  background: linear-gradient(135deg, #ffcfa6, #e49861);
+  box-shadow:
+    inset 2px 2px 4px #ffe7cb,
+    inset -2px -2px 4px #b9654055,
+    5px 7px 12px #8a5f4324;
+  transform: rotate(18deg);
+}
+.nova-stat-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 14px;
+  border-radius: 12px;
+  color: #4944b8;
+  background: #eeecfa;
+  box-shadow:
+    inset 1px 1px 3px #fff,
+    inset -1px -2px 2px #ccc7eb66;
+}
+@media (max-width: 767px) {
+  .nova-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .nova-sidebar {
+    display: none;
+  }
+  .nova-mobile-header {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--nova-border);
+    background: #fdfefd;
+    font-size: 13px;
+  }
+  .nova-overview-hero {
+    padding: 22px;
+    border-radius: 22px;
+  }
+  .nova-hero-art {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .nova-workspace *,
+  .nova-workspace *::before,
+  .nova-workspace *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+.nova-workspace-dialog {
+  inset: 0;
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  color: var(--nova-ink);
+  background: transparent;
+}
+.nova-workspace-dialog[open] {
+  display: flex;
+  justify-content: flex-end;
+}
+.nova-workspace-dialog::backdrop {
+  background: #16262e66;
+  backdrop-filter: blur(3px);
+}
+.nova-workspace-dialog.nova-dialog-centered[open] {
+  justify-content: center;
+  align-items: center;
+  padding: 16px;
+}

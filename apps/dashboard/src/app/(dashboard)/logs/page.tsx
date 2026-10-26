@@ -1,9 +1,11 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
+import Link from 'next/link';
 import { ChevronDown, ChevronRight, Search } from 'lucide-react';
 import { getLogs } from '../../../lib/api-client';
-import { getTenantId } from '../../../lib/auth';
+import { DataLoadNotice } from '../../../components/data-load-notice';
+import { useTenantId } from '../../../lib/auth';
 import type { RequestLog } from '../../../lib/api-client';
 
 const PAGE_SIZE = 50;
@@ -40,12 +42,13 @@ const EMPTY_FILTERS: Filters = {
 };
 
 export default function LogsPage() {
-  const tenantId = getTenantId() ?? '';
+  const tenantId = useTenantId() ?? '';
 
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [page, setPage] = useState(1);
   const [logs, setLogs] = useState<RequestLog[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [fetched, setFetched] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -53,6 +56,7 @@ export default function LogsPage() {
     async (p: number, f: Filters) => {
       if (!tenantId) return;
       setLoading(true);
+      setLoadError(false);
       try {
         const statusCode = f.statusGroup
           ? parseInt(f.statusGroup.replace('xx', '00'), 10)
@@ -67,12 +71,39 @@ export default function LogsPage() {
         });
         setLogs(result.items);
         setFetched(true);
+      } catch {
+        setLoadError(true);
       } finally {
         setLoading(false);
       }
     },
     [tenantId],
   );
+
+  // Links (for example from the anomaly feed) can prefill the search:
+  // ?path=/orders&from=<ISO>&to=<ISO>. Read after mount so hydration matches.
+  useEffect(() => {
+    if (!tenantId) return;
+    const query = new URLSearchParams(window.location.search);
+    const path = query.get('path') ?? '';
+    const local = (value: string | null) => {
+      const time = value ? new Date(value) : null;
+      if (!time || Number.isNaN(time.getTime())) return '';
+      const shifted = new Date(
+        time.getTime() - time.getTimezoneOffset() * 60000,
+      );
+      return shifted.toISOString().slice(0, 16);
+    };
+    const prefilled = {
+      ...EMPTY_FILTERS,
+      path: path.length <= 512 && !/[?#]/.test(path) ? path : '',
+      from: local(query.get('from')),
+      to: local(query.get('to')),
+    };
+    if (!prefilled.path && !prefilled.from && !prefilled.to) return;
+    setFilters(prefilled);
+    void fetchLogs(1, prefilled);
+  }, [tenantId, fetchLogs]);
 
   function handleSearch(e: React.FormEvent) {
     e.preventDefault();
@@ -99,8 +130,23 @@ export default function LogsPage() {
   }
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
+      {loadError && (
+        <DataLoadNotice
+          label="Request logs"
+          onRetry={() => fetchLogs(page, filters)}
+        />
+      )}
       <h1 className="mb-6 text-2xl font-semibold text-gray-900">Logs</h1>
+
+      <p className="mb-5 rounded-2xl border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-950">
+        Results include retained request logs only. Their lifetime starts when
+        the database receives them, even when a request timestamp is older.{' '}
+        <Link href="/settings" className="font-medium underline">
+          Manage log retention in Settings
+        </Link>
+        .
+      </p>
 
       {/* Filter bar */}
       <form
@@ -108,8 +154,14 @@ export default function LogsPage() {
         className="mb-6 flex flex-wrap items-end gap-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
       >
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-gray-500">From</label>
+          <label
+            htmlFor="logs-field-1"
+            className="text-xs font-medium text-gray-500"
+          >
+            From
+          </label>
           <input
+            id="logs-field-1"
             type="datetime-local"
             value={filters.from}
             onChange={(e) =>
@@ -119,8 +171,14 @@ export default function LogsPage() {
           />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-gray-500">To</label>
+          <label
+            htmlFor="logs-field-2"
+            className="text-xs font-medium text-gray-500"
+          >
+            To
+          </label>
           <input
+            id="logs-field-2"
             type="datetime-local"
             value={filters.to}
             onChange={(e) => setFilters((f) => ({ ...f, to: e.target.value }))}
@@ -128,8 +186,14 @@ export default function LogsPage() {
           />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-gray-500">Path</label>
+          <label
+            htmlFor="logs-field-3"
+            className="text-xs font-medium text-gray-500"
+          >
+            Path
+          </label>
           <input
+            id="logs-field-3"
             type="text"
             placeholder="/users/…"
             value={filters.path}
@@ -140,8 +204,14 @@ export default function LogsPage() {
           />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-gray-500">Status</label>
+          <label
+            htmlFor="logs-field-4"
+            className="text-xs font-medium text-gray-500"
+          >
+            Status
+          </label>
           <select
+            id="logs-field-4"
             value={filters.statusGroup}
             onChange={(e) =>
               setFilters((f) => ({ ...f, statusGroup: e.target.value }))
@@ -156,8 +226,14 @@ export default function LogsPage() {
           </select>
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-gray-500">Consumer</label>
+          <label
+            htmlFor="logs-field-5"
+            className="text-xs font-medium text-gray-500"
+          >
+            Consumer
+          </label>
           <input
+            id="logs-field-5"
             type="text"
             placeholder="consumer ID"
             value={filters.consumerId}
@@ -178,7 +254,12 @@ export default function LogsPage() {
       </form>
 
       {/* Table */}
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label="Logs table"
+        className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm"
+      >
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50">
@@ -305,6 +386,14 @@ export default function LogsPage() {
                               </dt>
                               <dd className="mt-0.5 font-mono text-xs text-gray-700 break-all">
                                 {log.requestId}
+                                {log.traceId && (
+                                  <Link
+                                    href={`/traces?traceId=${encodeURIComponent(log.traceId)}`}
+                                    className="mt-2 block text-indigo-700 underline"
+                                  >
+                                    View trace
+                                  </Link>
+                                )}
                               </dd>
                             </div>
                             <div>

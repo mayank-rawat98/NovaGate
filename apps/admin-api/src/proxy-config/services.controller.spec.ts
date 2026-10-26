@@ -1,3 +1,4 @@
+import { DEFAULT_CIRCUIT_BREAKER } from '@api-gateway/shared-types';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ServicesController } from './services.controller';
 import { DataSource } from 'typeorm';
@@ -55,6 +56,13 @@ describe('ServicesController', () => {
         5000,
         false,
         false,
+        10000,
+        false,
+        'http',
+        '',
+        'weighted-round-robin',
+        // New services get the default circuit breaker.
+        JSON.stringify(DEFAULT_CIRCUIT_BREAKER),
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
@@ -82,6 +90,13 @@ describe('ServicesController', () => {
         10000,
         false,
         false,
+        10000,
+        false,
+        'http',
+        '',
+        'weighted-round-robin',
+        // New services get the default circuit breaker.
+        JSON.stringify(DEFAULT_CIRCUIT_BREAKER),
       ]);
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
@@ -103,6 +118,68 @@ describe('ServicesController', () => {
     });
   });
 
+  describe('health settings validation', () => {
+    it.each([0, 999, 60001, 1500.5, NaN, null, '1000'])(
+      'rejects invalid probe intervals: %s',
+      async (interval) => {
+        const { controller, ds, cp } = await build();
+        await expect(
+          controller.update(TENANT, 'svc', {
+            healthCheckIntervalMs: interval,
+          } as never),
+        ).rejects.toMatchObject({ status: 400 });
+        expect(ds.query).not.toHaveBeenCalled();
+        expect(cp.triggerUpdate).not.toHaveBeenCalled();
+      },
+    );
+    it.each([
+      '//other/health',
+      'https://other/health',
+      '/\\other',
+      '/health#fragment',
+      '/health with-space',
+      '',
+      null,
+    ])('rejects invalid health paths: %s', async (path) => {
+      const { controller, ds } = await build();
+      await expect(
+        controller.update(TENANT, 'svc', { healthCheckPath: path } as never),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(ds.query).not.toHaveBeenCalled();
+    });
+    it.each([null, 1, 'false'])(
+      'rejects non-boolean fallback: %s',
+      async (fallback) => {
+        const { controller } = await build();
+        await expect(
+          controller.update(TENANT, 'svc', {
+            unhealthyFallback: fallback,
+          } as never),
+        ).rejects.toMatchObject({ status: 400 });
+      },
+    );
+  });
+
+  it.each([
+    { healthCheckProtocol: 'other' },
+    { healthCheckProtocol: null },
+    { healthCheckService: null },
+    { healthCheckService: 'x'.repeat(257) },
+    { healthCheckService: 'é'.repeat(129) },
+    { healthCheckService: 'bad\nname' },
+    { h2: 'true' },
+    { supportsWebSocket: null },
+    { timeoutMs: 99 },
+    { timeoutMs: 3600001 },
+    { timeoutMs: 100.5 },
+  ])('rejects invalid protocol settings %j', async (body) => {
+    const { controller, ds, cp } = await build();
+    await expect(
+      controller.update(TENANT, 'svc', body as never),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(ds.query).not.toHaveBeenCalled();
+    expect(cp.triggerUpdate).not.toHaveBeenCalled();
+  });
   describe('DELETE remove', () => {
     it('soft-deletes service and triggers config push', async () => {
       const ds = mockDataSource();
@@ -120,4 +197,32 @@ describe('ServicesController', () => {
       expect(cp.triggerUpdate).toHaveBeenCalledWith(TENANT);
     });
   });
+  it.each(['round-robin', null, true, 1])(
+    'rejects unsupported balancing policy %s before SQL',
+    async (loadBalancing) => {
+      const { controller, ds } = await build();
+      await expect(
+        controller.update(TENANT, 'svc', { loadBalancing } as never),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(ds.query).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    [{ url: 'http://one', weight: 1.5 }],
+    [{ url: 'ftp://one', weight: 1 }],
+    [{ url: 'http://user:secret@one', weight: 1 }],
+    [
+      { url: 'http://one', weight: 1 },
+      { url: 'http://one/', weight: 2 },
+    ],
+  ])(
+    'rejects malformed or duplicate target policy before SQL',
+    async (...targets) => {
+      const { controller, ds } = await build();
+      await expect(
+        controller.update(TENANT, 'svc', { targets }),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(ds.query).not.toHaveBeenCalled();
+    },
+  );
 });
