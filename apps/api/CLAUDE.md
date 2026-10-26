@@ -77,6 +77,8 @@ gateway/
     hmac-auth/                      HMAC-SHA256/512 signature validation; timing-safe compare; multi-secret rotation; clock skew check
     acl/                            consumer group allow/deny — reads groups from TenantConfig.consumers
     mtls/                           client cert validation via ssl_client_cert header; uses tenant caCertPem from config
+    graphql-guard/                  AST depth/complexity/introspection policy + shared GraphQL-over-HTTP parsing
+    graphql-federation/             supergraph execution; ProxyService runs it after auth and metering (#127)
   services/
     service.entity.ts               TypeORM entity for service config
   shared/
@@ -147,6 +149,51 @@ after `WASM_PLUGIN_FAILURE_THRESHOLD` failures and reports `wasm.status` (state,
 failures, p50/p99/max µs) on change and every 30 s. Never give the worker WASI,
 filesystem, environment or network access. Rebuild fixtures and the catalog
 with `node tools/build-wasm-plugins.mjs`.
+
+## GraphQL federation (issue #127)
+
+`plugins/graphql-federation/`: `GraphqlFederationService` registers the
+`graphql-federation` plugin and follows `TenantConfig.federatedGraphs`
+(supergraph SDL, digest, subgraph → service ID and path). The plugin is HTTP
+only and must be the route's last plugin (the admin API enforces this):
+
+- `prepareRequest` captures the body through `RequestBodyService`, which counts
+  the plugin as a GraphQL route.
+- `onRequest` parses with `graphql-guard/graphql-http-request.ts` and applies
+  the token, byte and lexical bounds. Depth and complexity defaults apply only
+  when no graphql-guard policy is on the route. It also checks that the graph's
+  schema builds (503 `GRAPH_UNAVAILABLE` otherwise).
+- It never short-circuits a valid request. `ProxyService.forward` calls
+  `execute` after the route `authRequired` check and metering, so schema
+  validation (with suggestions hidden) and execution never run for refused
+  requests. It then applies onResponse plugins and writes the result, and never
+  forwards to the route's service.
+
+The executable schema comes from `getStitchedSchemaFromSupergraphSdl`, cached
+per graph by digest. Subgraph executors map the `novagate://subgraph/<name>`
+endpoint to the subgraph's service, never to a URL in the SDL. Each call:
+
+- admits the service's circuit;
+- takes a lease from the proxy's `LoadBalancerService` over healthy targets;
+  the proxy passes `acquire` in, because plugins must not import `proxy/`;
+- POSTs `{query, variables, operationName}` to `target + path` with the service
+  timeout, sending `X-Request-ID`, the trace context and only the configured
+  `forwardHeaders`.
+
+Limits:
+
+- subgraph requests per operation (`GRAPHQL_FEDERATION_MAX_SUBGRAPH_REQUESTS`, 50);
+- subgraph response bytes (`GRAPHQL_FEDERATION_MAX_SUBGRAPH_RESPONSE_BYTES`, 8 MiB);
+- concurrent operations (`GRAPHQL_FEDERATION_MAX_CONCURRENT_OPERATIONS`, 64).
+
+Failures become GraphQL errors with partial data. The codes are
+`SUBGRAPH_UNAVAILABLE`, `SUBGRAPH_TIMEOUT`, `SUBGRAPH_RESPONSE_INVALID`,
+`SUBGRAPH_RESPONSE_TOO_LARGE`, `SUBGRAPH_REQUEST_LIMIT` and `CIRCUIT_OPEN`.
+Messages never include target addresses.
+
+Responses follow GraphQL over HTTP: request errors are 400 for
+`application/graphql-response+json` clients and 200 for `application/json`.
+Subscriptions, `@defer` and persisted queries are refused.
 
 ## Multi-region control planes (issue #121)
 

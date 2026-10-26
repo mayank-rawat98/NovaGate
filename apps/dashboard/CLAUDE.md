@@ -26,6 +26,7 @@ connections.
 | `/(dashboard)/errors`    | `app/(dashboard)/errors/page.tsx`    | Error tracking and resolution                          |
 | `/(dashboard)/settings`  | `app/(dashboard)/settings/page.tsx`  | Tenant info, API key, Docker Compose                   |
 | `/(dashboard)/billing`   | `app/(dashboard)/billing/page.tsx`   | Plan & usage: meters, suspension, Stripe upgrade       |
+| `/(dashboard)/graphql`   | `app/(dashboard)/graphql/page.tsx`   | GraphQL federation: subgraphs, composition, graphs     |
 
 ## API client (`src/lib/api-client.ts`)
 
@@ -306,3 +307,20 @@ reported state and p99 time per call, confirmed removal that shows the API's
 allowed hosts, `.wasm` file ≤ 1 MiB sent as base64; refusals show the sandbox
 reason). Mutations are session only. The route editor's custom plugin section
 accepts `wasm:<name>` as well as scoped package names.
+
+Issue #127 adds the GraphQL federation page (`/graphql`).
+
+- **Graph list:** each graph's subgraphs (service, path, schema size), the
+  routes serving it, the composed schema in a disclosure, and confirmed removal
+  that shows the API's "used by routes" refusal.
+- **Editor:** opened by New graph or Edit, with focus moving to its heading.
+  It has a graph name (fixed when editing) and up to 16 subgraph fieldsets:
+  name, service select, path, SDL textarea, or a `.graphql` file.
+- **Composition:** Check composition runs the dry run and lists every error
+  with its code. Save graph composes first and saves only when that succeeds,
+  so composition errors are shown as a list, not as one failed request.
+
+The route editor's Plugins tab has a GraphQL federation section: a labelled
+graph select fed by `getFederatedGraphs` and forwarded headers (lowercased). The
+plugin is always serialized last, and enabling it without a graph is refused
+before the request. Mutations are session only.

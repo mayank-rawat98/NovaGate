@@ -59,7 +59,10 @@ behind (resend after 30 s without ACK). Regions with separate Redis never see
 each other's publications; this database sync is what delivers them. Initial
 snapshots include `preferredRegion` (tolerant read) and `wasmPlugins` (name,
 digest, hooks, allowed hosts; empty when the admin-owned `wasm_plugins` table is
-missing), never module bytes.
+missing), never module bytes. They also include `federatedGraphs` (issue #127),
+read with the shared `FEDERATED_GRAPH_CONFIG_COLUMNS`/`federatedGraphConfigs`:
+supergraph SDL, digest and subgraph service/path, never uploaded SDL; empty when
+the admin-owned `federated_graphs` table is missing.
 
 Initial `auth_ok` snapshots include `suspended` from `tenants."quotaSuspendedUntil"`
 (tolerant read; only a future time is sent), matching the admin API's published
