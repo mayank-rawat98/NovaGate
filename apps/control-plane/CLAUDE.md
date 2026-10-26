@@ -40,6 +40,8 @@ database/
 | `plugins.status` | `parsePluginStatuses` → Redis `gw:plugins:<tenant>` (TTL 180s)                                | Third-party plugin states; invalid reports are dropped    |
 | `circuit.state`  | `parseCircuitStatuses` → Redis `gw:circuits:<tenant>` (TTL 90s) + publish `circuits:<tenant>` | Per-service circuit snapshot; invalid reports are dropped |
 | `usage.report`   | `parseUsageReport` → `public.usage_meters` / `consumer_usage_meters` (GREATEST per source)    | Cumulative monthly totals; dropped before admin migration |
+| `wasm.fetch`     | Replies `wasm.module` with this workspace's module of that digest (base64) or `null`          | Never another workspace's modules                         |
+| `wasm.status`    | `parseWasmStatuses` → Redis `gw:wasm:<tenant>` (TTL 180s)                                     | WASM plugin states and timings; invalid reports dropped   |
 
 ## Regions and several gateways per workspace (issue #121)
 
@@ -55,7 +57,9 @@ compares each connected workspace's `tenants."gatewayConfigVersion"` with what i
 sockets acknowledged and sends the assembled configuration to sockets that are
 behind (resend after 30 s without ACK). Regions with separate Redis never see
 each other's publications; this database sync is what delivers them. Initial
-snapshots include `preferredRegion` (tolerant read).
+snapshots include `preferredRegion` (tolerant read) and `wasmPlugins` (name,
+digest, hooks, allowed hosts; empty when the admin-owned `wasm_plugins` table is
+missing), never module bytes.
 
 Initial `auth_ok` snapshots include `suspended` from `tenants."quotaSuspendedUntil"`
 (tolerant read; only a future time is sent), matching the admin API's published

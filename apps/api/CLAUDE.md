@@ -96,6 +96,7 @@ gateway/
 | `apikey:<sha256>`  | Consumer key cache     | 5 min    |
 | `meter:<YYYYMM>:*` | Usage meters (#119)    | 40 days  |
 | `meter:source`     | Meter source ID        | none     |
+| `wasm:<sha256>`    | Verified WASM module   | 30 days  |
 
 ## Plugin system rules
 
@@ -125,6 +126,27 @@ CIRCUIT_OPEN` + `Retry-After`, WebSocket 503, gRPC `UNAVAILABLE`); half-open
 admits one probe at a time, and a probe unsettled for 3× `openMs` is replaced.
 Changing a service's breaker settings resets its circuit. State changes are
 reported as `circuit.state` snapshots (debounced 200 ms, heartbeat 30 s).
+
+## WebAssembly plugin sandbox (issue #123)
+
+`plugins/wasm/`: `WasmPluginService` follows `TenantConfig.wasmPlugins` (name,
+digest, hooks, allowed hosts), loads modules from memory, then `wasm:<sha256>`
+in Redis, else sends `wasm.fetch` and verifies the `wasm.module` reply against
+the digest and `inspectWasmModule` (shared-types) before compiling. It registers
+a resolver for `wasm:<name>` route plugins in `PluginRegistryService`; anything
+not active resolves to `UnavailableWasmPlugin` (503, fail closed). `WasmSandbox`
+runs a module in a small pool of `worker_threads` evaluated from
+`wasm-worker.source.ts` (plain JS string bundled with the gateway): host-created
+memory capped at 160 pages, only the `novagate` host functions, a per-call
+deadline (`WASM_PLUGIN_TIMEOUT_MS`, default 50) after which the thread is
+terminated, a bounded queue, and `http_get` to allowlisted hosts via a
+SharedArrayBuffer while the parent fetches (HTTPS unless
+`WASM_PLUGIN_ALLOW_HTTP`). `WasmPlugin` applies header edits or a response, fails
+closed (502 `PLUGIN_FAILED`, 503 `PLUGIN_BUSY`/`PLUGIN_UNAVAILABLE`), quarantines
+after `WASM_PLUGIN_FAILURE_THRESHOLD` failures and reports `wasm.status` (state,
+failures, p50/p99/max µs) on change and every 30 s. Never give the worker WASI,
+filesystem, environment or network access. Rebuild fixtures and the catalog
+with `node tools/build-wasm-plugins.mjs`.
 
 ## Multi-region control planes (issue #121)
 

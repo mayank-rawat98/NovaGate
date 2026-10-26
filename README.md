@@ -735,6 +735,21 @@ acceptance remains separate from local development checks.
 
 Every route is compared with its own last 7 days, without rules to write. Each minute, the latest 5 minutes of 5xx rate, p95 latency and traffic are scored as a z-score against the route's 15-minute windows (issue #117). The dashboard overview lists anomalies such as "Unusual 800% rise in p95 latency on GET /api/orders: baseline 42 ms, current 380 ms", with links to that route's logs and traces. **Alerts → Anomaly detection** sets the sensitivity (z-score, default 3), the minimum request count (default 20) and up to five notification channels. Anomalies use the same alert history, delivery retries and signed webhooks as alert rules; webhook payloads carry an `anomaly` description. Operators can change the evaluation interval with `ANOMALY_EVALUATION_INTERVAL_MS` on the admin API (default 60000). See [the anomaly guide](apps/admin-api/src/anomalies/README.md). `npm exec nx run admin-api:anomaly-e2e` verifies that an injected latency spike delivers a webhook alert.
 
+### WebAssembly plugins and the Plugin marketplace
+
+Workspaces can run their own plugins on their gateways without operator involvement (issue #123).
+
+- **Installing:** the dashboard's **Plugin marketplace** installs curated WebAssembly plugins (header stamp, required header, header blocklist) or uploads your own `.wasm` module. A route uses it as `wasm:<name>` with a JSON configuration.
+- **Sandbox:**
+  - each module runs in a gateway worker thread with only NovaGate host functions;
+  - there is no WASI, filesystem or general network access; `http_get` reaches only the plugin's allowlisted HTTPS hosts;
+  - memory is capped at 10 MiB;
+  - each call has 50 ms (`WASM_PLUGIN_TIMEOUT_MS`).
+- **Failures:** a runaway module is terminated and its route fails closed (`502 PLUGIN_FAILED`), and repeated failures pause it. Other routes are unaffected.
+- **Distribution:** gateways fetch modules by SHA-256 through the control plane, verify them, and cache them in local Redis.
+
+The [WebAssembly plugin guide](libs/plugin-sdk/wasm/README.md) documents the ABI and the C SDK header. `npm exec nx run @api-gateway/api:wasm-e2e` verifies installation, live effect, sub-millisecond execution, a refused filesystem import and containment of a runaway module.
+
 ### Multi-region control planes
 
 Gateways can list several control plane endpoints in priority order (issue #121), for example `CONTROL_PLANE_URLS=us-east=wss://us.example/ws,eu-west=wss://eu.example/ws`.
