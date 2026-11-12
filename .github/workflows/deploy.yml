@@ -243,7 +243,12 @@ jobs:
             git diff --quiet
             git diff --cached --quiet
             git fetch origin "$RELEASE_SHA"
-            git checkout --detach "$RELEASE_SHA"
+            # umask 077 is for the credentials. Checked-out files keep normal
+            # modes: Postgres reads the bind-mounted init script as a non-root
+            # user, and an unreadable one leaves a fresh volume without tables.
+            # chmod repairs a copy an earlier deploy already wrote as 0600.
+            (umask 022 && git checkout --detach "$RELEASE_SHA")
+            chmod 644 docker/postgres-init.sql
             printf '%s' "$ENV_PRODUCTION" > .env.production
             export NOVAGATE_IMAGE_TAG="sha-$RELEASE_SHA"
             export NOVAGATE_IMAGE_OWNER="$IMAGE_OWNER"
