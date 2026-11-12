@@ -79,6 +79,26 @@ integration('Configuration upgrades and updates on PostgreSQL', () => {
   }, 30000);
   beforeEach(() => publish.mockClear());
 
+  it('starts with an unverified signup whose workspace schema does not exist yet', async () => {
+    const pending = randomUUID();
+    await ds.query(
+      `INSERT INTO public.tenants (id, name, email, "planId") VALUES ($1, 'Unverified signup', $2, 'free')`,
+      [pending, `${pending}@example.test`],
+    );
+    try {
+      await expect(
+        new MigrationService(ds).onModuleInit(),
+      ).resolves.toBeUndefined();
+      expect(
+        await ds.query(`SELECT 1 FROM pg_namespace WHERE nspname = $1`, [
+          tenantSchema(pending),
+        ]),
+      ).toEqual([]);
+    } finally {
+      await ds.query('DELETE FROM public.tenants WHERE id = $1', [pending]);
+    }
+  });
+
   it('upgrades trace storage and log correlation idempotently without losing existing logs or spans', async () => {
     const id = randomUUID();
     await ds.query(

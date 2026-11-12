@@ -68,8 +68,12 @@ export class MigrationService implements OnModuleInit {
       await manager.query(ANOMALY_SCHEDULE_SCHEMA);
       await manager.query(BILLING_PUBLIC_SCHEMA);
       await manager.query(REGION_SCHEMA);
+      // An unverified signup has no workspace schema until verifyEmail
+      // provisions the current one; upgrading it would abort startup.
       const tenants = await manager.query<Array<{ id: string }>>(
-        `SELECT id FROM public.tenants`,
+        `SELECT t.id FROM public.tenants t WHERE EXISTS (
+          SELECT 1 FROM pg_namespace n
+          WHERE n.nspname = 'tenant_' || replace(lower(t.id::text), '-', '_'))`,
       );
       for (const tenant of tenants) {
         const schema = tenantSchema(tenant.id);
