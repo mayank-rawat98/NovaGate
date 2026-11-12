@@ -7,8 +7,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+    # Loopback only: the production host has no firewall in front of Docker.
     ports:
-      - '5432:5432'
+      - '127.0.0.1:5432:5432'
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/001-novagate.sql:ro
@@ -19,6 +20,7 @@ services:
       retries: 5
     networks:
       - gateway-net
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -32,6 +34,7 @@ services:
       retries: 5
     networks:
       - gateway-net
+    restart: unless-stopped
 
   control-plane:
     image: ghcr.io/${NOVAGATE_IMAGE_OWNER:-mayank-rawat98}/control-plane:${NOVAGATE_IMAGE_TAG:-latest}
@@ -68,6 +71,7 @@ services:
     networks:
       - gateway-net
       - edge # reached by the shared Caddy in the squadup stack
+    restart: unless-stopped
 
   admin-api:
     image: ghcr.io/${NOVAGATE_IMAGE_OWNER:-mayank-rawat98}/admin-api:${NOVAGATE_IMAGE_TAG:-latest}
@@ -130,6 +134,7 @@ services:
     networks:
       - gateway-net
       - edge # reached by the shared Caddy in the squadup stack
+    restart: unless-stopped
 
   rustfs:
     profiles: ['object-storage']
@@ -178,6 +183,7 @@ services:
     networks:
       - gateway-net
       - edge # reached by the shared Caddy in the squadup stack
+    restart: unless-stopped
 
   # Opt in with `docker compose --profile portal up -d`. Route the shared host
   # and any workspace custom domains to this service over HTTPS.
@@ -203,6 +209,7 @@ services:
     networks:
       - gateway-net
       - edge
+    restart: unless-stopped
 
 networks:
   gateway-net:
