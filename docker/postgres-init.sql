@@ -1,5 +1,9 @@
 -- Canonical initial public schema. Existing installations are upgraded by
 -- admin-api's MigrationService; never synchronize application entities in production.
+-- Concurrent CREATE TABLE IF NOT EXISTS on a fresh database fails on pg_type, so
+-- take the migration lock. Sent as one query (as the integration specs do), the
+-- script is one transaction and holds the lock until it commits.
+SELECT pg_advisory_xact_lock(hashtext('novagate-schema-migrations'));
 CREATE TABLE IF NOT EXISTS public.tenants (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name VARCHAR NOT NULL,

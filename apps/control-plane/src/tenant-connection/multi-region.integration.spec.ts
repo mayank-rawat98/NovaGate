@@ -84,23 +84,22 @@ integration('Multi-region control planes on real PostgreSQL and Redis', () => {
       synchronize: false,
     });
     await ds.initialize();
+    // One query is one transaction, so this DDL holds the migration lock that
+    // postgres-init.sql takes and cannot race other specs or MigrationService.
+    // Admin migrations own gateway_instances; the minimal shape for the collector.
     await ds.query(
       readFileSync(
         resolve(__dirname, '../../../../docker/postgres-init.sql'),
         'utf8',
-      ),
+      ) +
+        `
+ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS "caCertPem" TEXT, ADD COLUMN IF NOT EXISTS "logPrivacy" JSONB NOT NULL DEFAULT '{"clientIp":"omit","userAgent":"omit"}'::jsonb;
+CREATE UNIQUE INDEX IF NOT EXISTS pending_config_updates_tenant_unique ON public.pending_config_updates ("tenantId");
+CREATE TABLE IF NOT EXISTS public.gateway_instances (
+  "tenantId" UUID NOT NULL, "instanceId" UUID NOT NULL, name VARCHAR(64) NOT NULL,
+  region VARCHAR(32), "connectedAt" TIMESTAMPTZ NOT NULL, "lastSeenAt" TIMESTAMPTZ NOT NULL,
+  "disconnectedAt" TIMESTAMPTZ, "configVersion" BIGINT, PRIMARY KEY ("tenantId","instanceId"));`,
     );
-    await ds.query(
-      `ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS "caCertPem" TEXT, ADD COLUMN IF NOT EXISTS "logPrivacy" JSONB NOT NULL DEFAULT '{"clientIp":"omit","userAgent":"omit"}'::jsonb`,
-    );
-    await ds.query(
-      'CREATE UNIQUE INDEX IF NOT EXISTS pending_config_updates_tenant_unique ON public.pending_config_updates ("tenantId")',
-    );
-    // Admin migrations own this table; the minimal shape for the collector.
-    await ds.query(`CREATE TABLE IF NOT EXISTS public.gateway_instances (
-      "tenantId" UUID NOT NULL, "instanceId" UUID NOT NULL, name VARCHAR(64) NOT NULL,
-      region VARCHAR(32), "connectedAt" TIMESTAMPTZ NOT NULL, "lastSeenAt" TIMESTAMPTZ NOT NULL,
-      "disconnectedAt" TIMESTAMPTZ, "configVersion" BIGINT, PRIMARY KEY ("tenantId","instanceId"))`);
     await ds.getRepository(Tenant).save({
       id: tenantId,
       name: 'Regions',
