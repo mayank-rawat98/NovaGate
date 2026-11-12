@@ -76,17 +76,16 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
       synchronize: false,
     });
     await ds.initialize();
+    // One query is one transaction, so this DDL holds the migration lock that
+    // postgres-init.sql takes and cannot race other specs or MigrationService.
     await ds.query(
       readFileSync(
         resolve(__dirname, '../../../../docker/postgres-init.sql'),
         'utf8',
-      ),
-    );
-    await ds.query(
-      `ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS "caCertPem" TEXT, ADD COLUMN IF NOT EXISTS "logPrivacy" JSONB NOT NULL DEFAULT '{"clientIp":"omit","userAgent":"omit"}'::jsonb`,
-    );
-    await ds.query(
-      'CREATE UNIQUE INDEX IF NOT EXISTS pending_config_updates_tenant_unique ON public.pending_config_updates ("tenantId")',
+      ) +
+        `
+ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS "caCertPem" TEXT, ADD COLUMN IF NOT EXISTS "logPrivacy" JSONB NOT NULL DEFAULT '{"clientIp":"omit","userAgent":"omit"}'::jsonb;
+CREATE UNIQUE INDEX IF NOT EXISTS pending_config_updates_tenant_unique ON public.pending_config_updates ("tenantId");`,
     );
     tenantId = randomUUID();
     secondId = randomUUID();
@@ -178,7 +177,8 @@ integration('Control plane with real PostgreSQL, Redis and WebSockets', () => {
     await manager?.onModuleDestroy();
     redis?.disconnect();
     if (ds?.isInitialized) {
-      for (const id of [tenantId, secondId]) {
+      // Skip IDs beforeAll never assigned so a setup failure stays the reported error.
+      for (const id of [tenantId, secondId].filter(Boolean)) {
         await ds.query(
           `DROP SCHEMA IF EXISTS tenant_${id.replace(/-/g, '_')} CASCADE`,
         );
