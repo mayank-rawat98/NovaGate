@@ -153,6 +153,7 @@ describe('ProxyService', () => {
         .calls[0][0] as Options;
       const proxyReq = Object.assign(new EventEmitter(), {
         setHeader: jest.fn(),
+        removeHeader: jest.fn(),
         destroy: jest.fn(),
       });
       (

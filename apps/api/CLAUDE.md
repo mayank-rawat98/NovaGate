@@ -258,6 +258,7 @@ request data or control characters into reports or logs (`sanitizeError`).
 - Fail-open on Redis errors (allow request, increment counter)
 - Path labels in Prometheus must be normalized patterns, never raw URLs
 - Retry only fires on GET/HEAD/OPTIONS by default — never POST/PUT/DELETE unless route opts in
+- HTTP/1 proxying reuses upstream sockets through `ProxyService`'s keep-alive agents. Never forward hop-by-hop headers or headers named in `Connection` between hops in either direction: a copied `Connection: close` closes the caller's or the pooled upstream socket
 - Health check unknown state = healthy (avoids dropping traffic at startup)
 
 ## GraphQL and body policy invariants
