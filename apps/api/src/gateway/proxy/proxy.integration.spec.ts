@@ -67,6 +67,7 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
     headers: http.IncomingHttpHeaders;
   }>;
   let mode: { status: number; failOnce: boolean };
+  let upstreamHeaders: Record<string, string>;
   const rateLimit = {
     check: jest.fn().mockResolvedValue({ allowed: true, retryAfterMs: null }),
   };
@@ -141,6 +142,8 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
         res.statusCode =
           mode.failOnce && received.length === 1 ? 502 : mode.status;
         res.setHeader('content-type', 'application/json');
+        for (const [name, value] of Object.entries(upstreamHeaders))
+          res.setHeader(name, value);
         if (h1Trickle) {
           const timer = setInterval(() => res.write('x'), 20);
           res.once('close', () => clearInterval(timer));
@@ -243,6 +246,7 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
     h2Headers = [];
     received = [];
     mode = { status: 200, failOnce: false };
+    upstreamHeaders = {};
     rateLimit.check.mockClear();
     for (const method of Object.values(metrics)) method.mockClear();
     telemetry.sendError.mockClear();
@@ -287,6 +291,141 @@ describe('HTTP gateway with real plugins and upstream servers', () => {
     response = await fetch(`${url}/api`);
     expect(response.status).toBe(200);
     expect(received).toHaveLength(1);
+  });
+
+  function send(
+    agent: http.Agent | false,
+    headers: Record<string, string> = {},
+  ) {
+    return new Promise<{
+      status: number;
+      headers: http.IncomingHttpHeaders;
+      socket: unknown;
+    }>((resolve, reject) => {
+      const req = http.get(`${url}/api`, { agent, headers }, (res) => {
+        const socket = res.socket;
+        res.resume();
+        res.on('end', () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            socket,
+          }),
+        );
+      });
+      req.on('error', reject);
+    });
+  }
+
+  it('reuses upstream connections and keeps the caller connection open', async () => {
+    let upstreamConnections = 0;
+    const onConnection = () => upstreamConnections++;
+    upstream.on('connection', onConnection);
+    const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+    try {
+      const responses = [];
+      for (let i = 0; i < 3; i++) responses.push(await send(agent));
+      expect(responses.map((r) => r.status)).toEqual([200, 200, 200]);
+      expect(responses.map((r) => r.headers.connection)).toEqual([
+        'keep-alive',
+        'keep-alive',
+        'keep-alive',
+      ]);
+      expect(new Set(responses.map((r) => r.socket)).size).toBe(1);
+      expect(received.map((r) => r.headers.connection)).toEqual([
+        'keep-alive',
+        'keep-alive',
+        'keep-alive',
+      ]);
+      // An idle socket left by an earlier test may be reused, so at most one is new.
+      expect(upstreamConnections).toBeLessThanOrEqual(1);
+
+      // Leases follow the request, not the pooled socket: a drained 5xx and
+      // successes on the same sockets must all release their reservation.
+      mode = { status: 500, failOnce: false };
+      expect((await send(agent)).status).toBe(502);
+      mode = { status: 200, failOnce: false };
+      expect((await send(agent)).status).toBe(200);
+      const releasedBy = Date.now() + 2000;
+      while (balancer.activeReservations) {
+        if (Date.now() > releasedBy)
+          throw new Error('Pooled request kept its target reservation');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    } finally {
+      upstream.off('connection', onConnection);
+      agent.destroy();
+    }
+  });
+
+  it('releases reservations for overlapping and cancelled pooled requests', async () => {
+    const agent = new http.Agent({ keepAlive: true, maxSockets: 8 });
+    try {
+      const results = await Promise.all(
+        Array.from({ length: 40 }, () => send(agent)),
+      );
+      expect(results.every((r) => r.status === 200)).toBe(true);
+      h1Trickle = true;
+      const cancelled = Array.from({ length: 4 }, () => {
+        const req = http.get(`${url}/api`, { agent });
+        req.on('error', () => undefined);
+        return req;
+      });
+      const reachedBy = Date.now() + 2000;
+      while (received.length < 44) {
+        if (Date.now() > reachedBy)
+          throw new Error('Streaming requests did not reach upstream');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(balancer.activeReservations).toBe(4);
+      for (const req of cancelled) req.destroy();
+      const releasedBy = Date.now() + 2000;
+      while (balancer.activeReservations) {
+        if (Date.now() > releasedBy)
+          throw new Error('Cancelled pooled request kept its reservation');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    } finally {
+      h1Trickle = false;
+      agent.destroy();
+    }
+  });
+
+  it('keeps hop-by-hop headers on their own connection', async () => {
+    upstreamHeaders = {
+      connection: 'close, x-upstream-hop',
+      'x-upstream-hop': 'scoped',
+      'x-end-to-end': 'kept',
+    };
+    const agent = new http.Agent({ keepAlive: true });
+    try {
+      const response = await send(agent, {
+        // Naming a gateway-added header must not strip it.
+        connection: 'keep-alive, x-caller-hop, traceparent',
+        'x-caller-hop': 'scoped',
+        'x-caller-header': 'kept',
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers).toMatchObject({
+        connection: 'keep-alive',
+        'x-end-to-end': 'kept',
+      });
+      expect(response.headers['x-upstream-hop']).toBeUndefined();
+      expect(received[0].headers).toMatchObject({
+        connection: 'keep-alive',
+        'x-caller-header': 'kept',
+      });
+      expect(received[0].headers['x-caller-hop']).toBeUndefined();
+      expect(received[0].headers.traceparent).toMatch(/^00-[0-9a-f]{32}-/);
+
+      // A caller closing its own connection leaves the upstream one reusable.
+      upstreamHeaders = {};
+      const closing = await send(false);
+      expect(closing.headers.connection).toBe('close');
+      expect(received[1].headers.connection).toBe('keep-alive');
+    } finally {
+      agent.destroy();
+    }
   });
 
   afterAll(async () => {

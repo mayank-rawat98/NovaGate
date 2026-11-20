@@ -1,5 +1,11 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  Optional,
+  type OnApplicationShutdown,
+} from '@nestjs/common';
 import * as http from 'http';
+import * as https from 'https';
 import { performance } from 'node:perf_hooks';
 import type * as net from 'net';
 import type { OutgoingHttpHeaders } from 'http';
@@ -97,14 +103,50 @@ const HOP_BY_HOP = new Set([
   'upgrade',
 ]);
 
+/**
+ * HTTP/1.1 upstream connection reuse. Without an agent, http-proxy sends
+ * `Connection: close` and every proxied request opens a new upstream socket.
+ * Idle sockets close after 4 s, under Node's default 5 s server keep-alive
+ * timeout, so the gateway usually drops an idle socket before the upstream
+ * does. Concurrency per origin stays unbounded, as it was without pooling.
+ */
+const UPSTREAM_KEEP_ALIVE: http.AgentOptions = {
+  keepAlive: true,
+  maxFreeSockets: 64,
+  timeout: 4_000,
+};
+
+/** Hop-by-hop headers plus those a message's own `Connection` header names. */
+function connectionScoped(headers: http.IncomingHttpHeaders): Set<string> {
+  const scoped = new Set(HOP_BY_HOP);
+  const listed = headers.connection;
+  for (const token of (Array.isArray(listed)
+    ? listed.join(',')
+    : (listed ?? '')
+  )
+    .split(',')
+    .map((name) => name.trim().toLowerCase()))
+    if (token) scoped.add(token);
+  return scoped;
+}
+
+/** Message framing must survive header stripping on a streamed request body. */
+const REQUEST_FRAMING = new Set([
+  'content-length',
+  'transfer-encoding',
+  'host',
+]);
+
 @Injectable()
-export class ProxyService {
+export class ProxyService implements OnApplicationShutdown {
   private readonly logger = new Logger(ProxyService.name);
   // Handlers are cached per target URL; the retry context on `req` drives behavior.
   private readonly handlers = new Map<
     string,
     RequestHandler<http.IncomingMessage, http.ServerResponse>
   >();
+  private readonly httpAgent = new http.Agent(UPSTREAM_KEEP_ALIVE);
+  private readonly httpsAgent = new https.Agent(UPSTREAM_KEEP_ALIVE);
 
   constructor(
     private readonly configManager: GatewayConfigManagerService,
@@ -136,6 +178,12 @@ export class ProxyService {
         })),
       );
     });
+  }
+
+  /** Runs after the HTTP server has closed, so no proxied request is cut short. */
+  onApplicationShutdown(): void {
+    this.httpAgent.destroy();
+    this.httpsAgent.destroy();
   }
 
   /** Admits one upstream attempt or refuses it while the service's circuit is open. */
@@ -796,6 +844,7 @@ export class ProxyService {
 
     const options: Options = {
       target: targetUrl,
+      agent: /^https:/i.test(targetUrl) ? this.httpsAgent : this.httpAgent,
       changeOrigin: true,
       xfwd: true,
       proxyTimeout: timeoutMs,
@@ -811,6 +860,14 @@ export class ProxyService {
             proxyReq.destroy();
             return;
           }
+          // The caller's connection headers describe its own hop; forwarding
+          // `Connection: close` would also end the pooled upstream socket.
+          // Strip before adding gateway headers so a caller cannot name them.
+          for (const name of connectionScoped(req.headers))
+            if (!REQUEST_FRAMING.has(name)) proxyReq.removeHeader(name);
+          // A removed header is never re-added by Node; say it explicitly so
+          // HTTP/1.0 upstreams keep the socket open too.
+          proxyReq.setHeader('Connection', 'keep-alive');
           const retryContext = (req as unknown as GwRequest).__gw_retry;
           if (retryContext) {
             retryContext.upstreamStarted = true;
@@ -896,10 +953,12 @@ export class ProxyService {
             return;
           }
 
-          // Set upstream headers on response
-          Object.entries(proxyRes.headers).forEach(([header, value]) => {
-            if (value !== undefined) res.setHeader(header, value as string);
-          });
+          // Copy end-to-end upstream headers only. A copied `Connection: close`
+          // would make Node close the caller's socket after every response.
+          const upstreamHop = connectionScoped(proxyRes.headers);
+          for (const [header, value] of Object.entries(proxyRes.headers))
+            if (value !== undefined && !upstreamHop.has(header))
+              res.setHeader(header, value as string);
           res.statusCode = statusCode;
 
           // Run onResponse plugins — they may mutate headers; errors are logged, not rethrown
